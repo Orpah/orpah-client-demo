@@ -26,22 +26,31 @@
 | 步 | 本仓交付物 |
 |---|---|
 | a | 无（软件侧已完成）；本仓只**记下判据与接口**：host 数据口帧格式 = `orpah-over-halow/host_bus.py`（SPI MACBUS `DATA_TX`/`DATA_RX` 语义）、协议 = `Protocol/docs/OrpahIDProtocol.md` |
-| b | **PC 侧 USB→模块的传输**（不改固件）。⚠ 关键未知项见 §二 |
+| b | **PC 侧 UART/AT 数据面** —— ✅ 已实现（在 `orpah-over-halow`：`host_serial.SerialAtBus` =
+  `AT+TXDATA` 上行 + `FRAME:RX` 下行；纯 PC 排练 `demo_client_uart.py`，判据双向都断言过）。
+  ⚠ **真机未验证**：上机首测要确认三件事（命令写法 / 下行格式 / 数据模式粘性）。 |
 | c | 第一版**固件**：CH32V203 裸机主循环 + host 数据口（SPI 从机/主机关系待定）+ §8.2 选级 + 无 RTC（`ts=0`）+ `cap.rtc` 声明；ATECC608B 先用**软件 P-256** 顶（SE 驱动在 d） |
 | d | 换上**定制载板** + 真实 **ATECC608B 驱动**（Slot 0 私钥不可导出 / Slot 5 HMAC）+ 产线烧录流程（协议 §6.2） |
 | e | 一体板：+ 低功耗/取能（能量轴实测标定，SPEC F-11）、结构/天线、Gerber/PNP 交付 |
 
-## 二、b 步的关键未知项：**PC ↔ TX-AH 板的物理数据通路**
+## 二、b 步：**PC ↔ TX-AH 板走 UART**（用户 2026-09-14 定）
 
-TX-AH 的 fmac 固件**AT 层没有用户数据命令**（`halow-demo` 真机实测），所以 payload 必须走：
+线上协议（依据：`T-Halow-RJ45/docs/AT_cmd.md` §`AT+TXDATA`、`halow-demo` 的模拟器固件与
+`tools/ui/server.py`、`T-Halow-RJ45/tools/thalow_config.py`）：
 
-| 候选 | 数据面 | 需要 | 待确认 |
-|---|---|---|---|
-| **① USB→SPI 桥**（CH341A/CH347A） | MACBUS `DATA_TX`/`DATA_RX`（与 `host_bus.py` 同一套帧语义） | USB→SPI 适配器 + 接线（含 INT/流控） | SPI 时序/流控、INT 怎么读、MACBUS 寄存器级协议（`halow-demo/simulator/docs/spi_protocol.md` 与 `firmware/Periph/spi_slave.c` 是现成的**从机**侧实现，可反推主机侧；`tools/sim_config.py` 有实验性的同类做法） |
-| ② RJ45 透明桥（WNB 固件 + TH-RJ45 载板） | 以太网 L2 | 两块 TH-RJ45 + 网线 | `0x88B5`/广播是否透传、MTU、RSSI 哪端可读 |
+| 方向 | 做什么 |
+|---|---|
+| 上行（DATA_TX） | `AT+TXDATA=<len>` → 等 `OK` → 写**裸以太网帧**（含 14B 以太头；`len` 含它） |
+| 下行（DATA_RX） | `FRAME:RX <hex>` 行（先 `AT+SYSDBG=WNB,1` 打开帧打印） |
 
-**未定之前不写"看着已支持"的传输实现**（本仓规则 §1）。定了之后，客户端仿真器侧只需
-换 `DeviceSim(client=…)` 这一个参数，**设备逻辑一行不改**。
+- **PC 侧实现已完成**：`orpah-over-halow/host_serial.py`（`SerialAtBus`）+ `client_sim.py --transport serial`。
+- **纯 PC 排练已完成**：`orpah-over-halow/demo_client_uart.py` —— 拿**模拟器的 AT 控制台**跑同一套
+  `AT+TXDATA`/`FRAME:RX`，双向验收（上行过空口 / 下行收到 / 连发不串）。
+- **本仓在 b 步的交付物 = 无代码**（固件从 c 步开始）；本仓只承接判据与接线/供电说明。
+- ⚠ **与真机的差异（上机首测必做，未做）**：① `AT+TXDATA=<len>` 的写法（等号？要不要带
+  `txbw,mcs,priority`？）；② 下行是否真是 `FRAME:RX <hex>` —— **仓里两份记录不一致**
+  （`halow-demo` 真机实测说 TX-AH fmac 的 AT 无用户数据命令）→ 用 `--dump-lines` 看真板原样输出；
+  ③ 数据模式的粘性与恢复（`resync()` 照抄 `thalow_config.py`）。
 
 ## 三、依赖（装机清单，未做）
 

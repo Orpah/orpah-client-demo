@@ -21,9 +21,13 @@
 - **设备侧行为**（降级下限 L1、设计常态 60 s 连接周期、无 RTC 时 `ts=0`、能量/沉默归因…）
   认 `orpah-over-halow/AGENTS.md` §0 与 SPEC §5.2/§8；**不要另立一套口径**。
 - **空口/真机事实认 `halow-demo/simulator/AGENTS.md`**（那边有大量 TX-AH/TH-RJ45 真机实测记录）。
-  与客户端直接相关的两条：① TX-AH 的 fmac 固件**AT 层没有用户数据命令** → 业务 payload 只能走
-  **host SDIO/SPI（MACBUS）**（这正是 `host_bus.py` 那套帧的语义）；② **真机一次只应答一条 AT 查询**
-  （背靠背发会吞后面那条）→ 轮询/配置必须逐条错开。
+  与客户端直接相关的两条：① **PC ↔ 模块的数据面走 UART 上的 `AT+TXDATA`**（用户 2026-09-14 定）：
+  `AT+TXDATA=<len>` → 等 `OK` → 写**裸以太网帧**（含 14B 以太头，长度也含它）；下行 = `FRAME:RX <hex>` 行
+  （需 `AT+SYSDBG=WNB,1`）。⚠ **仓里两份记录不一致**：`T-Halow-RJ45/docs/AT_cmd.md` 确有 `AT+TXDATA`，
+  而 `halow-demo` 的真机实测写着 TX-AH 的 fmac 固件“AT 只有控制面、无用户数据命令”
+  → **以实测为准**；上机首测先确认三件事（命令写法 / 下行格式 / 数据模式粘性），
+  参考实现与判据见 `orpah-over-halow/{host_serial.py, docs/client_sim.md, demo_client_uart.py}`；
+  ② **真机一次只应答一条 AT 查询**（背靠背发会吞后面那条）→ 轮询/配置必须逐条错开。
 
 ## 1. 硬件与工具链（2026-09-14 用户定）
 

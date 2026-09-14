@@ -21,9 +21,11 @@ ORPAH（用无线技术找人）五仓里的**客户端侧**：**CH32V203 + 安�
 
 - **MCU**：CH32V203（QingKe V2，64K Flash / 20K RAM 级别），裸机、无 RTOS、`-nostdlib`。
 - **安全元件（SE）**：ATECC608B —— 协议 §5.3 指定的 ECDSA P-256 载体（私钥不可导出）。
-- **射频模组**：泰芯 **TX-AH**（AH-SDK V2 系列）。⚠ 该模组的 fmac 固件**AT 层没有用户数据命令**
-  → ORPAH 的报文只能走 **host SDIO/SPI（MACBUS）**，其帧格式与 `orpah-over-halow/host_bus.py`
-  一致（`AA 55 TYPE LEN_H LEN_L CRC`，CRC-8/ATM 0x07）。这条来自 `halow-demo` 的真机实测。
+- **射频模组**：泰芯 **TX-AH**（AH-SDK V2 系列）。**PC ↔ 模块的数据面走 UART**（用户 2026-09-14 定）：
+  `AT+TXDATA=<len>` + 裸以太帧上行、`FRAME:RX <hex>` 行下行（PC 侧实现见
+  `orpah-over-halow/host_serial.py`；纯 PC 排练见 `demo_client_uart.py`）。
+  ⚠ 仓里两份记录不一致（TC-Halow-RJ45 手册有 `AT+TXDATA`，`halow-demo` 真机实测说 fmac 的 AT
+  无用户数据命令）→ **未在真机验证**，上机首测先确认（见 `orpah-over-halow/docs/client_sim.md` §2.3）。
 - **工具链**：`riscv-none-elf-gcc`（**MounRiver** 自带；`-DWCH_INTERRUPT_FAST` 必须用它）。
 - **烧录**：WCH-Link + OpenOCD（或 MounRiver 下载按钮）—— **由用户执行**。
 
