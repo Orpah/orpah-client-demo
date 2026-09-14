@@ -84,4 +84,12 @@ openocd -f interface/wch-link.cfg -f target/ch32v20x.cfg \
 
 ## 许可
 
-尚未定（`orpah-over-halow` 用 Apache-2.0）—— **与用户确认后再加 `LICENSE`**。
+**Apache-2.0**（与 `Protocol` / `orpah-over-halow` 一致；`LICENSE` 与 `orpah-over-halow` 逐字节相同，
+SHA256 一致）。注：`Protocol` 另有一份 `NOTICE`（版权行），本仓按兄弟仓 `orpah-over-halow` 的做法
+**只放 `LICENSE`**；若要补 NOTICE 请告知。
+
+## 路线图
+
+真机三步走（客户端 a→e / 路由器 a→e）与每步的交付物、判据、关键未知项见 **`ROADMAP.md`**。
+其中 **a 步（软件里的客户端设备仿真器）已在 `orpah-over-halow` 完成**：
+`client_sim.py`（`DeviceSim`）+ `demo_client_sim.py`（端到端验收）+ `docs/client_sim.md`。

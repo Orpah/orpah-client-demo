@@ -73,6 +73,9 @@
 
 ## 5. 仓库与编码约定
 
+- **许可 = Apache-2.0**（用户 2026-09-14 定；`LICENSE` 与 `orpah-over-halow` 逐字节相同）。
+- **路线图见 `ROADMAP.md`**（真机三步走 a→e；每步只换一样东西，判据固定为
+  「周期上报 + 服务端验签通过 + 下行真到达 + 上游零丢弃」）。
 - 文本一律 **UTF-8 无 BOM**；C 源码用 **LF**（与 `halow-demo` 一致，避免整文件 diff）。
 - **不要用 PowerShell 改含中文的源码**：`Get-Content` 默认按 ANSI 读 → 会把 UTF-8 中文变成乱码且
   编译直接语法错。改源码一律用编辑器工具。
@@ -103,7 +106,11 @@ orpah-client-demo/
 
 ## 8. 现状与未做（如实）
 
-- **2026-09-14**：本仓刚建立，**只有一个空提交之前的骨架**：`AGENTS.md`（本文件）+ `README.md`
-  + `.gitignore`。**没有任何代码、没有硬件实测、没有上机验证。**
-- **未做**：协议内核 C、固件主循环/状态机、SE 驱动、TX-AH host 数据口对接、与
-  `orpah-over-halow`（服务端/仿真器）联调、与 `orpah-openwrt-demo`（路由器侧）对接、真机烧录实测。
+- **2026-09-14**：本仓骨架已就位：`AGENTS.md`（本文件）+ `README.md` + `ROADMAP.md` + `.gitignore`
+  + `LICENSE`(Apache-2.0)。**没有任何代码、没有硬件实测、没有上机验证。**
+- **a 步（客户端设备仿真器）已在 `orpah-over-halow` 完成**（本仓无代码交付）：
+  `client_sim.py`（`DeviceSim`，可换传输）+ `demo_client_sim.py`（端到端验收：验签通过 /
+  下行到达 / 零丢弃）+ `docs/client_sim.md`（含 b–e 各步的判据与两条候选物理通路）。
+- **未做**：b 步的物理传输（USB→SPI 走 MACBUS 或 RJ45 桥，**通路未定**）、固件主循环/状态机、
+  SE（ATECC608B）驱动、产线烧录流程、低功耗与取能标定、与 `orpah-over-halow`（服务端/仿真器）
+  联调、与 `orpah-openwrt-demo`（路由器侧）对接、真机烧录实测。
