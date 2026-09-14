@@ -1,0 +1,45 @@
+# ORPAH 客户端固件（CH32V203 + ATECC608B + TX-AH）
+#
+# 规则：**忽略 VS Code 任务文件与构建产物** —— 否则首次 `git add -A` 会把
+# 自动生成的临时任务/编译输出吃进库（上游仓库踩过同类坑：迁出子集时 .gitignore
+# 不跟着走，27 个 .pyc 进了库，而 `git status` 一直干净、不易察觉）。
+#
+# 说明：别的仓库把 `.vscode/tasks.json` 入库（那里是精心维护的一键任务）。
+# 本仓先整体忽略 `.vscode/`；将来要把它入库时，再单独放行并写清任务用途。
+
+# ---- 编辑器/任务 ----
+.vscode/
+
+# ---- 构建产物 ----
+build/
+out/
+*.o
+*.obj
+*.d
+*.su
+*.elf
+*.bin
+*.hex
+*.ihex
+*.map
+*.lst
+*.a
+*.exe
+
+# ---- Python（上位机脚本/交叉测试）----
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# ---- 串口/调试产物 ----
+*.log
+capture_*.txt
+*.pcap
+*.pcapng
+
+# ---- 本机临时文件（别让临时文件进库）----
+*.tmp
+*.bak
+*~
