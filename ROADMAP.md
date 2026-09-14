@@ -60,8 +60,25 @@
 - **接线**：nano `A2`(USART2_TX) → TX-AH `IOA13`(J4 pin3)；nano `A3`(USART2_RX) → TX-AH `IOA12`(J4 pin2)；
   nano `5V` → TX-AH `J2 VCC`；nano `G` → TX-AH `J2 GND`（共地）。
 - **已验过**：SecureCRT 连 COM32、键 `AT+SSID?` **有正确回应** ⇒ **AT 控制面通了**。
-- ⇒ 上面那三条 ⚠ **现在可以直接拿 COM32 试**：
-  `client_sim.py --transport serial --serial-port COM32 --dump-lines 30 --cycles 1`。
+
+### ★ 上机首测结论（2026-09-14 实测）：UART 数据面走不通，**通路待重定**
+
+模块身份：`AT+VERSION=?` → `v2.4.1.5-38247`（第 4 位 = `5`）、MAC `4a-06-59-8d-74-40`、
+SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 sta）。
+
+- **控制面可用** ✓：`AT+SSID?` / `AT+VERSION=?` / `AT+MAC_ADDR=?` 都答；`AT+SYSDBG=LMAC,0`
+  还真能把周期 `LMAC STATUS` 刷屏关掉；`resync()`（1700 字节填充）在真机上**有效**。
+- **✘ 数据面：`AT+TXDATA` 四种写法全部静默无应答**（`AT+TXDATA=29` / `=29,8,0,0` / `?` / `=?`）
+  —— 不是 `ERROR`，是一句话都不回；结合版本号第 4 位 = `5`，与 `halow-demo/simulator/AGENTS.md`
+  的 **2026-09-07 真机结论完全一致**：这块是 **fmac 固件，AT 只有控制面、没有 AT 级发数据命令**
+  （那份记录：payload 需走**主机 SDIO/SPI(MACBUS)** 或换“网络版固件”）。
+  ⇒ `AT+TXDATA`/`FRAME:RX` 这套（`host_serial.py`）**在真机上无效**（离线排练仍有效，留着当 API 对照）。
+- **⇒ 候选通路（要用户拍板）**：① **模块主机接口 SPI/SDIO（MACBUS）** + PC 侧 USB→SPI 桥
+  （CH341A/CH347A）—— 与最终产品形态一致（CH32V203 侧本就要走这个），且帧语义
+  （`AA 55 ...`）当初就是按 MACBUS 设计的；② 换**网络版固件**（需厂商固件/授权）；
+  ③ 改用**数据面走网口**的那块板（但 `halow-demo` 2026-09-07 实测：TH-RJ45 ↔ TX-AH
+  **跨固件可发现不可关联**，选它得先确认能配对）。
+- 细节与证据（各命令的原样回应）见 `docs/nano-ch32v203-uart-bridge.md` §5。
 
 ## 三、依赖（装机清单）
 
@@ -81,7 +98,8 @@
 - 本仓目前**只有规则、骨架与本文档**（`AGENTS.md` / `README.md` / `ROADMAP.md` / `.gitignore`
   / `docs/`），**没有任何代码、自家固件未上机**。
 - b 步：**物理通路已定 + AT 控制面已跑通**（nano 当 USB-UART 桥 → COM32，见
-  `docs/nano-ch32v203-uart-bridge.md`）；但**数据面**（`AT+TXDATA`/`FRAME:RX`）**未验证**。
+  `docs/nano-ch32v203-uart-bridge.md`）；但**数据面实测走不通**（这块 fmac 固件没有
+  `AT+TXDATA`）→ **通路待重定，见 §二末**。
 - c 步起的都未做：工具链虽已装但**本仓固件一行未写**；CH32 板 / ATECC608 未接线；
   ATECC608B 驱动、产线烧录、低功耗与取能标定全未做。
 - 客户端侧的 `seen_routers`（设备看到哪些路由器）在仿真器里仍是**演示写死值**，
