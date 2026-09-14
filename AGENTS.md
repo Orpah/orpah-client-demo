@@ -40,6 +40,9 @@
   例程（MounRiver 编译 `EVT/EXAM/USB/USBD/SimulateCDC` → WCHISPTool V3.3、BOOT+RST 进刷机态）
   ⇒ 变成「USB CDC ↔ USART2(PA2/PA3)」的 **USB-UART 桥**，出现 **COM32**（115200 8N1）。
   接线：nano `A2`/`A3`/`5V`/`G` ↔ TX-AH `IOA13`(J4 pin3)/`IOA12`(J4 pin2)/`J2 VCC`/`J2 GND`。
+  **J4 引脚定义（用户 2026-09-14 给的「AH UART」原理图，已确认）：1=VCC、2=IOA12、3=IOA13、4=GND**
+  —— 板上那排丝印从左到右是 `GND/A13/A12/VCC` ⇒ **该排编号自右向左**（同段原理图里
+  J5 = 2×4、J10 = 单针 GND）。
   `AT+SSID?` 有正确回应 ⇒ **AT 控制面已通**。★ **数据面（`AT+TXDATA`/`FRAME:RX`）仍未验证**；
   ★ COM32 是 Windows 现分配的号（换口/换机就变，别写进脚本常量）；
   ★ **SimulateCDC 是测试夹具，不是本仓固件**（本仓固件从 c 步开始，未写）。

@@ -46,19 +46,26 @@
 |---|---|---|
 | **nano A2**（= PA2 = **USART2_TX**） | **IOA13 = J4 Pin 3** | 过桥后就是 PC 的 TX → 模块的 RX 侧信号 |
 | **nano A3**（= PA3 = **USART2_RX**） | **IOA12 = J4 Pin 2** | 模块的 TX → PC 的 RX |
-| **nano 5V** | **J2 VCC** | 供电 |
-| **nano G** | **J2 GND** | **共地（必须接）** |
+| **nano 5V** | **J2 VCC** | 供电（J2 = 板上方那个 JST XH 4 针口，4 脚为 `GND/A31/A30/VCC`，取它的 VCC） |
+| **nano G** | **J2 GND** | **共地（必须接）**（同样可从 J4 pin4 / J10 单针取 GND） |
 
 - **PA2/PA3 = USART2** 的依据：`…\SimulateCDC\User\Main.c:15` 注释
   “Example routine to emulate a simulate USB-CDC Device, **USE USART2(PA2/PA3)**”；
   `…\User\UART\UART.c` 里 PA2 配成复用推挽（TX）、PA3 配置为浮空输入（RX）。
 - ⚠ **别拿 USART2 干别的**：同一处注释明确写着 “if you need to modify the debugging serial port,
   please do not use USART2” —— 这个口被 CDC 桥占着；板上调试打印走 **USART1**。
-- **对照 TX-AH 面包板丝印**：JU 区**下面那一排就是 J4**（面包板视图里从左到右是
-  `GND / A13 / A12 / VCC`）→ 由此 pin2 = A12、pin3 = A13，也就是 **J4 那一排的 pin 编号是
-  自右向左数**的（★ 这一条是从「上面两条接线」+「丝印」推出来的，下次接线照此；
-  以你板上实际丝印为准）。J4 的 4 个焊盘画法见 `fritzing-parts-langhua` 的
-  `svg/TX-AH-R900PNR`（2026-09-14 已改正：J5 = 上面两排 8 个焊盘、J4 = 下面一排 4 个）。
+- **J4 引脚定义（用户 2026-09-14 提供的 TX-AH「AH UART」原理图段，已确认）**：
+
+  | J4 引脚 | 1 | 2 | 3 | 4 |
+  |---|---|---|---|---|
+  | 信号 | **VCC** | **IOA12** | **IOA13** | **GND** |
+
+  ⇒ 本次接线用的就是 **pin2 / pin3**，**GND = J4 pin 4**（VCC = J4 pin 1）。
+- **与板上丝印的关系**：J4 那一排在面包板视图里从左到右是 `GND / A13 / A12 / VCC`
+  （= pin4 / pin3 / pin2 / pin1）⇒ **该排 pin 编号自右向左数**；
+  同一段原理图里 **J5 = 2×4（`2X4-2.54MM`，8 脚）**、**J10 = 单针 GND**（本次不用）。
+  J4/J5 的焊盘画法见 `fritzing-parts-langhua` 的 `svg/TX-AH-R900PNR`（2026-09-14 已改正：
+  J5 = 上面两排 8 个焊盘、J4 = 下面一排 4 个）——与这张原理图的「4 脚 / 2×4」一致。
 
 ## 4. 验证（实测通过）
 
