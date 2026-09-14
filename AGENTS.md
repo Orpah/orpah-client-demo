@@ -35,6 +35,14 @@
   **射频模组 = 泰芯 TX-AH**（AH-SDK V2 系列，与 `halow-demo` 的真机档案 `txah` 同族）。
 - **工具链沿用 `halow-demo/simulator/firmware` 那套**：`riscv-none-elf-gcc`（MounRiver 自带），
   `-DWCH_INTERRUPT_FAST` + 启动文件里的硬件栈/嵌套配置 ⇒ **必须用 MounRiver 工具链**（xPack 版会跑飞）。
+- **b 步的串口测试夹具已跑通**（用户 2026-09-14 实测；细节见 `docs/nano-ch32v203-uart-bridge.md`）：
+  nanoCH32V203（**板载原生 USB、无 CH340**，Win11 下出不了 COM 口）刷 WCH 官方 `SimulateCDC`
+  例程（MounRiver 编译 `EVT/EXAM/USB/USBD/SimulateCDC` → WCHISPTool V3.3、BOOT+RST 进刷机态）
+  ⇒ 变成「USB CDC ↔ USART2(PA2/PA3)」的 **USB-UART 桥**，出现 **COM32**（115200 8N1）。
+  接线：nano `A2`/`A3`/`5V`/`G` ↔ TX-AH `IOA13`(J4 pin3)/`IOA12`(J4 pin2)/`J2 VCC`/`J2 GND`。
+  `AT+SSID?` 有正确回应 ⇒ **AT 控制面已通**。★ **数据面（`AT+TXDATA`/`FRAME:RX`）仍未验证**；
+  ★ COM32 是 Windows 现分配的号（换口/换机就变，别写进脚本常量）；
+  ★ **SimulateCDC 是测试夹具，不是本仓固件**（本仓固件从 c 步开始，未写）。
 - **裸机约束照抄参考固件**：无 RTOS、`-nostdlib`、自包含寄存器定义、主频 8 MHz HSI（无 PLL）。
 - **参考骨架 = `halow-demo/simulator/firmware/`**（Makefile / `ld/link.ld` / `startup/` / `Core/board.h`
   / `Periph/{gpio,uart,spi_slave}` / 状态机）：**复用其套路**（含 SPI1 从机 host 接口、UART2 虚拟空口、

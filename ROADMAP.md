@@ -52,21 +52,37 @@
   （`halow-demo` 真机实测说 TX-AH fmac 的 AT 无用户数据命令）→ 用 `--dump-lines` 看真板原样输出；
   ③ 数据模式的粘性与恢复（`resync()` 照抄 `thalow_config.py`）。
 
-## 三、依赖（装机清单，未做）
+### b 步真机夹具已就绪（用户 2026-09-14 实测，细节见 `docs/nano-ch32v203-uart-bridge.md`）
+
+- **PC 这头的“串口”是拿 nanoCH32V203 板当 USB-UART 桥拨出来的**：板子原生 USB、无 CH340，
+  出不了 COM 口 → 用 MounRiver 编 WCH 官方 `SimulateCDC` 例程、WCHISPTool V3.3 刷进去
+  （BOOT+RST 进刷机态），按 RST 后设备管理器出现 **`USB串口设备(COM32)`**（115200 8N1）。
+- **接线**：nano `A2`(USART2_TX) → TX-AH `IOA13`(J4 pin3)；nano `A3`(USART2_RX) → TX-AH `IOA12`(J4 pin2)；
+  nano `5V` → TX-AH `J2 VCC`；nano `G` → TX-AH `J2 GND`（共地）。
+- **已验过**：SecureCRT 连 COM32、键 `AT+SSID?` **有正确回应** ⇒ **AT 控制面通了**。
+- ⇒ 上面那三条 ⚠ **现在可以直接拿 COM32 试**：
+  `client_sim.py --transport serial --serial-port COM32 --dump-lines 30 --cycles 1`。
+
+## 三、依赖（装机清单）
 
 - **工具链**：MounRiver Studio（自带 `riscv-none-elf-gcc`）—— `-DWCH_INTERRUPT_FAST` 必须用它；
-  或用 xPack 版但要**改中断模型**（参考固件已注明会跑飞）。
-- **烧录**：WCH-Link（SWD）+ OpenOCD `interface/wch-link.cfg` + `target/ch32v20x.cfg`；
-  或 MounRiver 下载按钮。**烧录由用户执行**。
+  或用 xPack 版但要**改中断模型**（参考固件已注明会跑飞）。**已装 MounRiver Studio V2.5.0**（用户 2026-09-14）。
+- **烧录**：① **WCHISPTool V3.3**（芯片内置 bootloader，BOOT+RST 进刷机态，**不需要 COM 口**）
+  —— b 步夹具就是用它刷的；② WCH-Link（SWD）+ OpenOCD `interface/wch-link.cfg` + `target/ch32v20x.cfg`，
+  或 MounRiver 下载按钮。**烧录一律由用户执行**。
+- **WCH EVT 包**：`CH32V20xEVT`（<https://file.wch.cn/download/file?id=385>）—— b 步的
+  `EVT/EXAM/USB/USBD/SimulateCDC` 就是从中编译出来的；本机在 `D:\Downloads\CH32V20xEVT`。
 - **参考固件**：`halow-demo/simulator/firmware/`（CH32V203，裸机、无 RTOS、`-nostdlib`）。
 - **协议**：`Protocol/docs/OrpahIDProtocol.md`（SN/校验/签名/密钥/降级/限频）、
   `Protocol/docs/orpah-over-halow/SPEC.md`（报文/走失表/覆盖/能量/设计常态 60 s）。
 
 ## 四、未做（如实）
 
-- 本仓目前**只有规则与骨架**（`AGENTS.md` / `README.md` / `.gitignore` / `LICENSE` / 本文件），
-  **没有任何代码、没有硬件实测、没有上机验证**。
-- b 步物理通路未定；工具链未装；CH32 板 / ATECC608 / TX-AH 板未接线；
-  ATECC608B 驱动、产线烧录、低功耗与取能标定全部未做。
+- 本仓目前**只有规则、骨架与本文档**（`AGENTS.md` / `README.md` / `ROADMAP.md` / `.gitignore`
+  / `docs/`），**没有任何代码、自家固件未上机**。
+- b 步：**物理通路已定 + AT 控制面已跑通**（nano 当 USB-UART 桥 → COM32，见
+  `docs/nano-ch32v203-uart-bridge.md`）；但**数据面**（`AT+TXDATA`/`FRAME:RX`）**未验证**。
+- c 步起的都未做：工具链虽已装但**本仓固件一行未写**；CH32 板 / ATECC608 未接线；
+  ATECC608B 驱动、产线烧录、低功耗与取能标定全未做。
 - 客户端侧的 `seen_routers`（设备看到哪些路由器）在仿真器里仍是**演示写死值**，
   真机要等空口侧给出可用读数（且 `xport` 不在签名内，见 SPEC F-12）。
