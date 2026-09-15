@@ -38,6 +38,15 @@ python tools\fmac_macbus_switch.py restore    # 还原
 | **AT/打印口** | UART1 | **IOA12 / IOA13** | 跳线选 **A12/A13 = 打印** | 看打印、发 AT（2026-09-14 测的就是这排） |
 
 - **CH347F-EVT 正好有两路 UART** → 一路接数据口、一路接 AT 口，一台 PC 就能同时收发+看日志。
+  PC 侧用法（`tools/probe_txah_uart.py`）：
+  ```powershell
+  python tools\ch347_spi.py uart-list                                  # 看 UART 索引（0=UART0、1=UART1）
+  python tools\probe_txah_uart.py --ch347-uart 0 listen --secs 10      # 数据口（UART0）只读解析
+  python tools\probe_txah_uart.py --ch347-uart 1 listen --secs 10      # AT/打印口（UART1）
+  ```
+  ⚠ 实测（2026-09-16）：DLL 里 **`CH347OpenDevice(0)`（SPI 功能）与 UART0 冲突** ——
+  先开 SPI 再 `CH347Uart_Init(0)` 会失败；**UART0+UART1 同时可用**、**SPI + UART1 也可用**。
+  所以：只用 UART 时不要 `open()` 设备（脚本已这么做）；要同时跑 SPI 探测就用 UART1 看日志。
 - 必须共地；模组 3.1~3.3 V 供电，**别用 CH347F-EVT 的 3.3V 去带模组**（发射瞬间电流不够，
   会"时好时坏"）。
 - ⚠ 原厂 FAQ 提到「角色选择 **IOB2**：RMII/USB/UART 第 1 套方案，SDIO/SPI 第 2 套方案」，
@@ -68,6 +77,9 @@ python tools\fmac_macbus_switch.py restore    # 还原
 
 ## 六、未做（如实）
 
-- **PC 侧 HGIC（UART）主机驱动/收发脚本：未写**（下一步）。
 - **烧录未做、接线未做**，因此上面第四节以外的结论都还没在真机上验证过。
+- **PC 侧联调脚本已就绪但只跑过离线自测**：`tools/txah_hgic.py`（HGIC 编解码，自测 13 项全过）
+  + `tools/probe_txah_uart.py`（listen / send-eth / send-cmd / raw）。真机行为待接线后跑。
+- **RAW 模式下载荷到底带不带以太头、要不要那 24 字节 info**：不确定，靠真机试
+  （工具两种都支持，会打印实际发送内容）。
 - SPI 电气探测（`docs/ch347f-txah-spi-probe.md`）仍待接线后跑；若 SPI 也通，再回头比较两条路。

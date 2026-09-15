@@ -21,9 +21,19 @@ ch347_spi.py — 从 PC 访问 WCH **CH347 / CH347F / CH339W**（USB→SPI/I2C/J
     → 要读从机响应请用 `auto_deassert=0` + 手动 `cs()`（`selftest` / `probe_txah_spi.py` 都这么做）。
   * **没插任何 WCH 设备时** `CH347OpenDevice(0..3)` 也可能返回句柄（芯片类型读成 0=CH341）
     → 判"设备在不在"要用 `spi_usable()`（= `CH347SPI_Init` 成功），别只看 open 的返回值。
+  * **UART 是独立的索引空间**（照 WCH 官方 `CH347Demo/UartDebug.cpp` 的枚举法）：
+    CH347F 上 **UART 索引 0 = UART0、1 = UART1**（`FuncDescStr` =
+    `CH347F.M0:USB2.0 To VCP UART0/1`，`CH347IfNum` = 0 / 2）；
+    用 `uart_list()` 看。
+  * **`CH347OpenDevice(0)` 会占住"设备索引 0"（DLL 里 SPI 功能就在 0）**：先开它就再
+    `CH347Uart_Init(0)` 会**失败**（实测 Init=0）；只开 UART0 → Init=1。
+    共存关系实测：**UART0+UART1 ✓**、**SPI + UART1 ✓**、**SPI + UART0 ✗**。
+    ⇒ 只用 UART 时**别**调 `open()`（`uart_*` 自己会开设备）；要同时跑 SPI 就用 UART1。
   * `CH347GetDeviceInfor` 的 `mDeviceInforS` 里 `DevicePath[MAX_PATH]` 依赖 `windows.h` 的
     `MAX_PATH`（本机取 260），**没确认过**，所以本模块不解析它；设备身份走
     `CH347GetChipType` / `CH347GetVersion` / `CH347SPI_GetCfg`（这些是确定的）。
+    （UART 那侧用 `M_DEV_INFOR` 读出的 `FuncDescStr` 实测是正常字符串，说明该布局在
+    UART 功能上对得上 —— 但 SPI 设备那侧仍不解析它。）
   * `CH347GetVersion` 按头文件里 4 个单字节 BCD 读（形参名 `iDriverVer`/`iDLLVer`/`ibcdDevice`/
     `iChipType`）—— 实测打出来的数看着合理（2.05/2.02/2.00/CH347F），但**是推断的读法**。
   * CH347F 的 SPI 是**主机侧**（master only）：不能当 SPI 从机。
@@ -65,6 +75,37 @@ SPI_SPEEDS_HZ = [
 ]
 
 
+class M_DEV_INFOR(ctypes.Structure):
+    """对应头文件 `struct _DEV_INFOR`（`#pragma pack(1)`）。
+
+    ⚠ `DevicePath[MAX_PATH]`：头文件写的是 `MAX_PATH`（来自 `windows.h`），本机按 **260** 填；
+    这条**没法从文档确认**，所以只把它当作"尽量读出 FuncDescStr（UART0/UART1）"的手段 ——
+    实测打出来是人话就用，是乱码就当没读到。
+    """
+    _pack_ = 1
+    _fields_ = [
+        ("iIndex", ctypes.c_ubyte),
+        ("DevicePath", ctypes.c_ubyte * 260),
+        ("UsbClass", ctypes.c_ubyte),
+        ("FuncType", ctypes.c_ubyte),
+        ("DeviceID", ctypes.c_char * 64),
+        ("ChipMode", ctypes.c_ubyte),
+        ("DevHandle", ctypes.c_void_p),
+        ("BulkOutEndpMaxSize", ctypes.c_ushort),
+        ("BulkInEndpMaxSize", ctypes.c_ushort),
+        ("UsbSpeedType", ctypes.c_ubyte),
+        ("CH347IfNum", ctypes.c_ubyte),
+        ("DataUpEndp", ctypes.c_ubyte),
+        ("DataDnEndp", ctypes.c_ubyte),
+        ("ProductString", ctypes.c_char * 64),
+        ("ManufacturerString", ctypes.c_char * 64),
+        ("WriteTimeout", ctypes.c_ulong),
+        ("ReadTimeout", ctypes.c_ulong),
+        ("FuncDescStr", ctypes.c_char * 64),
+        ("FirewareVer", ctypes.c_ubyte),
+    ]
+
+
 class Ch347Error(RuntimeError):
     pass
 
@@ -99,6 +140,7 @@ class Ch347:
         self.index = index
         self._opened = False
         self._uart_opened = False
+        self._uart_index = index
         path = dll_path or self._find_dll()
         try:
             self.dll = ctypes.WinDLL(path)
@@ -155,6 +197,8 @@ class Ch347:
                                      ctypes.POINTER(ctypes.c_ulong)]
         d.CH347Uart_QueryBufUpload.argtypes = [ctypes.c_ulong,
                                                ctypes.POINTER(ctypes.c_longlong)]
+        d.CH347Uart_GetDeviceInfor.restype = ctypes.c_int
+        d.CH347Uart_GetDeviceInfor.argtypes = [ctypes.c_ulong, ctypes.POINTER(M_DEV_INFOR)]
 
     # ------------------------------------------------------------------ 设备
     def open(self, write_timeout=1000, read_timeout=1000):
@@ -169,7 +213,7 @@ class Ch347:
 
     def close(self):
         if self._uart_opened:
-            self.dll.CH347Uart_Close(self.index)
+            self.dll.CH347Uart_Close(self._uart_index)
             self._uart_opened = False
         if self._opened:
             self.dll.CH347CloseDevice(self.index)
@@ -268,34 +312,58 @@ class Ch347:
         return self.xfer(bytes([fill]) * nbytes, cs=None)
 
     # ------------------------------------------------------------------- UART
-    def uart_open(self, baud=115200, databits=8, parity=0, stopbits=0, byte_timeout=0,
-                  write_timeout=1000, read_timeout=1000):
-        if not self.dll.CH347Uart_Open(self.index):
-            raise Ch347Error("CH347Uart_Open(%d) 失败" % self.index)
+    #
+    # ⚠ **UART 是独立的索引空间**（WCH 官方 `CH347Demo/UartDebug.cpp` 的枚举法：
+    #   `for(i=0..15) if (CH347Uart_Open(i) != INVALID_HANDLE_VALUE) CH347Uart_GetDeviceInfor(i,…)`）。
+    #   也就是说 `CH347OpenDevice()` 那套 `iIndex`（SPI/并口，CH347F 上是 0）与
+    #   `CH347Uart_Open()` 的索引**不是一回事** —— CH347F 有两路 UART，就是 UART 索引 0 / 1。
+    #   DeviceInfo 里 `CH347IfNum`：CH347F → 0:UART0；2:UART1；4:SPI/IIC/JTAG/GPIO。
+
+    def uart_list(self, count=16):
+        """枚举 UART 功能（照官方 Demo 的做法），返回 [{"index","func","chip_mode"}, …]。"""
+        out = []
+        for i in range(count):
+            h = self.dll.CH347Uart_Open(i)
+            if h:
+                info = M_DEV_INFOR()
+                got = self.dll.CH347Uart_GetDeviceInfor(i, ctypes.byref(info))
+                func = info.FuncDescStr.decode("latin-1").strip("\x00 ") if got else ""
+                out.append({"index": i, "func": func if func.isprintable() else "",
+                            "chip_mode": int(info.ChipMode) if got else -1,
+                            "ifnum": int(info.CH347IfNum) if got else -1})
+            self.dll.CH347Uart_Close(i)
+        return out
+
+    def uart_open(self, baud=115200, uart=None, databits=8, parity=0, stopbits=0,
+                  byte_timeout=0, write_timeout=1000, read_timeout=1000):
+        """打开 UART。`uart` = **UART 索引**（CH347F 上 0/1）；不传就用 `index`。"""
+        idx = self.index if uart is None else uart
+        if not self.dll.CH347Uart_Open(idx):
+            raise Ch347Error("CH347Uart_Open(%d) 失败（CH347F 只有 UART 索引 0/1）" % idx)
+        self._uart_index = idx
         self._uart_opened = True
-        if not self.dll.CH347Uart_Init(self.index, baud, databits, parity, stopbits,
-                                       byte_timeout):
+        if not self.dll.CH347Uart_Init(idx, baud, databits, parity, stopbits, byte_timeout):
             raise Ch347Error("CH347Uart_Init(baud=%d) 失败" % baud)
-        self.dll.CH347Uart_SetTimeout(self.index, write_timeout, read_timeout)
+        self.dll.CH347Uart_SetTimeout(idx, write_timeout, read_timeout)
         return self
 
     def uart_write(self, data):
         buf = ctypes.create_string_buffer(bytes(data), len(data))
         n = ctypes.c_ulong(len(data))
-        if not self.dll.CH347Uart_Write(self.index, buf, ctypes.byref(n)):
+        if not self.dll.CH347Uart_Write(self._uart_index, buf, ctypes.byref(n)):
             raise Ch347Error("CH347Uart_Write 失败")
         return n.value
 
     def uart_read(self, want=256):
         buf = ctypes.create_string_buffer(want)
         n = ctypes.c_ulong(want)
-        if not self.dll.CH347Uart_Read(self.index, buf, ctypes.byref(n)):
+        if not self.dll.CH347Uart_Read(self._uart_index, buf, ctypes.byref(n)):
             return b""
         return bytes(buf.raw[:n.value])
 
     def uart_pending(self):
         n = ctypes.c_longlong(0)
-        if not self.dll.CH347Uart_QueryBufUpload(self.index, ctypes.byref(n)):
+        if not self.dll.CH347Uart_QueryBufUpload(self._uart_index, ctypes.byref(n)):
             return -1
         return n.value
 
@@ -384,6 +452,24 @@ def cmd_xfer(args):
         dev.close()
 
 
+def cmd_uart_list(args):
+    """枚举 UART 功能（独立索引空间，照 WCH 官方 Demo 的枚举法）。"""
+    dev = Ch347(args.index)
+    try:
+        rows = dev.uart_list()
+    finally:
+        dev.close()
+    if not rows:
+        print("没找到 UART 功能（板子没插 / 驱动不是 WCH 的？）")
+        return 1
+    for r in rows:
+        print("UART 索引 %-2d  FuncDescStr=%-16r  ChipMode=%d  CH347IfNum=%d"
+              % (r["index"], r["func"], r["chip_mode"], r["ifnum"]))
+    print("（CH347F：UART0 与 UART1 就是这里的索引 0 / 1；"
+          "FuncDescStr 若显示成乱码，说明那个结构体偏移在本机对不上，按索引试即可）")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="CH347/CH347F PC 侧访问（SPI + UART）")
     ap.add_argument("--index", type=int, default=0, help="设备序号，默认 0")
@@ -391,6 +477,7 @@ def main():
     p = sub.add_parser("list", help="枚举设备")
     p.add_argument("--count", type=int, default=4)
     p.set_defaults(func=cmd_list)
+    sub.add_parser("uart-list", help="枚举 UART 功能（独立索引）").set_defaults(func=cmd_uart_list)
     for name, func, helptext in (("selftest", cmd_selftest, "自环测试（MOSI↔MISO 短接）"),
                                  ("cfg", cmd_cfg, "读回 SPI 配置"),
                                  ("xfer", cmd_xfer, "发一串十六进制并打印回读")):
