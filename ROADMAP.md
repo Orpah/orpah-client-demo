@@ -78,7 +78,29 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
   （`AA 55 ...`）当初就是按 MACBUS 设计的；② 换**网络版固件**（需厂商固件/授权）；
   ③ 改用**数据面走网口**的那块板（但 `halow-demo` 2026-09-07 实测：TH-RJ45 ↔ TX-AH
   **跨固件可发现不可关联**，选它得先确认能配对）。
+  ⚠ 2026-09-16 复核后：① 的 **SPI 变体**按上表**不可行**（模组侧无 SPI 主机口实现），
+  同一条路的 **UART 变体**（CH347F 的两路 UART 也够用）才可行。
 - 细节与证据（各命令的原样回应）见 `docs/nano-ch32v203-uart-bridge.md` §5。
+
+### ★ 2026-09-16 复核（翻模组 SDK 源码后，三条候选通路的可行性都定了）
+
+依据（模组侧源码 = `F:\git\tianlu\TXW8301\TX_AH_SDK_2.4_...\TXW8301_FMAC-v2.4.1.5-39777`，
+经 junction 挂在 `halow-demo\TXW8301\FMAC_SDK`）：
+
+| 主机口 | 模组侧实现 | PC 侧可行性（无厂商主控驱动时） |
+|---|---|---|
+| **SDIO**（默认固件） | ✅ `sdk/lib/bus/macbus/sdio_bus.c`；`project_config.h` 默认 `#define MACBUS_SDIO` | ✗ PC 一般没有 SDIO 主控；要厂商 Linux/RTOS 驱动 |
+| **UART** | ✅ `uart_bus.c`（要改宏重编；UART0 = IOA10/IOA11，115200，RAW=裸以太帧） | ★ **可自实现**：协议有源码（HGIC 8 B 头 `magic/type/ifidx/flags/length/cookie`） |
+| **USB** | ✅ `usb_bus.c`（要重编） | ✗ 走 `usb_device_wifi_*`，厂商私有 USB WiFi 类，要厂商驱动 |
+| **SPI** | ❌ **没有实现**（`mac_bus.h` 只有声明）；changelog 说「SPI 接口和 SDIO 接口是同一固件」→ 实为 **SDIO 控制器的 SPI 模式**（SD/SDIO-over-SPI 协议） | ✗ 要厂商主控驱动 |
+
+- 另：`uartp2p`（串口透传）在 **2.x 不支持**（changelog 明写）；`wnb-uartp2p` 是 1.6 时代的东西。
+- 开发板 UART 跳线：**A10/A11 = 主机通信口**、**A12/A13 = 打印/AT 口** —— 2026-09-14 首测接的是
+  A12/A13（打印口），所以只通 AT、没有数据命令。
+- 现有固件 bin（`FMAC_SDK/project/*.bin`、`out/FMAC/*`）**全是 SDIO 版**，没有 UART macbus 版。
+- 因此 2026-09-16 用户选：**先做 SPI 电气探测**（判据 = SD-SPI 的 CMD0/CMD5 有没有合法 R1），
+  工具与接线见 `docs/ch347f-txah-spi-probe.md`；**UART 路线**（改 `project_config.h` 开
+  `MACBUS_UART` + 重编 + `at+fwupg` 烧录 + PC 侧 HGIC 驱动）**已获用户同意，待排**。
 
 ## 三、依赖（装机清单）
 
