@@ -100,7 +100,10 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 - 现有固件 bin（`FMAC_SDK/project/*.bin`、`out/FMAC/*`）**全是 SDIO 版**，没有 UART macbus 版。
 - 因此 2026-09-16 用户选：**先做 SPI 电气探测**（判据 = SD-SPI 的 CMD0/CMD5 有没有合法 R1），
   工具与接线见 `docs/ch347f-txah-spi-probe.md`；**UART 路线**（改 `project_config.h` 开
-  `MACBUS_UART` + 重编 + `at+fwupg` 烧录 + PC 侧 HGIC 驱动）**已获用户同意，待排**。
+  `MACBUS_UART` + 重编 + `at+fwupg` 烧录 + PC 侧 HGIC 驱动）→ **固件已就绪**：
+  切换脚本在 `halow-demo/TXW8301/tools/fmac_macbus_switch.py`，2026-09-16 已编出
+  `txw8301_v2.4.1.5-39777_2026.9.16_.bin`（特征串 `mac_bus_uart_attach` ✓，**未烧录**）；
+  接线/协议/判据见 `docs/txah-uart-macbus.md`。**PC 侧 HGIC 驱动待写。**
 
 ## 三、依赖（装机清单）
 
