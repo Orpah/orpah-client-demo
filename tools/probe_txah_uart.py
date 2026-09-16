@@ -16,16 +16,20 @@ probe_txah_uart.py — 用 PC 接模组**数据口**（mac_bus over UART）做�
 
 用法：
   python tools\probe_txah_uart.py selftest                 # 离线自测（不碰硬件）
+  python tools\probe_txah_uart.py --ch347-uart 0 probe      # ★ 数据口活性探测（先跑这个）
+  python tools\probe_txah_uart.py --ch347-uart 0 loopback   # 自环（TXD0↔RXD0 短接），验桥和线
   python tools\probe_txah_uart.py --port COM32 listen --secs 10
-  python tools\probe_txah_uart.py --ch347-uart 1 listen --secs 10
+  python tools\probe_txah_uart.py --ch347-uart 0 listen --secs 10
   python tools\probe_txah_uart.py --port COM32 send-eth 00005e000153...   # 完整以太帧
   python tools\probe_txah_uart.py --port COM32 send-cmd 109              # GET_UART_FIXLEN
   python tools\probe_txah_uart.py --port COM32 raw 2B 1A 03 00 08 00 00 00
 
 判据（怎么算"通了"）：
-  * `listen` 能认出**合法帧**（magic/length 自洽）→ 数据口在往外吐东西；
-  * 若一个字节都没读到 → 先查固件烧的哪版、跳线/共地、波特率；
-  * 若有字节但一直认不出帧 → 把原始字节贴出来（`--dump-raw`），再看是不是 magic/定长模式不同。
+  ⚠ **`listen` 读到 0 字节 ≠ 不通**：数据口不是打印口，模组没东西要发时它是安静的。
+    所以先跑 `probe`（它会**主动**发一问一答的命令帧），有回帧才算活。
+  * `probe` 收到合法回帧 → 数据口活的；
+  * `loopback` 不通 → 先解决桥/线，别怀疑模组；
+  * 都没有 → 按 `probe` 结尾给的顺序查（**第一步：AT 口复位后有没有 `uart bus fixlen=…`**）。
 ⚠ 本工具**不做**协议语义（不改模组状态、不写 flash）；要改配置请走 AT 口。
 """
 import argparse
@@ -107,10 +111,14 @@ class Ch347UartTransport:
 
 
 def open_transport(args):
-    if args.ch347_uart is not None:
-        return Ch347UartTransport(index=args.index, uart=args.ch347_uart, baud=args.baud)
-    if args.port:
-        return SerialTransport(args.port, args.baud)
+    port = getattr(args, "port", None)
+    ch347_uart = getattr(args, "ch347_uart", None)
+    baud = getattr(args, "baud", BAUD)
+    index = getattr(args, "index", 0)
+    if ch347_uart is not None:
+        return Ch347UartTransport(index=index, uart=ch347_uart, baud=baud)
+    if port:
+        return SerialTransport(port, baud)
     raise SystemExit("要么给 --port COMx（普通 USB-UART），要么给 --ch347-uart 0|1（CH347F-EVT）")
 
 
@@ -158,7 +166,7 @@ def do_send_eth(t, args):
           % (len(f), "FRM2 精简头" if args.frame_type == "frm2" else "FRM + 24B info",
              "" if args.ethernet else "，载荷按裸数据处理", f.hex(" ")))
     t.write(f)
-    time.sleep(args.wait)
+    time.sleep(getattr(args, "wait", 1.0))
     back = t.read()
     if back:
         print("回读 %s" % back.hex(" "))
@@ -166,7 +174,7 @@ def do_send_eth(t, args):
         for hdr, pl in p.feed(back):
             print("  %s" % describe(hdr, pl))
     else:
-        print("（%d 秒内没有回读；模组侧若有配对的对端，数据应经空口发出去了）" % args.wait)
+        print("（%d 秒内没有回读；模组侧若有配对的对端，数据应经空口发出去了）" % getattr(args, "wait", 1.0))
     return 0
 
 
@@ -175,10 +183,10 @@ def do_send_cmd(t, args):
     f = cmd_frame(args.cmd_id, payload, cookie=args.cookie)
     print("发命令帧（id=%d）：%s" % (args.cmd_id, f.hex(" ")))
     t.write(f)
-    time.sleep(args.wait)
+    time.sleep(getattr(args, "wait", 1.0))
     back = t.read()
     if not back:
-        print("（%d 秒内没有应答）" % args.wait)
+        print("（%d 秒内没有应答）" % getattr(args, "wait", 1.0))
         return 2
     print("回读 %s" % back.hex(" "))
     p = StreamParser()
@@ -191,32 +199,123 @@ def do_raw(t, args):
     data = bytes.fromhex("".join(args.hex))
     print("原样发 %d 字节：%s" % (len(data), data.hex(" ")))
     t.write(data)
-    time.sleep(args.wait)
+    time.sleep(getattr(args, "wait", 1.0))
     back = t.read()
     print("回读 %s" % (back.hex(" ") if back else "（无）"))
     return 0
 
 
+def _read_for(t, secs):
+    """在 secs 秒内尽量多读（返回累计字节）。"""
+    buf = b""
+    end = time.time() + secs
+    while time.time() < end:
+        chunk = t.read()
+        if chunk:
+            buf += chunk
+            end = time.time() + min(0.2, secs)      # 读到东西就再等一小会儿
+        else:
+            time.sleep(0.005)
+    return buf
+
+
+def do_loopback(t, args):
+    """UART **自环**：把本路 TXD 与 RXD 短接，读回应等于发出去的。
+
+    用来把"桥/线的问题"和"模组的问题"分开 —— 自环不通就别怀疑模组。
+    """
+    pat = bytes([0x55, 0xAA, 0x00, 0xFF, 0x2B, 0x1A])
+    print("自环（要求把本路 **TXD 与 RXD 短接**；CH347F P2 上就是把 `TXD0` 和 `RXD0` 用一根线连起来）")
+    print("发 %s" % pat.hex(" "))
+    t.flush()
+    t.write(pat)
+    back = _read_for(t, getattr(args, "wait", 1.0))
+    print("读 %s" % (back.hex(" ") if back else "（无）"))
+    if pat in back:
+        print("=> 自环通过 ✓（桥 + 这根线没问题；那么'模组不答'就真是模组那侧的事）")
+        return 0
+    print("=> 自环不通 ✗：要么 TXD/RXD 没短接，要么桥/线/驱动有问题（先解决这个）")
+    return 2
+
+
+def do_probe(t, args):
+    """数据口活性探测：① 被动听一会儿 ② 主动发一问一答的命令帧 ③ 报结论。"""
+    print("① 被动监听 %.1f 秒（⚠ 模组平时可能是安静的：没有帧**不等于**不通）…" % args.secs)
+    got = _read_for(t, args.secs)
+    if got:
+        print("   收到 %d 字节：%s" % (len(got), got[:64].hex(" ")))
+    else:
+        print("   一个字节都没有（正常也可能是这样）")
+    p = StreamParser()
+    frames = p.feed(got)
+    for hdr, payload in frames:
+        print("   帧：%s" % describe(hdr, payload))
+    print("   杂字节 %d，长度非法 %d" % (p.garbage, p.bad_length))
+
+    print("② 主动探测：发 `GET_UART_FIXLEN`(id=%d) 命令帧 —— 只读，不改模组配置。" % CMD_GET_UART_FIXLEN)
+    print("   （id 108 是 SET_UART_FIXLEN，会写 flash，**别拿它当探针**）")
+    f = cmd_frame(CMD_GET_UART_FIXLEN, cookie=0x1234)
+    print("   发 %s" % f.hex(" "))
+    t.flush()
+    t.write(f)
+    back = _read_for(t, getattr(args, "wait", 1.0) + 0.5)
+    print("   读 %s" % (back.hex(" ") if back else "（无）"))
+    p2 = StreamParser()
+    got2 = p2.feed(back)
+    for hdr, payload in got2:
+        print("   帧：%s" % describe(hdr, payload, full_payload=True))
+
+    print("-" * 70)
+    if got2:
+        print("=> **数据口是活的** ✓：模组回了合法 HGIC 帧（应答载荷见上）")
+        return 0
+    if back:
+        print("=> 有回字节但认不出帧：把原始字节贴出来（magic/长度/定长模式都可能不一样）")
+        return 2
+    print("=> 命令帧没有任何回应。按这个顺序查（每一层都验过再往下）：")
+    print("   1) **打印口**（AT 那根线）复位后有没有 `uart bus fixlen=...` 这一行 ——")
+    print("      这行由 MACBUS_UART 固件的 `mac_bus_uart_attach` 打印；**没有就是没烧进去/没跑起来**")
+    print("   2) 用 `loopback` 子命令做 CH347F 自环（TXD0↔RXD0 短接）—— 桥和线是否可信")
+    print("   3) 共地、模组供电（别用 CH347F 的 3V3）、开发板 UART 跳线档位、A10/A11 是否真引出来")
+    print("   4) 波特率 115200 8N1（`--baud`）")
+    return 2
+
+
 def main():
-    ap = argparse.ArgumentParser(description="TX-AH 模组数据口（mac_bus over UART）联调")
-    ap.add_argument("--port", help="串口名，如 COM32")
-    ap.add_argument("--ch347-uart", type=int, choices=(0, 1), help="用 CH347F-EVT 的 UART0/UART1")
-    ap.add_argument("--index", type=int, default=0, help="CH347F 设备序号（默认 0）")
-    ap.add_argument("--baud", type=int, default=BAUD)
-    ap.add_argument("--wait", type=float, default=1.0, help="发完等回读的秒数")
+    # ⚠ 这些选项既在顶层也在各子命令上（`parents=[common]`），所以默认值必须用 SUPPRESS：
+    # 否则子命令会用它自己的默认值把顶层解析到的值覆盖掉（`--ch347-uart 0 loopback` 会变成 None）。
+    common = argparse.ArgumentParser(add_help=False)
+    S = argparse.SUPPRESS
+    common.add_argument("--port", default=S, help="串口名，如 COM32")
+    common.add_argument("--ch347-uart", type=int, choices=(0, 1), default=S,
+                        help="用 CH347F-EVT 的 UART0/UART1（独立索引）")
+    common.add_argument("--index", type=int, default=S, help="CH347F 设备序号（默认 0）")
+    common.add_argument("--baud", type=int, default=S)
+    common.add_argument("--wait", type=float, default=S, help="发完等回读的秒数（默认 1）")
+
+    ap = argparse.ArgumentParser(description="TX-AH 模组数据口（mac_bus over UART）联调",
+                                 parents=[common])
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("selftest", help="离线自测（不碰硬件）")
-    p.set_defaults(func=None)
+    sub.add_parser("selftest", help="离线自测（不碰硬件）",
+                   parents=[common]).set_defaults(func=None)
 
-    p = sub.add_parser("listen", help="只读并解析")
+    p = sub.add_parser("listen", help="只读并解析", parents=[common])
     p.add_argument("--secs", type=float, default=10.0)
     p.add_argument("--full", action="store_true", help="完整打印载荷")
     p.add_argument("--dump-raw", action="store_true", help="把原始字节也打出来")
     p.add_argument("--only-rx", action="store_true", help="只认模组→主机的 magic")
     p.set_defaults(func=do_listen)
 
-    p = sub.add_parser("send-eth", help="发数据帧（载荷给十六进制）")
+    p = sub.add_parser("probe", help="活性探测：被动听 + 主动发一问一答的命令帧", parents=[common])
+    p.add_argument("--secs", type=float, default=3.0, help="被动听多久（默认 3 秒）")
+    p.add_argument("--dump-raw", action="store_true")
+    p.set_defaults(func=do_probe)
+
+    p = sub.add_parser("loopback", help="UART 自环（TXD↔RXD 短接），先把桥和线验掉", parents=[common])
+    p.set_defaults(func=do_loopback)
+
+    p = sub.add_parser("send-eth", help="发数据帧（载荷给十六进制）", parents=[common])
     p.add_argument("hex", nargs="+")
     p.add_argument("--frame-type", choices=("frm2", "frm"), default="frm2")
     p.add_argument("--with-frm-info", action="store_true", help="FRM 时是否补 24B info")
@@ -225,13 +324,13 @@ def main():
     p.add_argument("--cookie", type=lambda s: int(s, 0), default=1)
     p.set_defaults(func=do_send_eth)
 
-    p = sub.add_parser("send-cmd", help="发命令帧")
+    p = sub.add_parser("send-cmd", help="发命令帧", parents=[common])
     p.add_argument("cmd_id", type=int, help="如 %d = GET_UART_FIXLEN" % CMD_GET_UART_FIXLEN)
     p.add_argument("hex", nargs="*")
     p.add_argument("--cookie", type=lambda s: int(s, 0), default=1)
     p.set_defaults(func=do_send_cmd)
 
-    p = sub.add_parser("raw", help="原样发字节（调试）")
+    p = sub.add_parser("raw", help="原样发字节（调试）", parents=[common])
     p.add_argument("hex", nargs="+")
     p.set_defaults(func=do_raw)
 
