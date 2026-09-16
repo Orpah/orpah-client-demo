@@ -478,3 +478,75 @@ python tools\probe_txah_uart.py --ch347-com 0 send-eth --frame-type frm --with-f
 - **RAW 模式下载荷到底带不带以太头、要不要那 24 字节 info**：不确定，靠真机试
   （工具两种都支持，会打印实际发送内容）。
 - SPI 电气探测（`docs/ch347f-txah-spi-probe.md`）仍待接线后跑；若 SPI 也通，再回头比较两条路。
+
+## 七、两块模块端到端（b 步数据面；用户 2026-09-16 选“第二块 TX-AH 当对端”）
+
+### 7.1 接线（一个 CH347F 管两端，PC 上一条命令就能测）
+
+| 谁 | 接到 | 说明 |
+|---|---|---|
+| 模块 A（客户端侧，做 **STA**） | CH347F **P2 = UART0**（`MI_00`） | `P2 TXD0 → J5 pin3(A10)`、`P2 RXD0 ← J5 pin5(A11)`、`GND → pin7/8`；**J5 跳线帽拿掉** |
+| 模块 B（对端，做 **AP**） | CH347F **P3 = UART1**（`MI_02`） | 同样三根线接到 **B 板自己的 J5 pin3/pin5 + GND** |
+| 两块板的 AT/打印口 | 各自的 USB-UART（刷机那根） | 看日志用；**不要**占用 CH347F |
+| 三块板 | **共地** | CH347F + A 板 + B 板 GND 连一起 |
+
+> CH347F 的 UART0 + UART1 可共存（2026-09-16 实测 ✓，见 §3.3 附近）；两块板各自供电（**别用 CH347F 的 3V3**）。
+
+### 7.2 两块都要刷**我们这版固件**
+
+`MACBUS_UART` + `WIFIMGR_FRM_TYPE_HGIC` + 调试打印（§5.2）。第二块若是**出厂 SDIO 固件**，
+必须按 §5.2 的流程重编 + `at+fwupg` 烧一遍 —— 否则它没有 UART macbus，数据口是死的。
+
+### 7.3 AT 配置（各自 AT 口；写法出自《泰芯AH-SDK_V2.x AT指令使用说明_V1.4》§3.1/§4.1）
+
+两块都先设射频与信道（示例取文档 §4.1 的写法）：
+
+```
+AT+BSS_BW=8                        # 8M 带宽
+AT+CHAN_LIST=9080,9160,9240        # 或 AT+CHANNEL=1
+AT+SSID=ORPAH_AH_TEST
+AT+ENCRYPT=0                       # 先用不加密，最简
+```
+
+再分别设角色（**这一步是两块唯一不同的地方**）：
+
+```
+模块 B（对端）：AT+WIFIMODE=ap
+模块 A（客户端）：AT+WIFIMODE=sta
+```
+
+两边 `AT+RST` 后：
+
+- 文档原话：**“如果 AP 和 STA 都设置了 SSID 等参数，就不用启动 PAIR 了，会依靠 SSID”** ⇒ 本测试**不需要** `AT+PAIR`；
+- 自检：模块 A 的 AT 口/状态打印里应看到连上（`WPA_COMPLETED` / `CONECTED` 之类）；
+  `AT+SYSCFG` 可回读当前参数，`AT+STA_INFO` 看关联到的 STA。
+
+### 7.4 判据：一条命令（`xfer`）
+
+```powershell
+python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 --text HELLO-ORPAH --secs 8
+```
+
+- `--tx-com 0` = P2 那路（模块 A 的数据口）发；`--rx-com 1` = P3 那路（模块 B 的数据口）收；
+- 期望输出 `=> ✓ 载荷原样到达对端`（并打印对端收回的原始帧）；
+- 先离线看要发什么：加 `--dry-run`（只组帧、不开串口）。
+
+**载荷/帧头约定还没定**（这正是本次要量的东西）：HGIC 模式下数据帧用 `FRM2`(8B 头) 还是
+`FRM`(8B + 24B info)，载荷是**裸数据**还是**完整以太帧**。四种组合依次试：
+
+```powershell
+# ① FRM2 + 裸载荷   ② FRM2 + 完整以太帧   ③ FRM + 24B info + 裸载荷   ④ FRM + 24B info + 完整以太帧
+python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 --no-ethernet --text HELLO
+python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 -- ff ff ff ff ff ff 4a 06 59 8d 74 40 88 b5 01 02 03 04 05
+python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 --no-ethernet --frame-type frm --with-frm-info --text HELLO
+python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 --frame-type frm --with-frm-info -- ff ff ff ff ff ff 4a 06 59 8d 74 40 88 b5 01 02 03 04 05
+```
+
+哪一组能“原样到达”，哪一组就是 b 步数据面的约定；**若对端收到的载荷外面多包了一层**，
+`xfer` 会把它原样打出来（那层就是要认的封装）。两块的 AT 口同时应看到 `[mbus tx] …`（B 块往主机口写）。
+
+### 7.5 待实测 / 未做
+
+- 上述四组约定的真机结果（本轮没做）；模组 B 的 MAC 是否与 A 不同（启动日志 `use UUID for MAC`，
+  预期不同，待确认）；是否需要 `AT+PAIR`；加密（`AT+ENCRYPT=1 + AT+KEY`）下的行为。
+- 一切以实测为准：**没跑过的都不写“已通”**。

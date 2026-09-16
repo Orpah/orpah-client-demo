@@ -355,6 +355,105 @@ def do_probe(t, args):
     return 2
 
 
+def _open_endpoint(idx, port, baud, label):
+    """按 “COM 名优先、否则按 CH347F UART 序号自动找” 开一路。"""
+    if port:
+        print("[i] %s = %s" % (label, port))
+        return SerialTransport(port, baud)
+    if idx is None:
+        raise SystemExit("%s 没给：用 `--tx-com 0/1`（或 `--tx-port COMxx`）；"
+                         "`--rx-com` / `--rx-port` 同理" % label)
+    found = find_ch347_com(idx)
+    if not found:
+        raise SystemExit("没找到 CH347F 的 UART%d COM 口（板子插着吗？驱动是 WCH 的 VCP 吗？）" % idx)
+    print("[i] %s = CH347F UART%d（MI_%02d）= %s" % (label, idx, 0 if idx == 0 else 2, found))
+    return SerialTransport(found, baud)
+
+
+def _printable(b):
+    try:
+        s = b.decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    return s if all(32 <= ord(c) < 127 for c in s) else None
+
+
+def do_xfer(t, args):
+    """★ 两块模组端到端（b 步数据面）：**A 块发 → 空口 → B 块收**，并报一致性。
+
+    接线：`--tx-com` 那路接 **客户端那块**的数据口；`--rx-com` 那路接 **对端那块**的数据口
+    （两块都跑 HGIC + MACBUS_UART 固件；数据口 = `J5 pin3/pin5`，P2=UART0、P3=UART1）。
+    判据：RX 那边收回的**数据帧载荷**要与我们发出去的一致 —— 不一致/收到别的头，就说明
+    载荷约定（`--frame-type` / `--with-frm-info` / `--no-ethernet`）没选对。
+    """
+    baud = getattr(args, "baud", None) or BAUD
+    payload = (args.text.encode("utf-8") if args.text else
+               bytes.fromhex("".join(args.hex)))
+    if not payload:
+        raise SystemExit("载荷为空：给十六进制（位置参数）或 `--text 字符串`")
+    if args.ethernet and len(payload) < 14:
+        print("[!] 说是完整以太帧但只有 %d 字节（< 14 的以太头）" % len(payload))
+    f = data_frame(payload, cookie=args.cookie, with_frm_info=args.with_frm_info,
+                   lean=(args.frame_type == "frm2"))
+    desc = "%s%s" % ("FRM2 精简头" if args.frame_type == "frm2" else "FRM + 24B info",
+                      "，完整以太帧" if args.ethernet else "，裸载荷")
+    print("待发 %d 字节（%s）：%s" % (len(f), desc, f.hex(" ")))
+    print("   载荷 %d 字节：%s%s" % (len(payload), payload.hex(" "),
+                                     ("  = %r" % _printable(payload)) if _printable(payload) else ""))
+    if args.dry_run:
+        print("=> --dry-run：只组帧，不碰串口")
+        return 0
+
+    tx = _open_endpoint(args.tx_com, args.tx_port, baud, "TX（这一端发）")
+    rx = _open_endpoint(args.rx_com, args.rx_port, baud, "RX（对端那口收）")
+    try:
+        # 基线：发之前对端口上本来就有什么（周期性事件会刷屏，先量一次）
+        base = _read_for(rx, 0.3)
+        if base:
+            print("[i] 发之前 RX 口已有 %d 字节（对端自己的周期性上报，忽略）" % len(base))
+        rx.flush()
+        tx.write(f)
+        print("[i] 已发到 TX 口，等 RX 口 %.1f 秒…" % args.secs)
+        got = _read_for(rx, args.secs)
+        print("-" * 70)
+        if not got:
+            print("RX 口一个字节都没有 ⇒ 对端没收到（或对端没往主机口写）")
+            print("  要查：① 两块是不是都跑 HGIC+MACBUS_UART 固件（各自 AT 口看 `[mbus cfg] frm_type=1`）")
+            print("       ② 两块是不是都接好了数据口（J5 pin3/pin5 + GND）+ 共地")
+            print("       ③ 两块关联上了吗（STA 那块的 AT 口应有 `CONECTED`/`WPA_COMPLETED`）")
+            return 2
+        p = StreamParser()
+        frames = p.feed(got)
+        print("RX 收到 %d 字节 / %d 帧：" % (len(got), len(frames)))
+        hits = []
+        for i, (hdr, pl) in enumerate(frames, 1):
+            print("#%-3d %s" % (i, describe(hdr, pl, full_payload=True)))
+            if hdr["type_name"] in ("FRM", "FRM2") and pl:
+                hits.append(pl)
+        print("-" * 70)
+        for pl in hits:
+            if pl == payload:
+                print("=> ✓ **载荷原样到达对端**（%d 字节）—— 这一组头/载荷约定可用" % len(pl))
+                return 0
+        for pl in hits:
+            if payload in pl:
+                print("=> ~ 载荷到达但外面多包了 %d 字节（外面那层可能是以太头/info）：" %
+                      (len(pl) - len(payload)))
+                print("   收到 %s" % pl.hex(" "))
+                return 0
+        if hits:
+            print("=> ✗ 收到数据帧但载荷不一致：")
+            print("   我们发：%s" % payload.hex(" "))
+            print("   对端收：%s" % hits[0].hex(" "))
+            return 2
+        print("=> 收到了帧，但没有数据帧（只有命令/事件）—— 数据载荷可能被模组丢掉了："
+              "换个 `--frame-type` / `--with-frm-info` / `--no-ethernet` 再试")
+        return 2
+    finally:
+        tx.close()
+        rx.close()
+
+
 def main():
     # ⚠ 这些选项既在顶层也在各子命令上（`parents=[common]`），所以默认值必须用 SUPPRESS：
     # 否则子命令会用它自己的默认值把顶层解析到的值覆盖掉（`--ch347-uart 0 loopback` 会变成 None）。
@@ -413,9 +512,28 @@ def main():
     p.add_argument("hex", nargs="+")
     p.set_defaults(func=do_raw)
 
+    p = sub.add_parser("xfer", help="★ 两块模组端到端：A 口发 → 空口 → B 口收，并报一致性",
+                       parents=[common])
+    p.add_argument("hex", nargs="*", help="载荷（十六进制字节），或不给而用 --text")
+    p.add_argument("--text", help="载荷用字符串（UTF-8）")
+    p.add_argument("--tx-com", type=int, choices=(0, 1), help="发那一端的 CH347F UART（0=P2/UART0）")
+    p.add_argument("--rx-com", type=int, choices=(0, 1), help="收那一端的 CH347F UART（1=P3/UART1）")
+    p.add_argument("--tx-port", help="直接给串口名，如 COM23")
+    p.add_argument("--rx-port", help="直接给串口名，如 COM24")
+    p.add_argument("--frame-type", choices=("frm2", "frm"), default="frm2")
+    p.add_argument("--with-frm-info", action="store_true", help="FRM 时是否补 24B info")
+    p.add_argument("--no-ethernet", dest="ethernet", action="store_false",
+                   help="载荷是裸数据（默认按完整以太帧看）")
+    p.add_argument("--cookie", type=lambda s: int(s, 0), default=1)
+    p.add_argument("--secs", type=float, default=8.0, help="发完在 RX 口等多久（默认 8 s）")
+    p.add_argument("--dry-run", action="store_true", help="只组帧并打印，不开串口")
+    p.set_defaults(func=do_xfer)
+
     args = ap.parse_args()
     if args.func is None:
         return hgic_selftest()
+    if args.func is do_xfer:
+        return do_xfer(None, args)      # xfer 自己开两路
     t = open_transport(args)
     try:
         return args.func(t, args)

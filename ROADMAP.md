@@ -100,10 +100,24 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 - 现有固件 bin（`FMAC_SDK/project/*.bin`、`out/FMAC/*`）**全是 SDIO 版**，没有 UART macbus 版。
 - 因此 2026-09-16 用户选：**先做 SPI 电气探测**（判据 = SD-SPI 的 CMD0/CMD5 有没有合法 R1），
   工具与接线见 `docs/ch347f-txah-spi-probe.md`；**UART 路线**（改 `project_config.h` 开
-  `MACBUS_UART` + 重编 + `at+fwupg` 烧录 + PC 侧 HGIC 驱动）→ **固件已就绪**：
-  切换脚本在 `halow-demo/TXW8301/tools/fmac_macbus_switch.py`，2026-09-16 已编出
-  `txw8301_v2.4.1.5-39777_2026.9.16_.bin`（特征串 `mac_bus_uart_attach` ✓，**未烧录**）；
-  接线/协议/判据见 `docs/txah-uart-macbus.md`。**PC 侧 HGIC 驱动待写。**
+  `MACBUS_UART` + 重编 + `at+fwupg` 烧录 + PC 侧 HGIC 驱动）。
+
+### ✓ 2026-09-16 进展：UART 路线「控制面 + 回程」已通（真机实测）
+
+- **固件**：`MACBUS_UART` + `WIFIMGR_FRM_TYPE_HGIC` 已编、已烧、已由启动打印确认
+  （`[mbus cfg] frm_type=1 (0=ETHER 1=HGIC 2=RAW) bus=4`）；宏切换脚本
+  `halow-demo/TXW8301/tools/fmac_macbus_switch.py`；另有临时 RX/TX 调试打印
+  （`docs/txah-uart-macbus.md` §5.2，含回退）。
+- **PC 侧 HGIC 驱动已写**：`tools/txah_hgic.py`（编解码 + `ctrl_info`/`fw_info_decode`，
+  含真机黄金样本自测）+ `tools/probe_txah_uart.py`（listen/probe/send-cmd/send-eth/xfer/loopback）。
+- **实测通了**：`send-cmd 43`(GET_FW_INFO) 回 40 B，解出 app=2.4.1.5 / svn=39777 / mac /
+  smt_dat，全部与启动日志逐项对上；模组每 ~5 s 上报事件 7 = `TX_BITRATE`。
+  ⚠ 关键教训：**`WIFIMGR_FRM_TYPE_RAW`（厂商注释里的“串口默认”）是纯数据管，
+  主机命令不会被分发** —— 换成 `HGIC` 才通（详见 `docs/txah-uart-macbus.md` §5.1–§5.4）。
+- **未做（下一步）**：**数据面端到端**。用户 2026-09-16 选**第二块 TX-AH 当对端**
+  （模块 A = STA ↔ CH347F `P2`；模块 B = AP ↔ CH347F `P3`；两块都刷同一版固件），
+  接线/AT 配置/判据见 `docs/txah-uart-macbus.md` §七，
+  一键判据 = `python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 --text …`。
 
 ## 三、依赖（装机清单）
 
@@ -122,9 +136,9 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 
 - 本仓目前**只有规则、骨架与本文档**（`AGENTS.md` / `README.md` / `ROADMAP.md` / `.gitignore`
   / `docs/`），**没有任何代码、自家固件未上机**。
-- b 步：**物理通路已定 + AT 控制面已跑通**（nano 当 USB-UART 桥 → COM32，见
-  `docs/nano-ch32v203-uart-bridge.md`）；但**数据面实测走不通**（这块 fmac 固件没有
-  `AT+TXDATA`）→ **通路待重定，见 §二末**。
+- b 步：**物理通路已重定为 UART macbus（CH347F 两路 UART + HGIC）**，且
+  **控制面（命令/事件）+ 回程已真机跑通**（2026-09-16，见 §二末）；
+  **数据面端到端还没做**（等两块模块的实测：接线/AT 配置/判据见 `docs/txah-uart-macbus.md` §七）。
 - c 步起的都未做：工具链虽已装但**本仓固件一行未写**；CH32 板 / ATECC608 未接线；
   ATECC608B 驱动、产线烧录、低功耗与取能标定全未做。
 - 客户端侧的 `seen_routers`（设备看到哪些路由器）在仿真器里仍是**演示写死值**，
