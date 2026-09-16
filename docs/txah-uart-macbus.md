@@ -32,13 +32,54 @@ python tools\fmac_macbus_switch.py restore    # 还原
 
 ## 三、接线
 
-| | 用哪个 UART | 模组脚 | 开发板 | 用途 |
-|---|---|---|---|---|
-| **数据口**（mac_bus） | UART0 | **IOA10(RX) / IOA11(TX)** | 跳线选 **A10/A11 = 通信** | 115200 8N1；RAW = **裸以太网帧**（含 14B 以太头） |
-| **AT/打印口** | UART1 | **IOA12 / IOA13** | 跳线选 **A12/A13 = 打印** | 看打印、发 AT（2026-09-14 测的就是这排） |
+### 3.1 CH347F-EVT 的排针（哪一排是什么）
 
-- **CH347F-EVT 正好有两路 UART** → 一路接数据口、一路接 AT 口，一台 PC 就能同时收发+看日志。
-  PC 侧用法（`tools/probe_txah_uart.py`）：
+| 排针 | 内容 |
+|---|---|
+| **P2** | **UART0**（7 针，丝印 `DTR0 CTS0 RTS0 TXD0 RXD0 GND 3V3`）← **数据口用这排** |
+| **P3** | **UART1**（7 针，丝印 `DTR1 CTS1 RTS1 TXD1 RXD1 GND 3V3`）← AT/打印口用它 |
+| P4 | SPI（`SCS0 SCK MISO MOSI`） |
+| P5 | I2C（`VIO SCL SDA GND`），旁边 JP1 = VIO 选择 |
+| P6 | JTAG/SWD（`TMS TCK TDO TDI TRST SRST`） |
+| P7 | `GND /KEY GND` |
+| P8 | 板载 **SPI FLASH**（`SCS1 … SCS0`）—— **别接模组** |
+| P1 | USB（接 PC） |
+
+**P2 / P3 的脚号（板级原理图 `CH347SCH.pdf` 第 1 页；板子丝印上不印脚号）**
+
+| 脚号 | P2（UART0） | P3（UART1） |
+|---|---|---|
+| 1 | 3V3 | 3V3 |
+| 2 | **GND** | **GND** |
+| 3 | **RXD0** | **RXD1** |
+| 4 | **TXD0** | **TXD1** |
+| 5 | RTS0 / GP1 | RTS1（与 SDA 复用） |
+| 6 | CTS0 / GP0 | CTS1（与 SCL 复用） |
+| 7 | DTR0 / GP2 | DTR1（与 SCS1 复用） |
+
+⚠ 板子丝印的**上下顺序与脚号相反**（原理图 pin1=3V3，板面从上往下是 `DTR0 … 3V3`）——
+这条是从两侧资料对照推出来的，**接线时以丝印名字为准**，不要按脚号数。
+
+### 3.2 具体怎么接（数据口 = 模组 UART0 ↔ CH347F P2）
+
+| 模组侧 | 模组脚 | 方向 | CH347F-EVT P2 上印着 | 脚号（参考） |
+|---|---|---|---|---|
+| `A10` | UART0_RX（模组**收**） | ← | **`TXD0`** | pin 4 |
+| `A11` | UART0_TX（模组**发**） | → | **`RXD0`** | pin 3 |
+| GND | 地 | — | **`GND`** | pin 2 |
+
+**AT / 打印口（模组 UART1 = `A12`/`A13`）**：
+**最省事的做法是保持你刷机时那根 USB-UART 不动**（它接的就是打印口 `A12/A13`）——
+刷完 MACBUS_UART 固件后 AT 仍在这一路（`sys_config.h`：非 MACBUS_USB 时
+`ATCMD_UARTDEV = HG_UART1`），所以不必再飞到 CH347F P3。
+真要挪到 CH347F 也可以（P3：模组 `A12`(模组发) → **`RXD1`**；模组 `A13`(模组收) ← **`TXD1`**；GND），
+但**一次只改一处**，先把数据口跑通再动它。
+
+- 开发板上 `A10`/`A11`/`A12`/`A13` 都在 **UART 跳线排**上（A12/A13 现在被短接到 USB 那侧用于 AT/打印，
+  说明那一档是对的）；飞线 `A10`/`A11` 时别动中间那排短接帽。
+- **共地必须接**；模组 3.1~3.3 V 自己供电，**别用 CH347F 的 `3V3`（pin 1）去带模组**
+  （发射瞬间电流不够，会"时好时坏"）。
+- PC 侧用法（`tools/probe_txah_uart.py`）：
   ```powershell
   python tools\ch347_spi.py uart-list                                  # 看 UART 索引（0=UART0、1=UART1）
   python tools\probe_txah_uart.py --ch347-uart 0 listen --secs 10      # 数据口（UART0）只读解析
@@ -47,8 +88,6 @@ python tools\fmac_macbus_switch.py restore    # 还原
   ⚠ 实测（2026-09-16）：DLL 里 **`CH347OpenDevice(0)`（SPI 功能）与 UART0 冲突** ——
   先开 SPI 再 `CH347Uart_Init(0)` 会失败；**UART0+UART1 同时可用**、**SPI + UART1 也可用**。
   所以：只用 UART 时不要 `open()` 设备（脚本已这么做）；要同时跑 SPI 探测就用 UART1 看日志。
-- 必须共地；模组 3.1~3.3 V 供电，**别用 CH347F-EVT 的 3.3V 去带模组**（发射瞬间电流不够，
-  会"时好时坏"）。
 - ⚠ 原厂 FAQ 提到「角色选择 **IOB2**：RMII/USB/UART 第 1 套方案，SDIO/SPI 第 2 套方案」，
   以及这两组脚与 SDIO 脚复用 —— **跳线/电阻怎么配要找原厂确认**（我们只负责固件侧）。
 
