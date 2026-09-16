@@ -147,14 +147,20 @@ python tools\fmac_macbus_switch.py restore    # 还原
 - ★ **CH347F-EVT 在本机是 VCP 模式**：它的两路 UART **同时**是普通串口 ——
   `USB-HiSpeed-SERIAL-A CH347F (COM23)` = `MI_00` = **UART0**、
   `USB-HiSpeed-SERIAL-B CH347F (COM24)` = `MI_02` = UART1（`MI_04` = SPI/I2C/JTAG）。
-  ⇒ **P2 的 TXD0/RXD0 有两条互不相干的驱动方式**：WCH DLL（`--ch347-uart 0`）或
-  pyserial 走 COM23（`--port COM23`）。**排查时两条都试**，能把"桥的问题"和"模组的问题"切开：
+  **2026-09-16 实测（短接 P2 的 TXD0↔RXD0 自环）**：
+
+  | 路径 | 自环结果 |
+  |---|---|
+  | **`--port COM23`（VCP COM 口 / pyserial）** | **✓ 原样读回**（桥 + 线都好） |
+  | `--ch347-uart 0`（WCH DLL 的 `CH347Uart_*`） | ✗ 读不回 —— **VCP 模式下 DLL 的 UART API 发不出去** |
+
+  ⇒ **用 COM 口**。工具里加了个自动找口的入口（COM 号会变，按 `MI_00/MI_02` 认）：
   ```powershell
-  # 先把 P2 的 TXD0 与 RXD0 短接（自环），两条路各跑一次：
-  python tools\probe_txah_uart.py --ch347-uart 0 loopback
-  python tools\probe_txah_uart.py --port COM23 loopback
+  python tools\probe_txah_uart.py --ch347-com 0 loopback   # 自动找到 UART0 并自环
+  python tools\probe_txah_uart.py --ch347-com 0 probe      # 数据口活性探测
+  python tools\probe_txah_uart.py --ch347-com 1 listen --secs 10   # UART1（AT/打印口）只读
   ```
-  （COM 号会变，用 `Get-CimInstance Win32_PnPEntity` 里 `VID_1A86&PID_55DE&MI_00/MI_02` 认。）
+  （`--port COMx` 仍然可用；`--ch347-uart` 留作对照。）
 - ⚠ **解释器/依赖**（本机踩过）：默认 `python` 是 **3.14 且没装 pyserial**，而
   `C:\Python313\python.exe` 有。`--port`（含 CH347F 的 VCP COM 口）**需要 pyserial**；
   `--ch347-uart`（走 WCH DLL）不需要。两条路：

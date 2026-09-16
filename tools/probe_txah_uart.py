@@ -33,6 +33,8 @@ probe_txah_uart.py — 用 PC 接模组**数据口**（mac_bus over UART）做�
 ⚠ 本工具**不做**协议语义（不改模组状态、不写 flash）；要改配置请走 AT 口。
 """
 import argparse
+import re
+import subprocess
 import sys
 import time
 
@@ -123,18 +125,49 @@ class Ch347UartTransport:
         return "CH347F UART%d @%d" % (self.uart, self.baud)
 
 
+def find_ch347_com(uart=0):
+    """找 CH347F **VCP 模式**下的 UART COM 口（按 USB 接口号：**0 = MI_00 = UART0、1 = MI_02 = UART1**）。
+
+    实测（2026-09-16，本机）：这条路能通（loopback 原样读回），而 WCH DLL 的
+    `CH347Uart_*` 在 VCP 模式下**写得出、读不回**（`--ch347-uart 0 loopback` 失败）——
+    所以 VCP 模式下就**用 COM 口**。
+    """
+    mi = {0: "MI_00", 1: "MI_02"}.get(uart)
+    if mi is None:
+        return None
+    ps = ("Get-CimInstance Win32_PnPEntity | Where-Object { $_.PNPDeviceID -like "
+          "'USB\\VID_1A86&PID_55DE&%s*' } | Select-Object -ExpandProperty Name" % mi)
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                             capture_output=True, text=True, encoding="utf-8",
+                             errors="replace", timeout=20)
+    except Exception:                                     # noqa: BLE001
+        return None
+    m = re.search(r"\((COM\d+)\)", out.stdout or "")
+    return m.group(1) if m else None
+
+
 def open_transport(args):
     port = getattr(args, "port", None)
+    ch347_com = getattr(args, "ch347_com", None)
     ch347_uart = getattr(args, "ch347_uart", None)
     baud = getattr(args, "baud", BAUD)
     index = getattr(args, "index", 0)
+    if ch347_com is not None:
+        found = find_ch347_com(ch347_com)
+        if not found:
+            raise SystemExit("没找到 CH347F 的 UART%d COM 口（板子插着吗？驱动是 WCH 的 VCP 吗？）"
+                             "—— 也可以自己看设备管理器后手动给 --port COMxx" % ch347_com)
+        print("[i] CH347F UART%d（MI_%02d）= %s" % (ch347_com, 0 if ch347_com == 0 else 2, found))
+        return SerialTransport(found, baud)
     if ch347_uart is not None:
         bt = getattr(args, "byte_timeout", None)
         return Ch347UartTransport(index=index, uart=ch347_uart, baud=baud, byte_timeout=bt)
     if port:
         return SerialTransport(port, baud)
-    raise SystemExit("要么给 --port COMx（普通 USB-UART / CH347F 的 VCP COM 口），"
-                     "要么给 --ch347-uart 0|1（走 WCH DLL）")
+    raise SystemExit("三选一：`--ch347-com 0|1`（推荐，自动找 CH347F 的 VCP COM 口）、"
+                     "`--port COMx`（任意串口）、`--ch347-uart 0|1`（走 WCH DLL，"
+                     "本机 VCP 模式下实测不通）")
 
 
 # ------------------------------------------------------------------- 子命令
@@ -301,9 +334,11 @@ def main():
     # 否则子命令会用它自己的默认值把顶层解析到的值覆盖掉（`--ch347-uart 0 loopback` 会变成 None）。
     common = argparse.ArgumentParser(add_help=False)
     S = argparse.SUPPRESS
-    common.add_argument("--port", default=S, help="串口名，如 COM32")
+    common.add_argument("--port", default=S, help="串口名，如 COM23")
+    common.add_argument("--ch347-com", type=int, choices=(0, 1), default=S,
+                        help="★ 推荐：自动找 CH347F 的 VCP COM 口（0=UART0、1=UART1）")
     common.add_argument("--ch347-uart", type=int, choices=(0, 1), default=S,
-                        help="用 CH347F-EVT 的 UART0/UART1（独立索引）")
+                        help="走 WCH DLL 的 UART（本机 VCP 模式下实测不通，留作对照）")
     common.add_argument("--index", type=int, default=S, help="CH347F 设备序号（默认 0）")
     common.add_argument("--baud", type=int, default=S)
     common.add_argument("--wait", type=float, default=S, help="发完等回读的秒数（默认 1）")
