@@ -252,6 +252,7 @@ AT/打印口 `A12/A13` = **0 Ω**（直达）—— 两条路的差别就只差�
 | **P2 的 `TXD0`/`RXD0` 两个方向都好 + 电平/共地/波特率都对** | **AT 往返成功**：`TXD0→A12`、`RXD0→A13`，发 `AT+SSID?` → 回 `[9302]SSID: 测试链路\r\nOK`。同一条线、同一路 CH347F，接到模组 `UART1` 就活 ⇒ 桥、线、电平、共地、115200 全都没问题 |
 | **模组 `UART0` 的引脚方向（源码级）** | `sdk/chip/txw4002ack803/pin_function.c` 的 `uart_pin_func()`：`HG_UART0_DEVID` → `PIN_UART0_RX_A10_F4`(RX=**A10**) / `PIN_UART0_TX_A11_F4`(TX=**A11**)；`project_config.h` 里 `UARTBUS_DEV = HG_UART0_DEVID`、`ATCMD_UARTDEV = HG_UART1` ⇒ **`TXD0` 必须接 `A10`、`RXD0` 必须接 `A11`** |
 | **两根线 + J5 两个落点 + 两颗 1 kΩ 都通** | `J5 pin3 ↔ pin5` 短接（回路 = `TXD0 → 线 → J5 pin3 → R41 → 短接线 → R42 → J5 pin5 → 线 → RXD0`）→ `--ch347-com 0 loopback` **原样读回** `55 aa 00 ff 2b 1a` ✓（2026-09-16；顺带把 1 kΩ 对 115200 的影响也一起证掉了） |
+| ★ **我们发的帧完好到达模组 `UART0`** | 调试固件（§5.2）打印：`[mbus rx] 9 byte(s) 2b 1a 03 00 09 00 34 12 6d` —— 正好是 `probe` 发出去的那一帧（magic `2b 1a`、type `03`=CMD、len `09 00`、cookie `34 12`、cmd `6d`=109）。**这条一次性定死四件事**：① `TXD0` 所在的那个 `J5` 落点**就是模组 `A10`（`UART0_RX`）** ⇒ 所以另一个落点必是 `A11`，**线序不用再猜/不用对调**；② 波特率/极性/电平全对；③ 1 kΩ 真的不影响（每字节都对）；④ 模组 `UART0` 的接收+中断+任务链路都在跑 |
 
 ⚠ **`loopback` 的接法（本次踩过）**：它要求把**本路 `TXD0` 与 `RXD0` 直接短接**（就在 P2 那排上）。
 线已经接去 `A12/A13`（模组 UART1）或 `A10/A11`（模组 UART0）时，`TXD0` 与 `RXD0` 之间**没有通路**，
@@ -277,15 +278,16 @@ AT/打印口 `A12/A13` = **0 Ω**（直达）—— 两条路的差别就只差�
 现成的观测手段（`AT+SYSDBG` 只支持 heap/top/lmac/umac/irq，`hgic_dbg` 在闭源库里是空宏），
 所以只能自己往接收路径加打印。
 
-**改了什么**（`sdk/lib/bus/macbus/uart_bus.c`，**共 3 处**，都带 `TEMP DEBUG` 注释）：
+**改了什么**（`sdk/lib/bus/macbus/uart_bus.c`，**共 4 处**，都带 `TEMP DEBUG` 注释）：
 
 | 位置 | 内容 |
 |---|---|
-| `uart_bus_task()` 之前 | 新增 `uart_bus_dbg_rx()`：打出一帧的**字节数 + 前 16 字节 hex**（自己拼 hex 串，只用 `%d`/`%s`，不赌 `os_printf` 支不支持 `%02x`） |
-| `uart_bus_task()` 里 `bus.recv()` 之前 | 调一次 `uart_bus_dbg_rx(buf, count)` —— **放在任务里、不放在 ISR 里**（`os_printf` 走轮询控制台，中断上下文太重） |
+| `uart_bus_task()` 之前 | 新增 `uart_bus_dbg_dump(tag, buf, count)`：打出**标签 + 字节数 + 前 16 字节 hex**（自己拼 hex 串，只用 `%d`/`%s`，不赌 `os_printf` 支不支持 `%02x`） |
+| `uart_bus_task()` 里 `bus.recv()` 之前 | `uart_bus_dbg_dump("[mbus rx]", …)` —— **放在任务里、不放在 ISR 里**（`os_printf` 走轮询控制台，中断上下文太重） |
+| `uart_bus_write()` 开头 | `uart_bus_dbg_dump("[mbus tx]", …)` —— 看**模组往主机口写了什么**（回答"它到底回没回"）。放这里是因为该函数一开始就 `os_mutex_lock(..., osWaitForever)`：**能睡眠 ⇒ 必是任务上下文**，不是在 ISR 里 |
 | `mac_bus_uart_attach()` 里 | 多打一行 `[mbus rx] debug build: UART0 rx dump on` —— **用于证明烧进去的确实是这版**（否则"没输出"分不清是"没收到"还是"没烧成"） |
 
-**备份 / 回退**：原文件已备份为同目录 `uart_bus.c.bak-nodbg`。回退 = 删掉那 3 处
+**备份 / 回退**：原文件已备份为同目录 `uart_bus.c.bak-nodbg`。回退 = 删掉那 4 处
 （或直接 `copy uart_bus.c.bak-nodbg uart_bus.c`）后重编即可。
 （`FMAC_SDK` 是指向外部 SDK 的 junction 且在 `.gitignore` 里 —— 这些改动**不进本仓**，只在本机生效。）
 
@@ -297,8 +299,8 @@ $env:SHELL='F:\C-Sky\CDK\CSKY\MinGW\msys\1.0\bin\sh.exe'; $env:MAKESHELL=$env:SH
 ```
 
 产物：`FMAC_SDK/project/txw8301_v2.4.1.5-39777_<日期>_.bin`（并复制成 `APP.bin`）。
-**2026-09-16 已编好**：`APP.bin` 365584 字节，离线核对里面确实有 `[mbus rx]` 与 `debug build` 两个字符串
-（沿用之前查 `uart bus fixlen` 的同一手法）。
+**2026-09-16 已编过两版**：第一版（只 RX）365584 B；第二版（RX+TX）**366096 B**（15:10:41）。
+两版都离线核对过 `APP.bin` 里确实有对应字符串（沿用之前查 `uart bus fixlen` 的同一手法）。
 
 **烧录**：同以前 —— AT 口发 `at+fwupg` → SecureCRT 用 Xmodem 发 `APP.bin` → 自动重启。
 
@@ -307,9 +309,11 @@ $env:SHELL='F:\C-Sky\CDK\CSKY\MinGW\msys\1.0\bin\sh.exe'; $env:MAKESHELL=$env:SH
 | 现象 | 含义 |
 |---|---|
 | 启动时出 `[mbus rx] debug build: UART0 rx dump on` | 调试固件确实在跑（后面所有判据的前提） |
-| 发帧时出 `[mbus rx] 9 byte(s) 2b 1a 03 00 09 00 00 00 6d` | **帧到了 `UART0`** ⇒ 问题在"模组没回"或"回程那半条线"（`2b 1a` 正好是 `txah_hgic.py` 发出去的头两个字节，能直接核对） |
+| 发帧时出 `[mbus rx] 9 byte(s) 2b 1a 03 00 09 00 34 12 6d` | **帧到了 `UART0`** ✓（2026-09-16 已实测到） |
 | 发帧时**一行都不出** | **字节根本没进 `UART0`** ⇒ 落点/引脚复用/被别的东西咬着 |
 | 出 `[mbus rx] N byte(s)` 但字节是乱的 | 波特率/电平/极性有问题（哪种一眼能看出） |
+| 紧接着出 `[mbus tx] N byte(s) …` | **模组确实往主机口回写了** ⇒ 那么"没收到"就在回程（反而说明命令处理是通的） |
+| 只有 `[mbus rx]` 没有 `[mbus tx]` | **模组根本没回写 `UART0`** ⇒ 问题在"命令处理/分发"或"它认为现在不该往主机写"，不在线上 |
 
 **已知边界**：它只能看到"UART0 收到了什么"，看不到"为什么没收到"；也看不到
 模组→主机那半条回程线。一旦确认收到，下一步就是拿 `probe` 看回程帧。
@@ -318,8 +322,8 @@ $env:SHELL='F:\C-Sky\CDK\CSKY\MinGW\msys\1.0\bin\sh.exe'; $env:MAKESHELL=$env:SH
 
 - **固件已烧、已由启动打印确认**（`hgSDK-v2.4.1.5-39777 … build time:Sep 16 2026 …` + `[44]uart bus fixlen=0`）；
   **接线在做**，但**数据口（`A10/A11`）至今没有任何一问一答的实测**（见 §5.1）。
-- **临时调试固件（§5.2，`UART0` RX 打印）已编好、尚未烧** —— 在它烧进去之前，
-  "模组侧到底收没收到"仍属未实测。
+- **临时调试固件（§5.2，`UART0` RX+TX 打印）已编好（第二版 366096 B）、RX 那半已在真机实测过**；
+  **TX 那半还没上机** —— 在它给出结果之前，"模组为什么不回"仍属未定。
 - **PC 侧联调脚本已就绪但只跑过离线自测**：`tools/txah_hgic.py`（HGIC 编解码，自测 13 项全过）
   + `tools/probe_txah_uart.py`（listen / send-eth / send-cmd / raw）。真机行为待接线后跑。
 - **RAW 模式下载荷到底带不带以太头、要不要那 24 字节 info**：不确定，靠真机试
