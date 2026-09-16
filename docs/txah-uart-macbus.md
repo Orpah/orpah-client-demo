@@ -318,6 +318,14 @@ $env:SHELL='F:\C-Sky\CDK\CSKY\MinGW\msys\1.0\bin\sh.exe'; $env:MAKESHELL=$env:SH
 **已知边界**：它只能看到"UART0 收到了什么"，看不到"为什么没收到"；也看不到
 模组→主机那半条回程线。一旦确认收到，下一步就是拿 `probe` 看回程帧。
 
+**备用线索：`AT+BUS_WT`（让模组主动往主机口写）**。`AT+BUS_WT=?` 实测回
+`+BUS_WT:bus write disable` + `OK` —— 是个开关（`AT+BUS_WT=0/1`）。它的实现**在闭源库里**
+（`libs/liblmac.a` 里的字符串 `"%s:bus write %s"` + `enable`/`disable`），但 `libs/libwifi.a` 里有
+`wifi_mgr_print2host` ⇒ **很可能就是"把打印/数据也写到主机口（mac bus）"的调试开关**（推断，未实测）。
+用法：`AT+BUS_WT=1` 后在**数据口**跑 `--ch347-com 0 listen --secs 5 --dump-raw`：
+- 有字节（magic 应为 **`1a 2b`** = `0x2B1A` 小端 = 模组→主机）⇒ 回程那半条线也是好的；
+- 试完记得 `AT+BUS_WT=0` 关掉。
+
 ## 六、未做（如实）
 
 - **固件已烧、已由启动打印确认**（`hgSDK-v2.4.1.5-39777 … build time:Sep 16 2026 …` + `[44]uart bus fixlen=0`）；
