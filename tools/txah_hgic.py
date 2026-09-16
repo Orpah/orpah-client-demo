@@ -46,6 +46,43 @@ TYPE_NAMES = {
 }
 TYPE_NAMES_REV = {v: k for k, v in TYPE_NAMES.items()}
 
+# 控制帧的两个大分类（`hgic_hdr.type`）
+TYPE_CMD = 3
+TYPE_EVENT = 4
+TYPE_CMD2 = 13
+TYPE_EVENT2 = 14
+
+# 命令 id（`sdk/include/lib/lmac/hgic.h` 的 `enum hgic_cmd`；只列常用的）
+CMD_NAMES = {
+    1: "DEV_OPEN", 2: "DEV_CLOSE", 3: "SET_MAC", 4: "SET_SSID", 5: "SET_BSSID",
+    7: "SET_CHANNEL", 13: "SET_KEY", 14: "SCAN", 15: "GET_SCAN_LIST", 17: "DISCONNECT",
+    18: "GET_BSSID", 20: "GET_STATUS", 22: "SET_TX_POWER", 23: "GET_TX_POWER",
+    29: "SET_TX_MCS", 31: "ACS_ENABLE", 37: "GET_FW_STATE", 40: "GET_CONN_STATE",
+    41: "SET_WORK_MODE", 42: "SET_PAIRED_STATIONS", 43: "GET_FW_INFO", 44: "PAIRING",
+    45: "GET_TEMPERATURE", 46: "ENTER_SLEEP", 47: "OTA", 48: "GET_SSID", 50: "GET_SIGNAL",
+    51: "GET_TX_BITRATE", 53: "GET_STA_LIST", 54: "SAVE_CFG", 56: "SET_ETHER_TYPE",
+    57: "GET_STA_COUNT", 58: "SET_HEARTBEAT_INT", 65: "RADIO_ONOFF", 74: "SET_PS_MODE",
+    75: "LOAD_DEF", 108: "SET_UART_FIXLEN", 109: "GET_UART_FIXLEN",
+    163: "GET_WIFI_STATUS_CODE", 192: "SET_SIGNAL_THRESHOLD", 194: "GET_LINK_QUALITY",
+}
+
+# 事件 id（`hgic.h` 的 `enum hgic_event`）
+EVENT_NAMES = {
+    1: "STATE_CHG", 2: "CH_SWICH", 3: "DISCONNECT_REASON", 4: "ASSOC_STATUS",
+    5: "SCANNING", 6: "SCAN_DONE", 7: "TX_BITRATE", 8: "PAIR_START", 9: "PAIR_SUCCESS",
+    10: "PAIR_DONE", 11: "CONECT_START", 12: "CONECTED", 13: "DISCONECTED", 14: "SIGNAL",
+    15: "DISCONNET_LOG", 16: "REQUEST_PARAM", 17: "TESTMODE_STATE", 18: "FWDBG_INFO",
+    19: "CUSTOMER_MGMT", 20: "SLEEP_EXIT", 21: "DHCPC_DONE", 22: "CONNECT_FAIL",
+    23: "CUST_DRIVER_DATA", 24: "UNPAIR_STA", 25: "BLENC_DATA", 26: "HWSCAN_RESULT",
+    27: "EXCEPTION_INFO", 28: "DSLEEP_WAKEUP", 29: "STA_MIC_ERROR", 30: "ACS_DONE",
+    31: "FW_INIT_DONE", 32: "ROAM_CONECTED", 33: "MGMT_FRAME", 34: "UNKNOWN_STA",
+    35: "ROAM_FAIL",
+}
+
+# `struct hgic_fw_info`（`hgic.h`，__packed，28 B）
+FW_INFO_FMT = "<IIHH6s2sII"
+FW_INFO_LEN = 28
+
 HDR_LEN = 8            # struct hgic_hdr（packed）
 FRM_INFO_LEN = 24      # struct hgic_frm_hdr 里 union 的大小
 MAX_FRAME = 4096       # uart_bus.c: UART_BUS_RX_BUF_SIZE
@@ -81,12 +118,20 @@ def data_frame(payload, cookie=0, with_frm_info=False, lean=True):
 
 
 def cmd_frame(cmd_id, payload=b"", cookie=0):
-    """命令帧：id ≤ 255 用 CMD(3)，否则 CMD2(13)（照 `HDR_CMDID` 的规则）。"""
+    """命令帧：id ≤ 255 用 CMD(3)，否则 CMD2(13)（照 `HDR_CMDID` 的规则）。
+
+    ⚠ **必须把 4 字节的 union 补满**：`struct hgic_ctrl_hdr` = 8 B 帧头 + 4 B union
+    （`cmd_id` / `status` / `event_id` …），`sizeof` = **12**；模组端的
+    `data = (uint8 *)(ctrl + 1)` 就是**从偏移 12** 取参数（`uart_bus.c` 的
+    `uart_bus_proc_cmd` 正是这么干的）。所以 1 字节 `cmd_id` 后面要补 3 个 0，
+    否则带参命令的参数会落到错位置上。
+    （实测：不带参的 `send-cmd 43` 用 9 B 形式也能回，但那是巧合——它只读 `cmd_id`。）
+    """
     if cmd_id <= 0xFF:
-        return frame_host_to_module(TYPE_NAMES_REV["CMD"], bytes([cmd_id]) + bytes(payload),
-                                    cookie=cookie)
-    return frame_host_to_module(TYPE_NAMES_REV["CMD2"],
-                                struct.pack("<H", cmd_id) + bytes(payload), cookie=cookie)
+        body = bytes([cmd_id]) + b"\x00" * 3 + bytes(payload)
+        return frame_host_to_module(TYPE_NAMES_REV["CMD"], body, cookie=cookie)
+    body = struct.pack("<H", cmd_id) + b"\x00" * 2 + bytes(payload)
+    return frame_host_to_module(TYPE_NAMES_REV["CMD2"], body, cookie=cookie)
 
 
 def parse_header(buf):
@@ -158,14 +203,108 @@ class StreamParser:
         return best
 
 
+def ctrl_info(hdr, payload):
+    """解析控制帧载荷，返回 dict（`kind`/`id`/`name`/`status`/`data`）或 None。
+
+    帧式来自 **2026-09-16 真机实测**（`probe_txah_uart.py send-cmd`）：
+
+    * 请求（主机→模组）：`cmd_id(1) [+ 参数]`
+    * 应答（模组→主机）：`cmd_id(1) | status(1) | len(2, LE) | data(len)`
+      —— 实测 `send-cmd 43` 回 40 B = 8(hdr) + 1 + 1 + 2 + **28**，
+      而模组日志同时打了 `resp cmd, ret:28`；这 28 B 正好是 `struct hgic_fw_info`。
+    * 事件（模组→主机）：`event_id(1) | data`
+    * CMD2/EVENT2 时 id 是 u16（同 `HDR_CMDID()` 的规则）
+
+    ⚠ 也有"只回一个 cmd_id"的短应答（实测 `send-cmd 1` / `send-cmd 20` 就是），
+    那种情况 `status` 为 None —— 不当成错误，也不编造 status。
+    """
+    if not payload:
+        return None
+    if hdr["type"] in (TYPE_CMD2, TYPE_EVENT2):
+        if len(payload) < 2:
+            return None
+        cid, body = struct.unpack_from("<H", payload, 0)[0], payload[2:]
+    else:
+        cid, body = payload[0], payload[1:]
+
+    is_ctrl = hdr["type"] in (TYPE_CMD, TYPE_CMD2)
+    if is_ctrl and hdr["from_module"]:
+        if len(body) >= 3:
+            status = body[0]
+            ln = struct.unpack_from("<H", body, 1)[0]
+            if 3 + ln == len(body):
+                return {"kind": "resp", "id": cid, "status": status, "data": body[3:],
+                        "name": CMD_NAMES.get(cid)}
+        # 短应答：只回了 cmd_id，没有 status/len/data（实测 send-cmd 1 / 20 就是这样）
+        return {"kind": "resp", "id": cid, "status": None, "data": b"",
+                "name": CMD_NAMES.get(cid)}
+    # 请求、事件：hdr(8) + union(4) 之后才是数据
+    return {"kind": "req" if not hdr["from_module"] else "resp", "id": cid,
+            "status": None, "data": body[3:] if len(body) >= 3 else b"",
+            "name": (CMD_NAMES.get(cid) if is_ctrl else EVENT_NAMES.get(cid))}
+
+
+def fw_info_decode(data):
+    """`struct hgic_fw_info` → 可读 dict；长度不够回 None（不猜）。"""
+    if len(data) < FW_INFO_LEN:
+        return None
+    ver, svn, chip_id, cpuid, mac, _resv, app_ver, smt = struct.unpack(FW_INFO_FMT, data[:FW_INFO_LEN])
+    return {
+        # 实测字节序：`05 01 04 02` → "2.4.1.5"
+        "app": "%d.%d.%d.%d" % (data[3], data[2], data[1], data[0]),
+        "version_raw": ver,
+        "svn": svn,
+        "chip_id": chip_id,
+        "cpuid": cpuid,
+        "mac": ":".join("%02x" % b for b in mac),
+        "app_version": app_ver,
+        "smt_dat": smt,
+    }
+
+
+def _u32_words(data, maxn=4):
+    return " ".join("0x%08x" % struct.unpack_from("<I", data, i)[0]
+                    for i in range(0, min(len(data), 4 * maxn), 4) if i + 4 <= len(data))
+
+
 def describe(hdr, payload, full_payload=False):
     head = ("%-16s type=%-8s len=%-5d ifidx=%d flags=%d cookie=0x%04X" %
             (hdr["magic_name"], hdr["type_name"], hdr["length"], hdr["ifidx"],
              hdr["flags"], hdr["cookie"]))
-    hexs = payload.hex(" ")
-    if not full_payload and len(hexs) > 96:
-        hexs = hexs[:96] + " …(%d B)" % len(payload)
-    return head + ("\n     载荷 " + hexs if payload else "  (无载荷)")
+    lines = [head]
+    if payload:
+        hexs = payload.hex(" ")
+        if not full_payload and len(hexs) > 96:
+            hexs = hexs[:96] + " …(%d B)" % len(payload)
+        lines.append("     载荷 " + hexs)
+
+    info = ctrl_info(hdr, payload)
+    if info:
+        is_ctrl = hdr["type"] in (TYPE_CMD, TYPE_CMD2)
+        line = "     %s id=%d" % ("命令" if is_ctrl else "事件", info["id"])
+        line += "(%s)" % (info["name"] or "未知")
+        if info["kind"] == "req":
+            line += "  请求"
+        else:
+            line += "  应答" if is_ctrl else "  上报"
+            if info["status"] is None:
+                if is_ctrl:
+                    line += "（只回了 id，无 status/len 字段）"
+            else:
+                line += " status=%d data=%d B" % (info["status"], len(info["data"]))
+        lines.append(line)
+
+        # 已知结构的载荷（只有一份解码，别在调用方另写）
+        if info["id"] == 43 and is_ctrl and info["data"]:
+            fi = fw_info_decode(info["data"])
+            if fi:
+                lines.append("       FW: app=%s svn=%d chip_id=0x%04X mac=%s smt_dat=%d"
+                             % (fi["app"], fi["svn"], fi["chip_id"], fi["mac"], fi["smt_dat"]))
+        elif not is_ctrl and info["data"]:
+            w = _u32_words(info["data"])
+            if w:
+                lines.append("       data u32: " + w)
+    return "\n".join(lines)
 
 
 def selftest():
@@ -206,13 +345,47 @@ def selftest():
     c = cmd_frame(CMD_SET_UART_FIXLEN, b"\x01\x40")
     hc = parse_header(c)
     chk("命令帧 type=CMD id=108", hc["type_name"] == "CMD" and c[8] == 108)
+    chk("控制头 12 B（参数从偏移 12 开始）", len(c) == 12 + 2 and c[12:] == b"\x01\x40",
+        "len=%d" % len(c))
     c2 = cmd_frame(65000, b"\x01")
     chk("id>255 → CMD2 + u16 id", parse_header(c2)["type_name"] == "CMD2"
         and struct.unpack_from("<H", c2, 8)[0] == 65000)
+    chk("CMD2 参数也从偏移 12 开始", c2[12:] == b"\x01", c2.hex(" "))
 
     mod = build(MAGIC_MODULE_TO_HOST, 4, b"evt", cookie=7)
     both = StreamParser()
     chk("不限定方向时两个 magic 都认", len(both.feed(f + mod)) == 2)
+
+    # --- 2026-09-16 真机黄金样本（`probe_txah_uart.py --ch347-com 0 send-cmd 43` 抓到）---
+    REQ_43 = bytes.fromhex("2b1a0300090001002b")
+    RESP_43 = bytes.fromhex("1a2b0300280001002b001c0005010402619b000002400100"
+                            "4a06598d7440598d00000000ad6f6407")
+    EVENT_7 = bytes.fromhex("1a2b040110000000070000008b000000")
+    ECHO_1 = bytes.fromhex("1a2b03000900010001")
+
+    hr = parse_header(RESP_43)
+    chk("黄金样本：应答 40 B / length=40", len(RESP_43) == 40 and hr["length"] == 40)
+    chk("黄金样本：来自模组、type=CMD", hr["from_module"] and hr["type_name"] == "CMD")
+    i = ctrl_info(hr, RESP_43[8:])
+    chk("黄金样本：cmd_id=43 / status=0 / data=28 B",
+        i["id"] == 43 and i["status"] == 0 and len(i["data"]) == 28,
+        "id=%s status=%s data=%d" % (i["id"], i["status"], len(i["data"])))
+    fi = fw_info_decode(i["data"])
+    chk("黄金样本：fw_info version = 2.4.1.5", bool(fi) and fi["app"] == "2.4.1.5",
+        fi["app"] if fi else "None")
+    chk("黄金样本：svn = 39777", bool(fi) and fi["svn"] == 39777)
+    chk("黄金样本：mac = 4a:06:59:8d:74:40", bool(fi) and fi["mac"] == "4a:06:59:8d:74:40",
+        fi["mac"] if fi else "None")
+    chk("黄金样本：smt_dat = 124022701", bool(fi) and fi["smt_dat"] == 124022701)
+    ev = ctrl_info(parse_header(EVENT_7), EVENT_7[8:])
+    chk("黄金样本：事件 7 = TX_BITRATE，值 139",
+        ev["id"] == 7 and ev["name"] == "TX_BITRATE"
+        and struct.unpack_from("<I", ev["data"], 0)[0] == 139)
+    e1 = ctrl_info(parse_header(ECHO_1), ECHO_1[8:])
+    chk("黄金样本：短应答只有 cmd_id（status=None，不编造）",
+        e1["id"] == 1 and e1["status"] is None)
+    rq = ctrl_info(parse_header(REQ_43), REQ_43[8:])
+    chk("黄金样本：请求 kind=req / id=43", rq["kind"] == "req" and rq["id"] == 43)
 
     print("=> 自测 %s" % ("全部通过 ✓" if ok else "有失败 ✗"))
     return 0 if ok else 1

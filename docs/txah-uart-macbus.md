@@ -425,6 +425,48 @@ python tools\probe_txah_uart.py --ch347-com 0 send-eth --frame-type frm --with-f
 ⇒ 与上面的推断一致：**RAW 下主机口是纯数据管，命令不会被分发**。要命令/事件通道就得换
 `WIFIMGR_FRM_TYPE_HGIC`（见上）。
 
+## 5.4 ★★ 2026-09-16 打通：HGIC 生效后「命令 + 事件 + 回程」全部验证
+
+换成 `WIFIMGR_FRM_TYPE_HGIC` 后**当场就通了**（同一套线、同一个 CH347F、同一版调试固件）：
+
+| 观测 | 内容 |
+|---|---|
+| 启动 | `[mbus cfg] frm_type=1 (0=ETHER 1=HGIC 2=RAW) bus=4` + `[mbus rx] debug build: UART0 rx dump on` |
+| `send-cmd 43`（GET_FW_INFO） | **回读 40 字节**；AT 口同时出现 `wifimgr host cmd:43, ifidx=0`、`use UUID for MAC`、`[mbus tx] 40 byte(s) …`、`resp cmd, ret:28` |
+| 模组→主机 **周期性事件** | `type=EVENT flags=1 len=16`，载荷 = `07 00 00 00 8b 00 00 00`，约每 5 s 一条 —— `hgic.h` 里 **`HGIC_EVENT_TX_BITRATE = 7`**，值 u32 ≈ 130~139 |
+| `send-cmd 1` / `send-cmd 20` | 只回**一个 `cmd_id`**（9 B，无 status/len）⇒ 这两个 id 当前没有数据应答（**如实说明，不当成错误**） |
+
+**由此确定的协议事实**（已写进 `tools/txah_hgic.py`，并用真机字节做黄金样本自测）：
+
+1. `struct hgic_ctrl_hdr` = 8 B 帧头 + **4 B union** = **12 B**（`HGIC_CTRL_HDR_LEN`）；
+   模组端取参数是 `data = (uint8 *)(ctrl + 1)` ⇒ **参数/数据都从帧内偏移 12 开始**。
+   ⚠ 所以 `cmd_frame()` 现在**补满 4 B union**（原来 1 字节 `cmd_id` 就完了，**带参命令的参数会落错位置**）——
+   `send-cmd 43` 现在发的是 `2b 1a 03 00 0c 00 01 00 2b 00 00 00`（12 B 头），**待实测确认仍能回**。
+2. **CMD 应答载荷** = `cmd_id(1) | status(1) | len(2, LE) | data(len)`
+   （实测 40 = 8 + 1 + 1 + 2 + **28**，与模组日志 `resp cmd, ret:28` 一致；
+   另与 `uart_bus_proc_cmd` 里 "`ret = 2` = 数据长度" 的约定吻合）。
+3. 43 返回的 28 B 就是 `struct hgic_fw_info`：
+
+   | 字段 | 实测 | 交叉验证 |
+   |---|---|---|
+   | `version` | `05 01 04 02` → **2.4.1.5** | 与启动横幅 `hgSDK-v2.4.1.5-39777` 一致 |
+   | `svn_version` | **39777** | 固件名 `…-39777` |
+   | `chip_id` / `cpuid` | `0x4002` / `0x0001` | — |
+   | `mac[6]` | **4a:06:59:8d:74:40** | 启动日志 `lmac_cfg_set_mac:4a:06:59:8d:74:40` |
+   | `smt_dat` | **124022701** | 启动日志 `SMT_DAT: 124022701` |
+
+**工具升级**（同一提交）：`txah_hgic.py` 加 `CMD_NAMES`/`EVENT_NAMES`、`ctrl_info()`（请求/应答/事件三分）、
+`fw_info_decode()`、`describe()` 输出人类可读；`probe_txah_uart.py listen` 会把**连续重复的同一条事件合并**
+并给「按类型统计」。自测 `python tools\txah_hgic.py selftest` 现 24 项（含上表全部黄金样本）。
+
+**仍未定**（下一步）：
+
+- **数据面**：`send-eth` 两种写法（裸载荷 / 完整以太帧）都**没有回读** —— 这在"没有对端"时是正常的。
+  要判"有没有真发到空口"：看 AT 口 `IEEE80211 Status` 里的 `VIF3 … TX_DATA:`，或读 `AT+TX_PKTS` / `AT+TX_FAIL`。
+- **模组当前是 AP 模式（`VIF3 Type:2 running, WPA_COMPLETED, chan:1`）+ 没有关联的 STA**；
+  b 步要真跑起来得把模组配成 **STA 连到 HaLow AP**（对端是谁：T-Halow-RJ45 板 / ORPAH Router / 第二块模块 —— **待与用户确认**）。
+- RAW 模式的载荷约定（"固件封以太头"到底封成什么）**不再需要查**：已改用 HGIC。
+
 ## 六、未做（如实）
 
 - **固件已烧、已由启动打印确认**（`hgSDK-v2.4.1.5-39777 … build time:Sep 16 2026 …` + `[44]uart bus fixlen=0`）；

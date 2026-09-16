@@ -172,12 +172,29 @@ def open_transport(args):
 
 # ------------------------------------------------------------------- 子命令
 def do_listen(t, args):
-    parser = StreamParser()
+    parser = StreamParser(expect_from_module=True if args.only_rx else None)
     t.flush()
     print("监听 %s（%s，%.1f 秒）…" % (t.name(), "只看模组→主机" if args.only_rx else "两个方向都认",
                                    args.secs))
     end = time.time() + args.secs
     nframe, nbytes = 0, 0
+    pend = None                 # [连续重复次数, hdr, payload]
+    tally = {}
+
+    def flush():
+        """把「连续同一条」合并成一行再打 —— 模组会周期性刷同一种事件（实测 TX_BITRATE）。"""
+        if not pend:
+            return
+        cnt, hdr, payload = pend
+        print("#%-3d %s" % (nframe - cnt + 1, describe(hdr, payload, full_payload=args.full)))
+        if cnt > 1:
+            print("     ↑ 同一条连续重复 %d 次（合并显示）" % cnt)
+        info = ctrl_info(hdr, payload)
+        key = ((hdr["type_name"], info["id"], info["name"]) if info
+               else (hdr["type_name"], None, None))
+        tally[key] = tally.get(key, 0) + cnt
+        pend.clear()
+
     while time.time() < end:
         chunk = t.read()
         if not chunk:
@@ -188,10 +205,19 @@ def do_listen(t, args):
             print("  原始 %s" % chunk.hex(" "))
         for hdr, payload in parser.feed(chunk):
             nframe += 1
-            print("#%-3d %s" % (nframe, describe(hdr, payload, full_payload=args.full)))
+            if pend and pend[1]["type"] == hdr["type"] and pend[2] == payload:
+                pend[0] += 1
+                continue
+            flush()
+            pend = [1, hdr, payload]
+    flush()
     print("-" * 70)
     print("读到 %d 字节 / 认出 %d 帧；杂字节 %d，长度非法跳过的 %d"
           % (nbytes, nframe, parser.garbage, parser.bad_length))
+    if tally:
+        print("按类型统计：")
+        for (tn, cid, nm), cnt in sorted(tally.items(), key=lambda kv: -kv[1]):
+            print("   %-8s id=%-4s %-16s x%d" % (tn, cid if cid is not None else "-", nm or "-", cnt))
     if nbytes == 0:
         print("=> 一个字节都没有：先确认①烧的是 MACBUS_UART 版固件 ②跳线在 A10/A11（通信）"
               "③共地 ④波特率 115200")
@@ -199,8 +225,8 @@ def do_listen(t, args):
         print("=> 有字节但没认出帧：把上面的原始字节（`--dump-raw`）贴出来看 magic/长度；"
               "也可能是定长（fixlen）模式")
     else:
-        print("=> 认出了合法 HGIC 帧 ✓（下一步：数据帧载荷是裸数据还是带以太头，"
-              "用 send-eth/send-cmd 各试一次）")
+        print("=> 认出了合法 HGIC 帧 ✓（数据帧载荷约定：`send-eth` 的 `--frame-type`/"
+              "`--no-ethernet` 两种都试）")
     return 0 if nframe else 2
 
 
