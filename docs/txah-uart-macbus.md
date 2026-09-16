@@ -635,10 +635,41 @@ python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 --frame-type frm --wi
 
 - 对照组（同一时刻）：**上行 STA→AP 照旧逐字节到达** ⇒ 链路、关联、二层桥都没问题，
   **问题只在“AP 模组的主机口 → 空口”这一段**（反方向 air→host 是好的）。
+- **AP 侧直观测到的（用户提供 AT 日志截图）**：
+  - **有** `[mbus rx] 33 byte(s) 2b 1a 09 00 21 00 b1 00 68 6e 6b 00 00 00 4a 06 …`
+    ⇒ 我们灌进去的帧**确实进了 AP 的主机口**（灌流 300 帧、每秒一条都在）；
+  - 紧跟一条 **`cookie err: last:167, new:177`** —— 灌流用的是**固定 cookie**（`0xB1`），而模块
+    对 cookie 有顺序检查（`hgic.h`：`HGIC_TX_COOKIE_MASK 0x7FFF`、`HGIC_TX_WINDOW 20`）；
+    **改成逐帧 +1（201…237）再试，仍然 0 字节** ⇒ cookie 不是唯一原因（但**我们的工具确实该逐帧递增**）；
+  - LMAC：`tx : cnt` 在 300 帧灌流期间**只从 9 涨到 15**、`fail=0 drop=0`；
+    `STA2: 68:6e:6b:00:00:00` 的 `tx2: data=0KB(0kbps)`、`rx2: data=3KB` ⇒ **AP 几乎没往 STA 发数据**。
+- ⇒ 结论（当前最好解释）：**AP 模式下“主机口 → 空口”的转发没有发生**（帧进了主机口、但没上空中），
+  与帧格式/地址/cookie 都无关；需要厂商确认 AP 模式主机口数据路径的前置条件。
 - 关联证据（`struct hgic_sta_info`，12 B）：`GET_STA_LIST(53)` 回
   `02 00 | 68 6e 6b 00 00 00 | 09 | df | 3a | 5e` ⇒ **AID=2**、`rssi=9`、`evm=-33`、`tx_snr=58`、`rx_snr=94`。
-- 下一步（二选一或并用）：① 灌流时读 **AP 的 `LMAC STATUS`**（`tx cnt` 涨不涨）来判定“到底发没发”；
-  ② 问原厂 FAE —— fmac 主机口在 AP 模式下要什么条件才把主机帧转到 STA（文档只讲了架构）。
+- 下一步（二选一或并用）：① 试 `SET_ETHER_TYPE(56)` 登记 `0x88B5`（AP/STA 都试）；② 问原厂 FAE —— 问题单要素：
+  两块 v2.4.1.5-39777 + MACBUS_UART + HGIC 一对一；**上行（STA 主机口→AP 主机口）逐字节到达**；
+  **下行（AP 主机口→STA 主机口）0 字节**，已排除 dst(广播/接口 MAC/efuse MAC)、src、ethertype(88b5/0800)、
+  帧头(FRM2 / FRM+24B)、`hdr.ifidx` 0..7、`DEV_OPEN`、cookie 固定/递增；
+  AP 侧只见 `[mbus rx] …` 与 `cookie err`，`tx cnt` 几乎不涨 ⇒ **AP 模式下主机口注入的帧要不要特殊模式
+  （`wnbap`/`apsta`）/命令（`SET_ETHER_TYPE`/`SET_WBNAT`）才转发给 STA？**
+
+**2026-09-16 追加查证：「为什么 AP 侧不桥接」**
+
+- `SET_ETHER_TYPE(56)` 四种写法（LE/BE、带不带 ifidx 前缀）后**下行仍然 0 字节**；
+- `sys_config.h`：`WIFI_WNBAP_SUPPORT 0 //支持私有协议的AP`、`WIFI_WNBSTA_SUPPORT 0`
+  ⇒ AT 表里的 `wnbap/wnbsta` 是**泰芯私有协议**的 AP/STA，**不是** L2 桥模式，而且本构建**没编进去**
+  （发 `AT+WIFIMODE=wnbap` 只会得到 “is not supported!”）；
+- `project/Lst/txw4002a.map`：`Removing .text(Obj/netif_bridgeif.o), (0 bytes)` ⇒
+  **模组内部 lwIP 的 L2 桥（bridgeif）也没编进来**；
+- 反面证据：`T-Halow-RJ45/docs/ethernet_bridge_linux.md` 明确写着
+  **“The WNB firmware the boards ship with bridges the RJ45 jack ↔ HaLow transparently at layer 2”**
+  （固件 `hgSDK-v1.6.4.3 (TAIXIN-WNB)`；该仓库里就有
+  `firmware/huge-ic-ah_v1.6.4.3-38054_2025.12.12_.bin`）
+  ⇒ **“以太网 ↔ HaLow 二层透传”是那条 WNB 产品线的能力**。
+- ⇒ 结论：我们这套**通用 FMAC v2.4.1.5 只保证「客户端（STA）方向」主机↔空口**（已实测）；
+  **AP 侧“主机口 → 空口”要厂商确认**，或者 **b 步的路由器侧直接换成 T-Halow-RJ45 那类带 WNB 固件的板子**
+  —— 那也正是 ORPAH 部署里的真实形态（路由器侧 = 以太网口 ↔ HaLow 的桥）。
 
 **已确认（2026-09-16）/ 两个可疑点**：
 
