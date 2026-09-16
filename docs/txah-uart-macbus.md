@@ -550,17 +550,19 @@ python tools\probe_txah_uart.py --ch347-com 0 send-eth --frame-type frm --with-f
 
 ```
 AT+BSS_BW=8                        # 8M 带宽
-AT+CHAN_LIST=908,916,924           # 频率(MHz)，**不是 9080/9160/9240**；或 AT+CHANNEL=1
+AT+CHAN_LIST=9080,9160,9240        # 中心频点×10（9080 = 908 MHz）—— 见下
 AT+SSID=ORPAH_AH_TEST
 AT+ENCRYPT=0                       # 先用不加密，最简
 ```
 
-⚠ 两条来自源码的坑（2026-09-16 核对 `sdk/lib/common/atcmd.c`）：
-- `AT+CHAN_LIST` 的参数是 `os_atoi` 的**频率数值（MHz）**（`chan_list[i] = os_atoi(argv[i])`）——
-  本文档早先写的 `9080/9160/9240` **是错的**；模块读回的是 `+CHANNEL:<列表下标>` 与
-  LMAC 的 `chn: 908.0 916.0 924.0`（MHz）。
-- `AT+CHAN_LIST` 会**强制把当前信道设成列表第 1 个**（`ieee80211_conf_set_channel(ifidx, 1)`）
-  ⇒ 两块想同信道就**两边设同一个列表**，或干脆都用 `AT+CHANNEL=<下标>` 明确指定。
+⚠ 三条（2026-09-16 核对《泰芯AH-SDK_V2.x AT指令使用说明》§3.1.6 + `sdk/lib/common/atcmd.c`）：
+- `AT+CHAN_LIST` 的参数是**中心频点 ×10**（手册原话：“指定的频点值为中心频点\*10，例如 9080 表示
+  908MHz”）⇒ **`9080,9160,9240` 是对的**（曾一度被我误改成 `908,916,924`，已回滚）。
+  模块读回的是 LMAC 里的 `chn: 908.0 916.0 924.0`（**显示**单位 MHz）与 `+CHANNEL:<列表下标>`。
+- 手册明确要求：**AP 与 STA 的 `chan_list` 必须完全一样（连频点顺序也要一样），否则会连接出错** ——
+  这条正好对应我们碰到的“连上又掉”。
+- `AT+CHAN_LIST` 会**把当前信道强制设回列表第 1 个**（源码 `ieee80211_conf_set_channel(ifidx, 1)`）
+  ⇒ 两块想同信道就两边设同一个列表，或都用 `AT+CHANNEL=<下标>` 明确指定（下标从 1 起，`+CHANNEL:3` = 第 3 个）。
 
 再分别设角色（**这一步是两块唯一不同的地方**）：
 
@@ -599,15 +601,39 @@ python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 --frame-type frm --wi
 哪一组能“原样到达”，哪一组就是 b 步数据面的约定；**若对端收到的载荷外面多包了一层**，
 `xfer` 会把它原样打出来（那层就是要认的封装）。两块的 AT 口同时应看到 `[mbus tx] …`（B 块往主机口写）。
 
+**✅ 2026-09-16 实测结论：第 ② 组（`FRM2` + 完整以太帧）通了（上行）**
+
+| 方向 | 结果 | 实测字节 |
+|---|---|---|
+| **STA → AP（上行）**, dst=广播 | ✅ **逐字节原样到达** | `ff ff ff ff ff ff`   `68 6e 6b 00 00 00`(src=STA)   `88 b5`   `48 45 4c 4c 4f 2d 4f 52 50 41 48`(=`HELLO-ORPAH`) |
+| 同上，dst=**对端 MAC** | ✅ 也通 | `4a 06 59 8d 74 40`   `68 6e 6b 00 00 00`   `88 b5`   … |
+| AP → STA（下行） | ❌ 未到对端主机口（广播/单播都试了） | — |
+
+⇒ **b 步数据面的约定 = `FRM2`(8B HGIC 头) + 完整以太帧（14B 以太头）**；
+**裸载荷写法不通**（裸 `HELLO-ORPAH` 两端都没到）——模组是**二层桥**，靠以太头里的目的地址决定发到哪儿。
+另：`SET_MAC` 等命令可直接从主机口用 HGIC 发（见 §7.5），`GET_STA_LIST(53)` 可读 AP 的关联表。
+
 ### 7.5 待实测 / 未做
 
-- 上述四组约定的真机结果（本轮没做）；模组 B 的 MAC 是否与 A 不同（启动日志 `use UUID for MAC`，
-  预期不同，待确认）；是否需要 `AT+PAIR`；加密（`AT+ENCRYPT=1 + AT+KEY`）下的行为。
+- **上行（STA → AP）已通**（② 组：`FRM2` + 完整以太帧，见 §7.4 表）；**下行（AP → STA）还没通** —— 待查
+  （候选：AP 侧桥的 ethertype 过滤 `HGIC_CMD_SET_ETHER_TYPE(56)`、或 AP 模式下的转发开关）。
+- 仍未做：加密（`AT+ENCRYPT=1 + AT+KEY`）下的行为；是否*需要* `AT+PAIR`（本链路靠 SSID 就连上了，
+  未用配对）；长时间稳定性 / 速率 / 丢包。
 - 一切以实测为准：**没跑过的都不写“已通”**。
 
 **已确认（2026-09-16）/ 两个可疑点**：
 
-- ✅ **两块 MAC 确实不同**：A `4a:06:59:8d:74:40`、B `69:6e:6b:00:00:00`。
+- ✅ **接口 MAC 是“能不能关联”的关键（本轮最大教训）**：STA 那块的**接口** MAC 原为
+  `69:6e:6b:00:00:00` —— 首字节 `0x69` 最低位 = 1 ⇒ **按 802 定义是组播地址**！
+  现象：AP 日志里 `lmac set GTK … addr=69:6e:6b:00:00:00` 紧接 6 ms 后 `del_STA`（连上又掉），
+  两侧 `sta_list: no sta` / `AID= 0`。
+  修法：用 HGIC **`SET_MAC(3)`**（载荷 = **6 字节 MAC**）改成 `68:6e:6b:00:00:00`（清掉组播位）
+  ⇒ 修完**立刻**收到 `EVENT 12(CONECTED)`（data = AP 的 MAC），AP 的 `GET_STA_LIST(53)` 里也出现了该 STA。
+  · 依据：`project/Lst/txw4002a.asm` 里 `wifi_mgr_proc_hgic_cmd` 引用 `wificfg_set_macaddr(uint8 *addr)`，
+    其实现 = `memcpy(sys_cfgs.mac)` + `ieee80211_conf_set_mac()` + **`wificfg_save(0)`（落盘）**。
+  · ⚠ **`GET_FW_INFO(43)` 里的 `mac` 是 efuse/出厂 MAC**（该板是 `82:59:13:64:70:90`），
+    **不是**当前接口 MAC —— 别拿那个字段判断“工作 MAC”（会看错）。
+- ✅ **两块 MAC 确实不同**：接口 MAC 分别为 `4a:06:59:8d:74:40`（AP）与 `68:6e:6b:00:00:00`（STA，改后）。
   ⚠ 但 **B 的 `0x69` 最低位 = 1 ⇒ 按 802 定义是组播地址**（合法单播应 LSB=0，A 的 `0x4a` 就是）；
   BSSID/源地址不应是组播 —— **若 A 关联不上 B，先怀疑它**（改成合法单播 MAC 再试）。
   注：A 那边日志里有 `use UUID for MAC`，B 的启动日志里没有。
