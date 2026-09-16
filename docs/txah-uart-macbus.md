@@ -230,7 +230,8 @@ AT/打印口 `A12/A13` = **0 Ω**（直达）—— 两条路的差别就只差�
 | 定帧（UART 特有） | `uart_bus.c`：收满 2 字节比对 magic；**第 5、6 字节 = 帧长**（16bit 小端，**整帧长度**）；`rxcount >= frm_len` 即一帧结束；另有 `fixlen` 定长模式（`HGIC_CMD_SET_UART_FIXLEN` / `sys_cfgs.uart_fixlen`） |
 | 数据帧 | `struct hgic_frm_hdr` = `hgic_hdr` + （rx_info / tx_info / 24B）→ 后面才是以太网帧 |
 | 命令/事件 | `HGIC_HDR_TYPE_CMD(3)` / `EVENT(4)` / `CMD2(13)` / `EVENT2(14)`（id > 255 走 CMD2/EVENT2）；`HDR_CMDID()` 宏取 id |
-| 模式 | `WIFIMGR_FRM_TYPE_RAW`（切 UART 时 `project_config.h` 里定的）= 固件负责以太网帧封装，主机侧就是**裸以太网帧** |
+| **cookie** | `hgic.h`：`HGIC_TX_COOKIE_MASK 0x7FFF`、`HGIC_TX_WINDOW 20`、`HGIC_BLOCK_ACK_CNT 256`。**主机→模组的帧要逐帧 +1** —— 模组对 cookie 做**顺序检查**，跳变就打印 `cookie err: last:<上次>, new:<本次>`（2026-09-16 真机实测：`last:167, new:177`）。实现：`tools/txah_hgic.py` 的 `CookieCounter`；`tools/probe_txah_uart.py` 每帧都用它（`--cookie` = 起始值，默认 1；`--cookie-fixed N` 钉死复现旧行为；`--count N` 连发 N 帧、cookie 连续） |
+| 模式 | **`WIFIMGR_FRM_TYPE_HGIC`**（2026-09-16 起；数据 + 命令 + 事件都走主机口）。历史口径：`RAW` = 纯数据管、**没有命令通道**（见 §5.3），已弃用 |
 | 波特率 | `UARTBUS_DEV_BAUDRATE 115200`（源码注释：范围 57600~400k） |
 
 ⚠ 本仓模拟器/`host_bus.py` 里那套 `AA 55 …` 是**模拟版**宿主协议（`halow-demo/simulator/docs/spi_protocol.md`
@@ -640,7 +641,10 @@ python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 --frame-type frm --wi
     ⇒ 我们灌进去的帧**确实进了 AP 的主机口**（灌流 300 帧、每秒一条都在）；
   - 紧跟一条 **`cookie err: last:167, new:177`** —— 灌流用的是**固定 cookie**（`0xB1`），而模块
     对 cookie 有顺序检查（`hgic.h`：`HGIC_TX_COOKIE_MASK 0x7FFF`、`HGIC_TX_WINDOW 20`）；
-    **改成逐帧 +1（201…237）再试，仍然 0 字节** ⇒ cookie 不是唯一原因（但**我们的工具确实该逐帧递增**）；
+    **改成逐帧 +1（201…237）再试，仍然 0 字节** ⇒ cookie 不是唯一原因；
+    ✅ **但我们的工具已按协议改成逐帧递增**（`txah_hgic.CookieCounter` + `probe_txah_uart.py`
+    的 `--cookie`（起始值）/`--cookie-fixed`（钉死复现）/`--count N`（连发、cookie 连续）），
+    这修的是**协议正确性**，与下行那个问题分开看（见 §四“协议要点”表的 cookie 行）；
   - LMAC：`tx : cnt` 在 300 帧灌流期间**只从 9 涨到 15**、`fail=0 drop=0`；
     `STA2: 68:6e:6b:00:00:00` 的 `tx2: data=0KB(0kbps)`、`rx2: data=3KB` ⇒ **AP 几乎没往 STA 发数据**。
 - ⇒ 结论（当前最好解释）：**AP 模式下“主机口 → 空口”的转发没有发生**（帧进了主机口、但没上空中），

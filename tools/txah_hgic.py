@@ -92,6 +92,25 @@ CMD_SET_UART_FIXLEN = 108
 CMD_GET_UART_FIXLEN = 109
 
 
+HGIC_TX_COOKIE_MASK = 0x7FFF          # hgic.h: HGIC_TX_COOKIE_MASK（cookie 的位数）
+
+
+class CookieCounter:
+    """HGIC 主机→模组帧的 cookie 计数器：**逐帧 +1**（回绕到 `HGIC_TX_COOKIE_MASK`）。
+
+    为什么必须有：模组对 cookie 做**顺序检查**，2026-09-16 真机日志里出现过
+    `cookie err: last:167, new:177` —— 原因是我们以前每帧都用同一个 cookie（甚至跨脚本乱跳）。
+    本类是那个约定的单一实现；`tools/probe_txah_uart.py` 的每帧发送都用它。
+    """
+
+    def __init__(self, start=1):
+        self._n = (int(start) - 1) & HGIC_TX_COOKIE_MASK
+
+    def next(self):
+        self._n = (self._n + 1) & HGIC_TX_COOKIE_MASK
+        return self._n
+
+
 def build(magic, type_, payload=b"", cookie=0, ifidx=0, flags=0, length=None):
     """组一帧。`length` 默认 = 8 + len(payload)（UART 上的规则就是整帧长度）。"""
     body = bytes(payload)

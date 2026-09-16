@@ -38,8 +38,8 @@ import subprocess
 import sys
 import time
 
-from txah_hgic import (CMD_GET_UART_FIXLEN, MAX_FRAME, StreamParser, cmd_frame, data_frame,
-                       describe, selftest as hgic_selftest)
+from txah_hgic import (CMD_GET_UART_FIXLEN, MAX_FRAME, CookieCounter, StreamParser, cmd_frame,
+                       data_frame, describe, selftest as hgic_selftest)
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -230,17 +230,43 @@ def do_listen(t, args):
     return 0 if nframe else 2
 
 
+def _next_cookie(args):
+    """取本帧该用的 cookie：**默认逐帧 +1**（模组对 cookie 有顺序检查，见 txah_hgic.CookieCounter）。
+
+    `--cookie` 是起始值（默认 1）；`--cookie-fixed N` 可钉死同一个值（复现旧行为 / 对照实验用）。
+    """
+    fixed = getattr(args, "cookie_fixed", None)
+    if fixed is not None:
+        return fixed
+    c = getattr(args, "_cookie_counter", None)
+    if c is None:
+        c = CookieCounter(getattr(args, "cookie", 1) or 1)
+        args._cookie_counter = c
+    return c.next()
+
+
 def do_send_eth(t, args):
     payload = bytes.fromhex("".join(args.hex))
     if args.ethernet and len(payload) < 14:
         print("[!] 说是完整以太帧但只有 %d 字节（< 14 的以太头）" % len(payload))
-    f = data_frame(payload, cookie=args.cookie, with_frm_info=args.with_frm_info,
-                   lean=(args.frame_type == "frm2"))
-    print("发 %d 字节（类型 %s%s）：%s"
-          % (len(f), "FRM2 精简头" if args.frame_type == "frm2" else "FRM + 24B info",
-             "" if args.ethernet else "，载荷按裸数据处理", f.hex(" ")))
-    t.write(f)
-    time.sleep(getattr(args, "wait", 1.0))
+    n = max(1, getattr(args, "count", 1) or 1)
+    first = None
+    for i in range(n):
+        ck = _next_cookie(args)
+        if first is None:
+            first = ck
+        f = data_frame(payload, cookie=ck, with_frm_info=args.with_frm_info,
+                       lean=(args.frame_type == "frm2"))
+        if i == 0:
+            print("发 %d 字节（类型 %s%s；cookie 从 %d 起、每帧 +1%s）：%s"
+                  % (len(f), "FRM2 精简头" if args.frame_type == "frm2" else "FRM + 24B info",
+                     "" if args.ethernet else "，载荷按裸数据处理", ck,
+                     "，共 %d 帧" % n if n > 1 else "", f.hex(" ")))
+        t.write(f)
+        time.sleep(0.05 if n > 1 else getattr(args, "wait", 1.0))
+    if n > 1:
+        print("  已发 %d 帧（cookie %d..%d）；模组不应再报 `cookie err`" % (n, first, ck))
+        time.sleep(getattr(args, "wait", 1.0))
     back = t.read()
     if back:
         print("回读 %s" % back.hex(" "))
@@ -254,7 +280,7 @@ def do_send_eth(t, args):
 
 def do_send_cmd(t, args):
     payload = bytes.fromhex("".join(args.hex)) if args.hex else b""
-    f = cmd_frame(args.cmd_id, payload, cookie=args.cookie)
+    f = cmd_frame(args.cmd_id, payload, cookie=_next_cookie(args))
     print("发命令帧（id=%d）：%s" % (args.cmd_id, f.hex(" ")))
     t.write(f)
     time.sleep(getattr(args, "wait", 1.0))
@@ -328,7 +354,7 @@ def do_probe(t, args):
 
     print("② 主动探测：发 `GET_UART_FIXLEN`(id=%d) 命令帧 —— 只读，不改模组配置。" % CMD_GET_UART_FIXLEN)
     print("   （id 108 是 SET_UART_FIXLEN，会写 flash，**别拿它当探针**）")
-    f = cmd_frame(CMD_GET_UART_FIXLEN, cookie=0x1234)
+    f = cmd_frame(CMD_GET_UART_FIXLEN, cookie=_next_cookie(args))
     print("   发 %s" % f.hex(" "))
     t.flush()
     t.write(f)
@@ -393,7 +419,7 @@ def do_xfer(t, args):
         raise SystemExit("载荷为空：给十六进制（位置参数）或 `--text 字符串`")
     if args.ethernet and len(payload) < 14:
         print("[!] 说是完整以太帧但只有 %d 字节（< 14 的以太头）" % len(payload))
-    f = data_frame(payload, cookie=args.cookie, with_frm_info=args.with_frm_info,
+    f = data_frame(payload, cookie=_next_cookie(args), with_frm_info=args.with_frm_info,
                    lean=(args.frame_type == "frm2"))
     desc = "%s%s" % ("FRM2 精简头" if args.frame_type == "frm2" else "FRM + 24B info",
                       "，完整以太帧" if args.ethernet else "，裸载荷")
@@ -499,13 +525,21 @@ def main():
     p.add_argument("--with-frm-info", action="store_true", help="FRM 时是否补 24B info")
     p.add_argument("--no-ethernet", dest="ethernet", action="store_false",
                    help="载荷是裸数据（不带以太头）")
-    p.add_argument("--cookie", type=lambda s: int(s, 0), default=1)
+    p.add_argument("--cookie", type=lambda s: int(s, 0), default=1,
+                   help="起始 cookie（默认 1）；每帧自动 +1（模组对 cookie 有顺序检查）")
+    p.add_argument("--cookie-fixed", type=lambda s: int(s, 0),
+                   help="钉死 cookie（每帧同值；复现旧行为/对照用）")
+    p.add_argument("--count", type=int, default=1,
+                   help="连发几帧（默认 1；>1 时 cookie 逐帧 +1，间隔 50 ms）")
     p.set_defaults(func=do_send_eth)
 
     p = sub.add_parser("send-cmd", help="发命令帧", parents=[common])
     p.add_argument("cmd_id", type=int, help="如 %d = GET_UART_FIXLEN" % CMD_GET_UART_FIXLEN)
     p.add_argument("hex", nargs="*")
-    p.add_argument("--cookie", type=lambda s: int(s, 0), default=1)
+    p.add_argument("--cookie", type=lambda s: int(s, 0), default=1,
+                   help="起始 cookie（默认 1）；每帧自动 +1")
+    p.add_argument("--cookie-fixed", type=lambda s: int(s, 0),
+                   help="钉死 cookie（每帧同值）")
     p.set_defaults(func=do_send_cmd)
 
     p = sub.add_parser("raw", help="原样发字节（调试）", parents=[common])
@@ -524,7 +558,10 @@ def main():
     p.add_argument("--with-frm-info", action="store_true", help="FRM 时是否补 24B info")
     p.add_argument("--no-ethernet", dest="ethernet", action="store_false",
                    help="载荷是裸数据（默认按完整以太帧看）")
-    p.add_argument("--cookie", type=lambda s: int(s, 0), default=1)
+    p.add_argument("--cookie", type=lambda s: int(s, 0), default=1,
+                   help="起始 cookie（默认 1）；每帧自动 +1（模组对 cookie 有顺序检查）")
+    p.add_argument("--cookie-fixed", type=lambda s: int(s, 0),
+                   help="钉死 cookie（每帧同值；复现旧行为/对照用）")
     p.add_argument("--secs", type=float, default=8.0, help="发完在 RX 口等多久（默认 8 s）")
     p.add_argument("--dry-run", action="store_true", help="只组帧并打印，不开串口")
     p.set_defaults(func=do_xfer)
