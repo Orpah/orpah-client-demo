@@ -335,6 +335,53 @@ $env:SHELL='F:\C-Sky\CDK\CSKY\MinGW\msys\1.0\bin\sh.exe'; $env:MAKESHELL=$env:SH
 | `wifimgr host cmd:%d, ifidx=%d` | `libs/libwifi.a` | **主机命令真正进到 `wifi_mgr` 分发器时会打印这行**。所以发帧后先看 AT 口：**有** ⇒ 命令到了分发层（问题在"回写主机口"）；**没有** ⇒ 根本没进分发层（在 bus → wifi_mgr 那段就丢了） |
 | `WiFi_Mgr: open:%d, nif:%d, host_alive:%d`（`wifi_mgr_status()`） | `libs/libwifi.a` | 分发/回写可能受 `open` / `host_alive` 约束 ⇒ 主机侧通常要先发 **`HGIC_CMD_DEV_OPEN`（`hgic.h` 命令表第 1 条，id=1）**。已列入下一轮要试的命令：`send-cmd 1`（DEV_OPEN）/ `send-cmd 43`（`GET_FW_INFO`）/ `send-cmd 20`（`GET_STATUS`） |
 
+⚠ **2026-09-16 实测：上述三条命令（1 / 43 / 20）都到了 `UART0`（三条 `[mbus rx]` 都在），
+但 AT 口没有出现 `wifimgr host cmd:…`，也没有任何 `[mbus tx]`** ⇒ 命令没被分发，模组也没回写。
+根因线索见 §5.3。
+
+### 5.3 ★ `WIFIMGR_FRM_TYPE`：最可能的根因（RAW 模式没有命令通道）
+
+厂商文档《TXSDK_主控交互指南》§2（`TX_AH_SDK_2.4\doc\TXSDK_主控交互指南.pdf`）把主机口的帧类型
+分三档：
+
+| `wifimgr_frm_type` | 主机↔模组之间传什么 | 命令 / 事件 | 谁控制以太头/ethertype |
+|---|---|---|---|
+| `WIFIMGR_FRM_TYPE_ETHER = 0` | 完整以太帧 | ✗ | **我们**（可以就是 `0x88B5`） |
+| `WIFIMGR_FRM_TYPE_HGIC` | 帧 + 24 B `hgic_frm_info` + 载荷 | **✓（数据+命令+事件三合一）** | 我们 |
+| `WIFIMGR_FRM_TYPE_RAW` | 裸数据，**由固件完成以太网帧格式封装** | ✗ | 固件（我们看不见） |
+
+而 `project_config.h` 里我们这一版**显式选了 `WIFIMGR_FRM_TYPE_RAW`**（注释原文：
+"串口默认用RAW数据类型，**如果需要用Nonos驱动接口，注释掉这个宏**"）；
+`project/sys_config.h` 的回落默认值恰恰是 **`WIFIMGR_FRM_TYPE_HGIC`**：
+
+```c
+#ifndef WIFIMGR_FRM_TYPE
+#define WIFIMGR_FRM_TYPE WIFIMGR_FRM_TYPE_HGIC
+#endif
+```
+
+⇒ **推断（待实测确认）**：RAW 是"纯数据管"，**主机侧的命令/事件通道在 RAW 下不存在** ——
+这正好解释了实测到的全部现象：帧完好到达、`wifimgr host cmd:` 不打印、模组一个字节都不回写。
+也就是说，**这不是坏了，是模式选错了**（至少对"我们要在主机侧驱动模组"这件事而言）。
+
+**不重编的判定法**（`sys_status.dbg_umac` 由 `AT+SYSDBG=UMAC,1` 打开；那行 `wifimgr host cmd:` 很可能
+受它控制）：
+
+```
+AT+SYSDBG=UMAC,1
+python tools\probe_txah_uart.py --ch347-com 0 send-cmd 43
+```
+
+- AT 口**出现** `wifimgr host cmd:43, ifidx=0` ⇒ 命令其实进了分发器（RAW 也会分发）⇒ 根因不在这里；
+- **还是不出现** ⇒ RAW 下根本不分发命令 ⇒ 需要换 `frm_type`。
+
+**要换的话**（单变量）：把 `project_config.h` 里那行 `#define WIFIMGR_FRM_TYPE WIFIMGR_FRM_TYPE_RAW`
+**注释掉**（回落到 `sys_config.h` 的 HGIC），重编烧录后 `send-cmd 43` 应当有回应。
+⚠ 这一步**同时决定 b 步的数据格式**（上表第 4 列），属于接口决策，**先与用户对齐再改**。
+
+**不重编的旁证**（验 RAW 下数据上行到底通不通）：数据口发一条数据帧，再看 AT 口的计数 ——
+`AT+TX_PKTS` / `AT+TX_FAIL`（还有 `RX_PKTS`）；计数涨了说明"数据其实发出去了，只是没有命令通道"。
+
 ## 六、未做（如实）
 
 - **固件已烧、已由启动打印确认**（`hgSDK-v2.4.1.5-39777 … build time:Sep 16 2026 …` + `[44]uart bus fixlen=0`）；
