@@ -46,10 +46,22 @@ BAUD = 115200
 
 # --------------------------------------------------------------------- 传输
 class SerialTransport:
-    """普通 USB-UART（pyserial）。"""
+    """普通 USB-UART / CH347F 的 VCP COM 口（pyserial）。
+
+    ⚠ CH347F 在本机是 **VCP 模式**，它的两路 UART 就是普通串口
+    （`USB-HiSpeed-SERIAL-A/B CH347F`，`MI_00`=UART0、`MI_02`=UART1）——
+    走这里通常比走 WCH DLL 更省事。
+    """
 
     def __init__(self, port, baud=BAUD):
-        import serial                                    # 延迟导入，没装也能跑 selftest
+        try:
+            import serial                                # 延迟导入，没装也能跑 selftest
+        except ImportError as exc:
+            raise SystemExit(
+                "没装 pyserial（当前解释器：%s）。两条路任选：\n"
+                "  ① 装：%s -m pip install pyserial\n"
+                "  ② 换有 pyserial 的解释器跑，例如 C:\\Python313\\python.exe tools\\probe_txah_uart.py ...\n"
+                "（原始错误：%s）" % (sys.executable, sys.executable, exc))
         self.ser = serial.Serial(port, baud, timeout=0.05)
 
     def read(self, maxn=4096):
@@ -83,10 +95,11 @@ class Ch347UartTransport:
         只能配 UART1（SPI + UART1 可共存，SPI + UART0 冲突）。
     """
 
-    def __init__(self, index=0, uart=0, baud=BAUD):
+    def __init__(self, index=0, uart=0, baud=BAUD, byte_timeout=None):
         from ch347_spi import Ch347
         self.dev = Ch347(index)
-        self.dev.uart_open(baud=baud, uart=uart)     # 不 open() 设备，见上面注释
+        kw = {} if byte_timeout is None else {"byte_timeout": byte_timeout}
+        self.dev.uart_open(baud=baud, uart=uart, **kw)   # 不 open() 设备，见上面注释
         self.uart = uart
         self.baud = baud
 
@@ -116,10 +129,12 @@ def open_transport(args):
     baud = getattr(args, "baud", BAUD)
     index = getattr(args, "index", 0)
     if ch347_uart is not None:
-        return Ch347UartTransport(index=index, uart=ch347_uart, baud=baud)
+        bt = getattr(args, "byte_timeout", None)
+        return Ch347UartTransport(index=index, uart=ch347_uart, baud=baud, byte_timeout=bt)
     if port:
         return SerialTransport(port, baud)
-    raise SystemExit("要么给 --port COMx（普通 USB-UART），要么给 --ch347-uart 0|1（CH347F-EVT）")
+    raise SystemExit("要么给 --port COMx（普通 USB-UART / CH347F 的 VCP COM 口），"
+                     "要么给 --ch347-uart 0|1（走 WCH DLL）")
 
 
 # ------------------------------------------------------------------- 子命令
@@ -292,6 +307,9 @@ def main():
     common.add_argument("--index", type=int, default=S, help="CH347F 设备序号（默认 0）")
     common.add_argument("--baud", type=int, default=S)
     common.add_argument("--wait", type=float, default=S, help="发完等回读的秒数（默认 1）")
+    common.add_argument("--byte-timeout", type=int, default=S,
+                        help="只给 --ch347-uart 用：CH347Uart_Init 的 ByteTimeout（单位 100us）。"
+                             "默认 0；若 DLL 那条路写得出读不回，可试 1/2/5")
 
     ap = argparse.ArgumentParser(description="TX-AH 模组数据口（mac_bus over UART）联调",
                                  parents=[common])

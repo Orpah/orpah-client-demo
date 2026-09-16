@@ -155,6 +155,13 @@ python tools\fmac_macbus_switch.py restore    # 还原
   python tools\probe_txah_uart.py --port COM23 loopback
   ```
   （COM 号会变，用 `Get-CimInstance Win32_PnPEntity` 里 `VID_1A86&PID_55DE&MI_00/MI_02` 认。）
+- ⚠ **解释器/依赖**（本机踩过）：默认 `python` 是 **3.14 且没装 pyserial**，而
+  `C:\Python313\python.exe` 有。`--port`（含 CH347F 的 VCP COM 口）**需要 pyserial**；
+  `--ch347-uart`（走 WCH DLL）不需要。两条路：
+  `python -m pip install pyserial`，或直接换解释器
+  （`C:\Python313\python.exe tools\probe_txah_uart.py ...`）。
+- ⚠ DLL 那条路的 `CH347Uart_Init` 里 `ByteTimeout`（单位 100 µs）我暂用 0；手册只写了单位、
+  没写 0 的含义，**若"写得出、读不回"**，可加 `--byte-timeout 1`（或 2/5）再试。
   ⚠ 实测（2026-09-16）：DLL 里 **`CH347OpenDevice(0)`（SPI 功能）与 UART0 冲突** ——
   先开 SPI 再 `CH347Uart_Init(0)` 会失败；**UART0+UART1 同时可用**、**SPI + UART1 也可用**。
   所以：只用 UART 时不要 `open()` 设备（脚本已这么做）；要同时跑 SPI 探测就用 UART1 看日志。
