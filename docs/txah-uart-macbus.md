@@ -690,6 +690,19 @@ python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 --frame-type frm --wi
   **不需要 PC 网卡** —— 用它自己的 AT 口（`tools/thalow_config.py`）发 `AT+TXDATA`（要带 14 B 以太头）
   当“下行帧源”，我们的 TX-AH（STA）主机口收到即验证 **客户端 air→host + 下行真到达**。
 
+**2026-09-16 追加：不用换板也能先验证「客户端 air→host」**
+
+- 我们的 AT 表（`project/atcmd.c`）里就有一整套**测试发送 / 接收计数**命令（两块模组都有）：
+  `AT+TX_DST_ADDR` / `AT+TX_LEN` / `AT+TX_TYPE` / `AT+TX_CONT` / `AT+TX_START` / `AT+TX_TRIG` / `AT+TX_PKTS`、
+  `AT+RX_PKTS` / `AT+RX_RSSI`、`AT+STA_INFO`、`AT+SYSCFG`（回读配置）、`AT+TEST_START`、`AT+TX_MCS` …
+  （每条都支持 `=?` 查询用法）
+- 用法：在 **AP 那块** 的 AT 口把 `AT+TX_DST_ADDR` 设成 STA 的接口 MAC、`AT+TX_LEN`/`AT+TX_TYPE=N` 设好，
+  再 `AT+TX_CONT=1` + `AT+TX_START=1` **连续发**（连续发是为了「PC 侧随时能听」，不用掐时间），
+  然后在 **STA 主机口**（`COM24`）听是否出现 `[mbus tx] … 1a 2b 09 …` ⇒ 直接验证 **air→host**；
+  同时 STA 的 `AT+RX_PKTS` 应增长（射频确实收到了）。
+- 若「`AT+RX_PKTS` 涨、主机口仍 0 字节」⇒ 断在 STA 的 umac/wifi_mgr 交付层；若两样都涨 ⇒ 客户端 air→host 成立，
+  b 步下行在客户端侧就是通的，剩下只需真实 AP（TH-RJ45）那一侧。
+
 **已确认（2026-09-16）/ 两个可疑点**：
 
 - ✅ **接口 MAC 是“能不能关联”的关键（本轮最大教训）**：STA 那块的**接口** MAC 原为
