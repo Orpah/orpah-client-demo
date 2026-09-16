@@ -379,6 +379,19 @@ python tools\probe_txah_uart.py --ch347-com 0 send-cmd 43
 **注释掉**（回落到 `sys_config.h` 的 HGIC），重编烧录后 `send-cmd 43` 应当有回应。
 ⚠ 这一步**同时决定 b 步的数据格式**（上表第 4 列），属于接口决策，**先与用户对齐再改**。
 
+**2026-09-16 已按用户选择执行（选 `HGIC`）**：
+
+| 改哪 | 怎么改 | 回退 |
+|---|---|---|
+| `project_config.h` | 注释掉 `#define WIFIMGR_FRM_TYPE WIFIMGR_FRM_TYPE_RAW`（行首加 `//`），回落到 `sys_config.h` 的 `WIFIMGR_FRM_TYPE_HGIC` | 备份在 `project_config.h.bak-raw`，`copy` 回去即可 |
+| `main.c` | `sys_wifi_init()` 里 `wifi_mgr_init(...)` 之前加一行**纯打印**（惰性，只为一眼确认烧的是哪档）：`[mbus cfg] frm_type=%d (0=ETHER 1=HGIC 2=RAW) bus=%d` | 删掉这一行 |
+
+- 重新编译：`APP.bin` = 366096 B（2026-09-16 15:56），bin 内含 `[mbus rx]` / `[mbus tx]` / `[mbus cfg]`
+  三个字符串（离线核对）。§5.2 的 RX/TX 调试打印**保留**（正好能看模组的回写）。
+- `WIFI_DHCPC_SUPPORT 0` **未动**（保持单变量）。
+- **上机判据（待做）**：① 启动看到 `[mbus cfg] frm_type=1`；② `send-cmd 43` 有回读；
+  ③ AT 口出现 `wifimgr host cmd:43, ifidx=0` 与 `[mbus tx] …`。
+
 **不重编的旁证**（验 RAW 下数据上行到底通不通）：数据口发一条数据帧，再看 AT 口的计数 ——
 `AT+TX_PKTS` / `AT+TX_FAIL`（还有 `RX_PKTS`）；计数涨了说明"数据其实发出去了，只是没有命令通道"。
 `send-eth` 的用法（`--frame-type frm2|frm`、`--with-frm-info`、`--no-ethernet`）：
