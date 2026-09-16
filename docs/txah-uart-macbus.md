@@ -381,6 +381,36 @@ python tools\probe_txah_uart.py --ch347-com 0 send-cmd 43
 
 **不重编的旁证**（验 RAW 下数据上行到底通不通）：数据口发一条数据帧，再看 AT 口的计数 ——
 `AT+TX_PKTS` / `AT+TX_FAIL`（还有 `RX_PKTS`）；计数涨了说明"数据其实发出去了，只是没有命令通道"。
+`send-eth` 的用法（`--frame-type frm2|frm`、`--with-frm-info`、`--no-ethernet`）：
+
+```powershell
+# 裸载荷（RAW 模式的正统写法：固件替你封以太头）
+python tools\probe_txah_uart.py --ch347-com 0 send-eth --no-ethernet --wait 3 01 02 03 04 05 06 07 08
+# 完整以太帧（广播 + 模组 MAC + ethertype 88b5）
+python tools\probe_txah_uart.py --ch347-com 0 send-eth --wait 3 ff ff ff ff ff ff 4a 06 59 8d 74 40 88 b5 01 02 03 04 05 06 07 08
+# 另一种头：FRM + 24B info
+python tools\probe_txah_uart.py --ch347-com 0 send-eth --frame-type frm --with-frm-info --no-ethernet --wait 3 01 02 03 04 05 06 07 08
+```
+
+**2026-09-16 实测证据（`AT+SYSDBG=UMAC,1` 打开状态打印后，发 `send-cmd 43`）**：
+
+```
+[950981][mbus rx] 9 byte(s) 2b 1a 03 00 09 00 01 00 2b
+[951047]    VIF3: Type:2, [4a:06:59:8d:74:40] running, WPA_COMPLETED, chan:1
+[951047]          TX_DATA:1, TX_BEACON:13, TX_FAIL:0          ← 按 ~1 秒窗口统计的计数
+[951070]WiFi_Mgr: open:0, nif:1, host_alive:65535
+[951074]    if_recv:1, if_write:0, if_err:0, drv_aggsize:0
+[951080]    cmdlist:0, up2host:0, cachedata:0
+```
+
+- `if_recv:1` ⇒ **帧确实进了 `wifi_mgr`**（被当成"接口输入"收下了）；
+- `if_write:0` ⇒ `wifi_mgr` **一次都没往主机写**；
+- `open:0` ⇒ 主机侧没有"打开设备"（且 `send-cmd 1` = `DEV_OPEN` 也没能把它打开）；
+- `TX_DATA:1`（`VIF3` = AP 侧）⇒ **很可能是把我们那条"命令"当数据发到空口去了**（推断；要与 `AT+TX_PKTS` 对照才坐实）；
+- 全程**没有** `wifimgr host cmd:`。
+
+⇒ 与上面的推断一致：**RAW 下主机口是纯数据管，命令不会被分发**。要命令/事件通道就得换
+`WIFIMGR_FRM_TYPE_HGIC`（见上）。
 
 ## 六、未做（如实）
 
