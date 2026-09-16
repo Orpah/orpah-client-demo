@@ -524,6 +524,13 @@ python tools\probe_txah_uart.py --ch347-com 0 send-eth --frame-type frm --with-f
 `MACBUS_UART` + `WIFIMGR_FRM_TYPE_HGIC` + 调试打印（§5.2）。第二块若是**出厂 SDIO 固件**，
 必须按 §5.2 的流程重编 + `at+fwupg` 烧一遍 —— 否则它没有 UART macbus，数据口是死的。
 
+**✅ 2026-09-16 实测（用户提供 B 板启动日志）：第二块不用重刷** ——
+`hgSDK-v2.4.1.5-39777, app-0, build time:Sep 16 2026 15:55:48`（与 A 同一版）+
+`[43][mbus cfg] frm_type=1 (0=ETHER 1=HGIC 2=RAW) bus=4` + `[47]uart bus fixlen=0` +
+`[49][mbus rx] debug build: UART0 rx dump on`；
+且 `[5030][mbus tx] 12 byte(s) 1a 2b 04 00 0c 00 00 00 1f 00 00 00`
+⇒ **它的数据口（`UART0`）已在往主机方向发事件**（`type=EVENT`、事件 id=0x1f、无数据）。
+
 ### 7.3 AT 配置（各自 AT 口；写法出自《泰芯AH-SDK_V2.x AT指令使用说明_V1.4》§3.1/§4.1）
 
 两块都先设射频与信道（示例取文档 §4.1 的写法）：
@@ -577,3 +584,12 @@ python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 --frame-type frm --wi
 - 上述四组约定的真机结果（本轮没做）；模组 B 的 MAC 是否与 A 不同（启动日志 `use UUID for MAC`，
   预期不同，待确认）；是否需要 `AT+PAIR`；加密（`AT+ENCRYPT=1 + AT+KEY`）下的行为。
 - 一切以实测为准：**没跑过的都不写“已通”**。
+
+**已确认（2026-09-16）/ 两个可疑点**：
+
+- ✅ **两块 MAC 确实不同**：A `4a:06:59:8d:74:40`、B `69:6e:6b:00:00:00`。
+  ⚠ 但 **B 的 `0x69` 最低位 = 1 ⇒ 按 802 定义是组播地址**（合法单播应 LSB=0，A 的 `0x4a` 就是）；
+  BSSID/源地址不应是组播 —— **若 A 关联不上 B，先怀疑它**（改成合法单播 MAC 再试）。
+  注：A 那边日志里有 `use UUID for MAC`，B 的启动日志里没有。
+- ⚠ B 的启动日志 `[1]syscfg: invalid magic_num=0, addr=fe000` ⇒ **B 的 syscfg 区是空的、参数全默认**
+  ⇒ §7.3 的 SSID/带宽/信道/加密必须**显式设一遍**；设完 `AT+RST` 后这条应该消失。
