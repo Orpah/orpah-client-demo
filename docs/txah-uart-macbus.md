@@ -68,10 +68,31 @@ python tools\fmac_macbus_switch.py restore    # 还原
 
 | 模组脚（U1 `TX-AH-RX00P-XX`） | 板上网名 | 排针上的可达点 |
 |---|---|---|
-| pin 15 = **IOA10**（UART0_**RX**） | `AH D2` | **J5 pin 3**（经 R41 **1K**）、CON3 的 `SD_D2`（经 22R，**默认 NC 未焊**） |
-| pin 16 = **IOA11**（UART0_**TX**） | `AH D3` | **J5 pin 5**（经 R42 **1K**）、CON3 的 `SD_D3`（同上） |
+| pin 15 = **IOA10**（UART0_**RX**） | `AH D2` / `SD_D2` | **J5 pin 3**（经 R41 **1K，已贴** ✓）、CON3 pin 1（经 **R18**，**默认没贴** ✗） |
+| pin 16 = **IOA11**（UART0_**TX**） | `AH D3` / `SD_D3` | **J5 pin 5**（经 R42 **1K，已贴** ✓）、CON3 pin 2（经 **R20**，**默认没贴** ✗） |
 | pin 33 = **IOA12**（UART1 RX） | `IOA12` | **J4 pin 2**（"AH UART" 排针） |
 | pin 34 = **IOA13**（UART1 TX） | `IOA13` | **J4 pin 3** |
+
+**⚠ CON3 为什么不能直接引**：CON3 是"SDIO 飞线"用的 8 pin 排针，模组到它中间**串了 6 个电阻，
+原理图上标注是 `NC/1K` = 默认不贴（贴的话 1K）** ⇒ 从 CON3 引线等于引到一段**断路**上。
+那 6 个位置与对应的线（页 2 读出）：
+
+| 设计号 | 哪条线 → CON3 脚 | 原理图标注 |
+|---|---|---|
+| **R18** | `SD_D2`（=A10）→ CON3 pin 1 | `NC/1K` |
+| **R20** | `SD_D3`（=A11）→ CON3 pin 2 | `NC/1K` |
+| R21 | `SD_CMD` → CON3 pin 3 | `NC/1K` |
+| R23 | `SD_CLK` → CON3 pin 5 | `NC/1K` |
+| R3 | `SD_D0` → CON3 pin 7 | `NC/1K` |
+| R25 | `SD_D1` → CON3 pin 8 | `NC/1K` |
+
+（CON3 其余两脚：pin 4 = `SVCC`、pin 6 = `GND`，没有串阻。）
+
+⚠ **阻值口径不一致**：原厂《泰芯AH模组开发板使用说明》里写「SDIO 飞线焊 **22R**」、
+「SPI(COM3) 飞线焊 **0R**」（同一组位置两处还不一样），而**原理图**标的是 **`NC/1K`**。
+要用 CON3 就得按原理图/问原厂定 —— **我们这条路线不需要动它**（走 J5 即可）。
+
+（顺带：主 SDIO 通路上的 R6/R7/R8/R9/R10/R11 = **22R，已贴**，那是模块 ↔ TF 卡座/CON3 的串联电阻。）
 
 **J5 = 2×4 2.54 mm（板载 USB-UART `CH340E` ↔ A10/A11 的跳线排）**
 
