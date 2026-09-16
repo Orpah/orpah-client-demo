@@ -158,6 +158,12 @@ AT/打印口 `A12/A13` = **0 Ω**（直达）—— 两条路的差别就只差�
   （发射瞬间电流不够，会"时好时坏"）。
 - ⚠ `A10/A11`（= `SD_D2/SD_D3`）经板上 22R 也接到 **TF 卡座**：**卡里插着 TF 卡时会拉这两条线**，
   调试前**拔掉 TF 卡**。
+
+> 🖼 **图版（2026-09-16）**：上面这套接线的 Fritzing 图在
+> [`hardware/wiring/`](../hardware/wiring/README.md) —— `.fzz` 工程 + `.svg` 导出；
+> README 里有**从 `.fzz` 抽出来的连线表**（含线色）。该图走的是"**两路都接 CH347F**"：
+> 数据口 → `P2`，AT/打印口 → `P3`（即上面「真要挪到 CH347F 也可以」那条），另外多一根
+> `VCC → VIO`（供 CH347F 的 I/O 参考，待对 CH347F-EVT 原理图确认）。
 - PC 侧用法（`tools/probe_txah_uart.py`）：
   ```powershell
   python tools\ch347_spi.py uart-list                                  # 看 UART 索引（0=UART0、1=UART1）
