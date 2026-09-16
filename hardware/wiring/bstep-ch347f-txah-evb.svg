@@ -6670,52 +6670,6 @@
        id="line1791" />
   </g>
   <g
-     partID="863158040"
-     id="g1799"
-     transform="translate(0.25192621,-1.4225878)">
-    <line
-       stroke="#8c0000"
-       stroke-linecap="round"
-       stroke-width="3.2"
-       x1="322.952"
-       x2="365.68301"
-       y1="70.340302"
-       y2="54.671299"
-       id="line1795" />
-    <line
-       stroke="#cc1414"
-       stroke-linecap="round"
-       stroke-width="1.6"
-       x1="322.952"
-       x2="365.68301"
-       y1="70.340302"
-       y2="54.671299"
-       id="line1797" />
-  </g>
-  <g
-     partID="863158010"
-     id="g1805"
-     transform="translate(0.25192621,-1.4225878)">
-    <line
-       stroke="#8c0000"
-       stroke-linecap="round"
-       stroke-width="3.2"
-       x1="205.284"
-       x2="322.952"
-       y1="71.188103"
-       y2="70.340302"
-       id="line1801" />
-    <line
-       stroke="#cc1414"
-       stroke-linecap="round"
-       stroke-width="1.6"
-       x1="205.284"
-       x2="322.952"
-       y1="71.188103"
-       y2="70.340302"
-       id="line1803" />
-  </g>
-  <g
      partID="863158100"
      id="g1811"
      transform="translate(0.25192621,-1.4225878)">
@@ -6790,6 +6744,29 @@
        style="fill:#000000;stroke-width:0.694179"
        x="355.56015"
        y="248.44792">USB</tspan></text>
+  <path
+     style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:0.672573px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
+     d="m 235.75924,251.65726 48.18606,-0.34329"
+     id="path2421-2"
+     inkscape:connector-type="polyline"
+     inkscape:connector-curvature="0" />
+  <path
+     style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:0.599187px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
+     d="m 234.7816,185.63931 1.11069,65.75588"
+     id="path2423-7"
+     inkscape:connector-type="polyline"
+     inkscape:connector-curvature="0" />
+  <text
+     xml:space="preserve"
+     style="font-weight:bold;font-size:8.57117px;font-family:DroidSans;-inkscape-font-specification:'DroidSans, Bold';fill:#000000;fill-rule:evenodd;stroke-width:0.694179;stroke-miterlimit:3.9"
+     x="267.53061"
+     y="248.9091"
+     id="text4379-4"><tspan
+       sodipodi:role="line"
+       id="tspan4377-44"
+       style="fill:#000000;stroke-width:0.694179"
+       x="267.53061"
+       y="248.9091">USB</tspan></text>
   <text
      xml:space="preserve"
      style="font-style:italic;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:8.57117px;font-family:sans-serif;-inkscape-font-specification:'sans-serif, Italic';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;fill:#000000;fill-rule:evenodd;stroke-width:0.694179;stroke-miterlimit:3.9"
