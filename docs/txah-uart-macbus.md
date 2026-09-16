@@ -675,6 +675,21 @@ python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 --frame-type frm --wi
   **AP 侧“主机口 → 空口”要厂商确认**，或者 **b 步的路由器侧直接换成 T-Halow-RJ45 那类带 WNB 固件的板子**
   —— 那也正是 ORPAH 部署里的真实形态（路由器侧 = 以太网口 ↔ HaLow 的桥）。
 
+**2026-09-16 镜像级对比（原厂联系不上，自己看固件字符串）**
+
+| 项 | WNB 固件（`T-Halow-RJ45/firmware/huge-ic-ah_v1.6.4.3-38054`） | 我们的（`v2.4.1.5-39777`） |
+|---|---|---|
+| 宿主接口 | **`mac_bus_gmac_attach` / `gmac_bus_input_cb` / `eth_phy_open` / `eth machine` / `ethernet link up`** ⇒ 宿主 = **以太网 MAC（RMII + PHY）** | 只有 `mac_bus_uart_attach` ⇒ 宿主 = **UART** |
+| 专有命令 | **`AT+MODE`**（ap/sta/group/apsta）、**`AT+WNBCFG`**、`wnb: start pairing`、`AT+TXDATA` | 无（`wnbap*` 模式名在 AT 表里，但 `WIFI_WNBAP_SUPPORT 0`） |
+
+- **“RJ45 ↔ HaLow 二层透传”= 那条产品线把宿主换成了以太网口**；我们这条 UART 宿主的产品形态只做客户端桥接。
+- 我们**自己的 SDK 也有这条路**：`sdk/include/lib/bus/macbus/mac_bus.h` 的 `mac_bus_gmac_attach()`、
+  `sdk/lib/bus/macbus/macbus.c` 的 `#ifdef MACBUS_GMAC`、`chip/txw4002ack803/pin_function.c` 的 `gmac_pin_func()`
+  （RMII 引脚）、`sdk/include/lib/net/ethphy/eth_phy.h` ⇒ 想自建“带网口的 AP”在源码层是可行的（要板上有 PHY/RJ45）。
+- ⇒ **b 步下一步（2026-09-16 定）**：路由器侧改用 **T-Halow-RJ45 板**（WNB 固件、天生 RJ45↔HaLow）；
+  **不需要 PC 网卡** —— 用它自己的 AT 口（`tools/thalow_config.py`）发 `AT+TXDATA`（要带 14 B 以太头）
+  当“下行帧源”，我们的 TX-AH（STA）主机口收到即验证 **客户端 air→host + 下行真到达**。
+
 **已确认（2026-09-16）/ 两个可疑点**：
 
 - ✅ **接口 MAC 是“能不能关联”的关键（本轮最大教训）**：STA 那块的**接口** MAC 原为
