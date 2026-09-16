@@ -132,16 +132,29 @@ python tools\fmac_macbus_switch.py restore    # 还原
 真要挪到 CH347F 也可以（P3：模组 `A12`(模组发) → **`RXD1`**；模组 `A13`(模组收) ← **`TXD1`**；GND），
 但**一次只改一处**，先把数据口跑通再动它。
 
-- 开发板上 `A10`/`A11`/`A12`/`A13` 都在 **UART 跳线排**上（A12/A13 现在被短接到 USB 那侧用于 AT/打印，
-  说明那一档是对的）；飞线 `A10`/`A11` 时别动中间那排短接帽。
+- 开发板上这些脚的落点见 §3.2（`A10/A11` 走 **J5 pin 3/pin 5 + GND**；`A12/A13` 走 **J4**）。
+  从 **CON3** 引是**断路**（那 6 个串阻默认没贴）。
 - **共地必须接**；模组 3.1~3.3 V 自己供电，**别用 CH347F 的 `3V3`（pin 1）去带模组**
   （发射瞬间电流不够，会"时好时坏"）。
+- ⚠ `A10/A11`（= `SD_D2/SD_D3`）经板上 22R 也接到 **TF 卡座**：**卡里插着 TF 卡时会拉这两条线**，
+  调试前**拔掉 TF 卡**。
 - PC 侧用法（`tools/probe_txah_uart.py`）：
   ```powershell
   python tools\ch347_spi.py uart-list                                  # 看 UART 索引（0=UART0、1=UART1）
   python tools\probe_txah_uart.py --ch347-uart 0 listen --secs 10      # 数据口（UART0）只读解析
   python tools\probe_txah_uart.py --ch347-uart 1 listen --secs 10      # AT/打印口（UART1）
   ```
+- ★ **CH347F-EVT 在本机是 VCP 模式**：它的两路 UART **同时**是普通串口 ——
+  `USB-HiSpeed-SERIAL-A CH347F (COM23)` = `MI_00` = **UART0**、
+  `USB-HiSpeed-SERIAL-B CH347F (COM24)` = `MI_02` = UART1（`MI_04` = SPI/I2C/JTAG）。
+  ⇒ **P2 的 TXD0/RXD0 有两条互不相干的驱动方式**：WCH DLL（`--ch347-uart 0`）或
+  pyserial 走 COM23（`--port COM23`）。**排查时两条都试**，能把"桥的问题"和"模组的问题"切开：
+  ```powershell
+  # 先把 P2 的 TXD0 与 RXD0 短接（自环），两条路各跑一次：
+  python tools\probe_txah_uart.py --ch347-uart 0 loopback
+  python tools\probe_txah_uart.py --port COM23 loopback
+  ```
+  （COM 号会变，用 `Get-CimInstance Win32_PnPEntity` 里 `VID_1A86&PID_55DE&MI_00/MI_02` 认。）
   ⚠ 实测（2026-09-16）：DLL 里 **`CH347OpenDevice(0)`（SPI 功能）与 UART0 冲突** ——
   先开 SPI 再 `CH347Uart_Init(0)` 会失败；**UART0+UART1 同时可用**、**SPI + UART1 也可用**。
   所以：只用 UART 时不要 `open()` 设备（脚本已这么做）；要同时跑 SPI 探测就用 UART1 看日志。
