@@ -325,6 +325,15 @@ $env:SHELL='F:\C-Sky\CDK\CSKY\MinGW\msys\1.0\bin\sh.exe'; $env:MAKESHELL=$env:SH
 用法：`AT+BUS_WT=1` 后在**数据口**跑 `--ch347-com 0 listen --secs 5 --dump-raw`：
 - 有字节（magic 应为 **`1a 2b`** = `0x2B1A` 小端 = 模组→主机）⇒ 回程那半条线也是好的；
 - 试完记得 `AT+BUS_WT=0` 关掉。
+- ⚠ **2026-09-16 实测：`AT+BUS_WT=0/1/2` 三种取值下数据口都是 0 字节** —— 所以要么它不是
+  "往主机口写"，要么它依赖打印开关（例如 LMAC 周期打印被 `AT+SYSDBG=LMAC,0` 关过）。
+
+**闭源库字符串里挖到的两条线索**（2026-09-16，`libs/*.a` 里 extract 出来的，不是猜的语义，是原文）：
+
+| 字符串 | 出处 | 怎么用 |
+|---|---|---|
+| `wifimgr host cmd:%d, ifidx=%d` | `libs/libwifi.a` | **主机命令真正进到 `wifi_mgr` 分发器时会打印这行**。所以发帧后先看 AT 口：**有** ⇒ 命令到了分发层（问题在"回写主机口"）；**没有** ⇒ 根本没进分发层（在 bus → wifi_mgr 那段就丢了） |
+| `WiFi_Mgr: open:%d, nif:%d, host_alive:%d`（`wifi_mgr_status()`） | `libs/libwifi.a` | 分发/回写可能受 `open` / `host_alive` 约束 ⇒ 主机侧通常要先发 **`HGIC_CMD_DEV_OPEN`（`hgic.h` 命令表第 1 条，id=1）**。已列入下一轮要试的命令：`send-cmd 1`（DEV_OPEN）/ `send-cmd 43`（`GET_FW_INFO`）/ `send-cmd 20`（`GET_STATUS`） |
 
 ## 六、未做（如实）
 
