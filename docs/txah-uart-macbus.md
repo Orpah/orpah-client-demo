@@ -460,7 +460,11 @@ python tools\probe_txah_uart.py --ch347-com 0 send-eth --frame-type frm --with-f
 1. `struct hgic_ctrl_hdr` = 8 B 帧头 + **4 B union** = **12 B**（`HGIC_CTRL_HDR_LEN`）；
    模组端取参数是 `data = (uint8 *)(ctrl + 1)` ⇒ **参数/数据都从帧内偏移 12 开始**。
    ⚠ 所以 `cmd_frame()` 现在**补满 4 B union**（原来 1 字节 `cmd_id` 就完了，**带参命令的参数会落错位置**）——
-   `send-cmd 43` 现在发的是 `2b 1a 03 00 0c 00 01 00 2b 00 00 00`（12 B 头），**待实测确认仍能回**。
+   `send-cmd 43` 发的是 `2b 1a 03 00 0c 00 01 00 2b 00 00 00`（12 B 头）。
+   **2026-09-16 已上机复验 ✓**（`python tools\probe_txah_uart.py --ch347-com 0 send-cmd 43`）：
+   回读 `1a 2b 03 00 28 00 01 00 | 2b 00 1c 00 …` —— 40 B、`status=0`、`data=28 B`、
+   `FW: app=2.4.1.5 svn=39777 chip_id=0x4002 mac=4a:06:59:8d:74:40`，与启动日志一致；
+   即**换成 12 B 头后回包与之前逐字节相同**（这条曾是 PC 侧唯一未验证的改动，现结）。
 2. **CMD 应答载荷** = `cmd_id(1) | status(1) | len(2, LE) | data(len)`
    （实测 40 = 8 + 1 + 1 + 2 + **28**，与模组日志 `resp cmd, ret:28` 一致；
    另与 `uart_bus_proc_cmd` 里 "`ret = 2` = 数据长度" 的约定吻合）。
@@ -488,15 +492,18 @@ python tools\probe_txah_uart.py --ch347-com 0 send-eth --frame-type frm --with-f
 
 ## 六、未做（如实）
 
-- **固件已烧、已由启动打印确认**（`hgSDK-v2.4.1.5-39777 … build time:Sep 16 2026 …` + `[44]uart bus fixlen=0`）；
-  **接线在做**，但**数据口（`A10/A11`）至今没有任何一问一答的实测**（见 §5.1）。
-- **临时调试固件（§5.2，`UART0` RX+TX 打印）已编好（第二版 366096 B）、RX 那半已在真机实测过**；
-  **TX 那半还没上机** —— 在它给出结果之前，"模组为什么不回"仍属未定。
-- **PC 侧联调脚本已就绪但只跑过离线自测**：`tools/txah_hgic.py`（HGIC 编解码，自测 13 项全过）
-  + `tools/probe_txah_uart.py`（listen / send-eth / send-cmd / raw）。真机行为待接线后跑。
-- **RAW 模式下载荷到底带不带以太头、要不要那 24 字节 info**：不确定，靠真机试
-  （工具两种都支持，会打印实际发送内容）。
-- SPI 电气探测（`docs/ch347f-txah-spi-probe.md`）仍待接线后跑；若 SPI 也通，再回头比较两条路。
+- **控制面（命令 + 事件 + 回程）已在真机跑通**（§5.4）：`send-cmd 43` 一问一答回 40 B；
+  换 **12 B 控制头**后回包**逐字节相同**（2026-09-16 复验，见 §5.4）。
+- **数据面（用户数据上行/下行）仍没有真机结果**：`send-eth` 只有"发了但没对端"的记录 ——
+  两块模块那一节（§7）要做的正是这件事。
+- **临时调试打印还在码里**（`uart_bus.c` 四处 `TEMP DEBUG` + `main.c` 的 `[mbus cfg]` 标记）：
+  两半均已上机（RX 见 §5.1、TX 见 §5.4 的 `[mbus tx] 40 byte(s)`），**正式固件应删掉**
+  （备份/回退见 §5.2）。⚠ **目前烧在板上的是带调试打印的那版**（`APP.bin` 366096 B）。
+- **RAW 模式下载荷到底带不带以太头、要不要那 24 字节 info**：**不再需要查** —— 已改用 HGIC（§5.3）。
+- **SPI 电气探测**（`docs/ch347f-txah-spi-probe.md`）仍待做；UART 路已通，优先级降低
+  （除非数据面在 UART 上走不通）。
+- 两块模块端到端的四组载荷/帧头约定、模组 B 的 MAC 是否不同、是否需要 `AT+PAIR`、加密下的行为：
+  见 §7.5。
 
 ## 七、两块模块端到端（b 步数据面；用户 2026-09-16 选“第二块 TX-AH 当对端”）
 
