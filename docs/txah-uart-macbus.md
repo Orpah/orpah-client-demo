@@ -526,6 +526,11 @@ python tools\probe_txah_uart.py --ch347-com 0 send-eth --frame-type frm --with-f
 
 > CH347F 的 UART0 + UART1 可共存（2026-09-16 实测 ✓，见 §3.3 附近）；两块板**各自供电、只共地**
 > （**别把两边 3V3 接一起** —— 理由见 §3.3 那条）。
+>
+> ⚠ **实测（2026-09-16）与上表相反：两块接在 CH347F 上的角色是反的** ——
+> `4a:06:59:8d:74:40` 那块是 **AP**、在 **P2（COM23）**；`69:6e:6b:00:00:00` 那块是 **STA**、在 **P3（COM24）**
+> ⇒ `xfer --tx-com 0` 实际是“往 AP 里塞帧”。要么对调接线，要么把 `--tx-com/--rx-com` 按实际接法写
+> （两者都行，但记录要一致）。
 
 ### 7.2 两块都要刷**我们这版固件**
 
@@ -545,10 +550,17 @@ python tools\probe_txah_uart.py --ch347-com 0 send-eth --frame-type frm --with-f
 
 ```
 AT+BSS_BW=8                        # 8M 带宽
-AT+CHAN_LIST=9080,9160,9240        # 或 AT+CHANNEL=1
+AT+CHAN_LIST=908,916,924           # 频率(MHz)，**不是 9080/9160/9240**；或 AT+CHANNEL=1
 AT+SSID=ORPAH_AH_TEST
 AT+ENCRYPT=0                       # 先用不加密，最简
 ```
+
+⚠ 两条来自源码的坑（2026-09-16 核对 `sdk/lib/common/atcmd.c`）：
+- `AT+CHAN_LIST` 的参数是 `os_atoi` 的**频率数值（MHz）**（`chan_list[i] = os_atoi(argv[i])`）——
+  本文档早先写的 `9080/9160/9240` **是错的**；模块读回的是 `+CHANNEL:<列表下标>` 与
+  LMAC 的 `chn: 908.0 916.0 924.0`（MHz）。
+- `AT+CHAN_LIST` 会**强制把当前信道设成列表第 1 个**（`ieee80211_conf_set_channel(ifidx, 1)`）
+  ⇒ 两块想同信道就**两边设同一个列表**，或干脆都用 `AT+CHANNEL=<下标>` 明确指定。
 
 再分别设角色（**这一步是两块唯一不同的地方**）：
 
@@ -601,3 +613,7 @@ python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 --frame-type frm --wi
   注：A 那边日志里有 `use UUID for MAC`，B 的启动日志里没有。
 - ⚠ B 的启动日志 `[1]syscfg: invalid magic_num=0, addr=fe000` ⇒ **B 的 syscfg 区是空的、参数全默认**
   ⇒ §7.3 的 SSID/带宽/信道/加密必须**显式设一遍**；设完 `AT+RST` 后这条应该消失。
+- ✅ **2026-09-16 两块 LMAC STATUS 实况**（用户提供）：AP = `4a:06:59:8d:74:40`（`mode=2`，chan 1 = 908 MHz）、
+  STA = `69:6e:6b:00:00:00`（`mode=0`，chan 3 = 924 MHz）；两块都 `sta_list: no sta` / `AID= 0`
+  ⇒ **没关联**，而且**信道不一致**（908 vs 924）——先统一信道再谈数据面。
+  另：STA 侧 `bgr=-60` 而 AP 侧 `bgr=-108`（两个接收背景差很多，待查）。
