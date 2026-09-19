@@ -8,8 +8,11 @@
 |---|---|
 | `bstep-ch347f-txah-evb.fzz` / `.svg` | **单模块**夹具：CH347F ↔ 一块模组（P2 数据口 + P3 AT/打印口）。用来验桥与线 |
 | `bstep-ch347f-2txah-evb.fzz` / `.svg` | **两块模块**夹具（b 步数据面）：CH347F 的 P2 带**客户端(STA)**、P3 带**对端(AP)**，两块各自的 USB 接 PC 看 AT/打印 |
+| `bstep-ch347f-txah-evb-thrj45.fzz` / `.svg` | **客户端 ↔ T-Halow-RJ45** 夹具（2026-09-20 实测用的那套）：客户端 STA 只接 CH347F 的数据口；TH-RJ45 当 **AP**，它的 **RJ45 空着**，只用 USB-C 看 AT |
 
-两张图都**内嵌**用到的部件（自包含）；`.svg` 是同图的导出，文档里直接看不必装 Fritzing。
+前两张图都**内嵌**用到的部件（自包含）；`.svg` 是同图的导出，文档里直接看不必装 Fritzing。
+⚠ 第三张（`…-thrj45`）**没有内嵌 `T-Halow-RJ45` 部件**（它引用本机 Fritzing 的
+`parts/user/T-Halow-RJ45.fzp`）⇒ 别人打开那个 `.fzz` 会**缺件**；分享只看它的 `.svg`（自包含）。
 
 **接线正确性怎么复验（不靠肉眼数线）**：
 
@@ -123,13 +126,42 @@ python tools\fzz_nets.py
   是这版通用 FMAC v2.4.1.5 在 **AP 模式下不做「主机口 → 空口」转发**
   （`WIFI_WNBAP_SUPPORT 0`、`bridgeif.o` 没编进 map）；「RJ45 ↔ HaLow 二层透传」是
   **WNB 固件**那条产品线的能力（宿主是以太网 GMAC）。证据见 `../../docs/txah-uart-macbus.md` §7.4/§7.5。
-- **下一步（2026-09-16 定）**：路由器侧换 **T-Halow-RJ45 板**（WNB 固件、天生 RJ45↔HaLow），
-  用它的 `AT+TXDATA` 当“下行帧源”，客户端主机口收到即验证**下行真到达**。
+- ~~**下一步（2026-09-16 定）**：路由器侧换 **T-Halow-RJ45 板**（WNB 固件、天生 RJ45↔HaLow），
+  用它的 `AT+TXDATA` 当“下行帧源”~~ ⇒ **2026-09-20 更正：这条路线作废** ——
+  两块 V2.4 构建的 AT **都没有数据面命令**（`AT+TXDATA`/`AT+RXDATA`/`AT+SOCKET`/`AT+DHCP` 全静默），
+  且上游 `T-Halow-RJ45/docs/ethernet_bridge_linux.md` 明确说**别用它**
+  （*“a manual, single-frame debug interface (it enters a sticky data-mode and **rewrites the EtherType**)”*）。
+  实际做法与结果见下一节（**第三张图**）；同样，下面“在 AP 那块的 AT 口连续发 `AT+TX_*`”也**未验证且不推荐**。
 - 只想先验“客户端收空口”、不换板：在 **AP 那块**的 AT 口连续发
   （`AT+TX_DST_ADDR` = STA 接口 MAC、`AT+TX_LEN`/`AT+TX_TYPE` 设好，再 `AT+TX_CONT=1` + `AT+TX_START=1`），
   在**客户端主机口**听 `1a 2b`；同时看客户端的 `AT+RX_PKTS` 是否增长。
 - 一键判据（两块都在 CH347F 上时）：
   `python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 --text HELLO-ORPAH --secs 8`
+
+## ★ 第三张图：客户端(STA) ↔ T-Halow-RJ45(AP) —— **2026-09-20 实测：下行也通了**
+
+```
+客户端 TX-AH EVB（FMAC，STA）  ←空口 908.0MHz/bw8/open→  T-Halow-RJ45（WNB，AP）
+PC ──CH347F UART0── 客户端 UART0(A10/A11)   数据口（HGIC）
+PC ──USB-UART───── 客户端 UART1(A12/A13)   AT/打印口（逐帧 [mbus rx]/[mbus tx] 日志）
+PC ──USB-UART───── TH-RJ45 的 USB-C         AP 的 AT 口（STA1: / rx1: / tx1:）
+TH-RJ45 的 **RJ45 空着**（本方案不用它；下行由 AP 侧协议栈自己产生）
+```
+
+| 步骤 | 实测 |
+|---|---|
+| PC 发 3 条以太帧（ARP / DHCP DISCOVER / 0x88b5，`FRM2` + 完整以太帧） | 客户端 AT 口逐条 `[mbus rx] 50 / 294 / 41 byte(s)` ✓（= 8B HGIC 头 + 载荷） |
+| 上行过空口 | AP per-STA `rx1_cnt 11 → 12` ✓；**且 DHCP 应答本身已反证上行到过 AP** |
+| **下行到达** | 数据口收到 `FRM2`：`src=d6:a2:2a:82:67:c0`（**AP 的 MAC**）的 **DHCP 应答**（UDP 67→68）✓ —— 这条补上了上面表里“STA 收下行”那格 |
+
+- 一键复现：`python tools\hgic_loop_test.py`（默认 `--ap-port COM8 --at-port COM6 --data-port COM23`；
+  退出码 0 = 闭环成立）；**每条帧都以模组自己的 `[mbus rx] <8+len> byte(s)` 日志确认为准，否则重发**
+  —— 兜住 CH347F 的 VCP 周期性抽风（I/O 报 `PermissionError(13)`）。
+- 细节与五条硬规矩（**改角色后不能复位** / `AT+RSSI` 恒 0 不能判关联 / 判下行别用 `tx1` /
+  两块 V2.4 的 AT 无数据面命令 / CH347F 的 VCP 会抽风）见
+  [`../../docs/txah-uart-macbus.md`](../../docs/txah-uart-macbus.md) §八。
+- ⚠ **仍未验证**：从 **AP 侧主机口（TH-RJ45 的 RJ45）注入**的帧能不能下行 —— 本机没有有线网卡，没接。
+  （router 侧的产品形态走的正是这条路；AP 的 RJ45 ↔ 空口是厂商文档写的 L2 透明桥。）
 
 ## 边界（如实）
 
