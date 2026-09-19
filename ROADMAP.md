@@ -117,10 +117,19 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 - **12 B 控制头已上机复验 ✓**（2026-09-16）：`cmd_frame()` 补满 4 B union 后
   （`2b 1a 03 00 0c 00 01 00 2b 00 00 00`）`send-cmd 43` 回包与之前逐字节相同
   —— 这是当时 PC 侧唯一未验证的改动，现结。
-- **未做（下一步）**：**数据面端到端**。用户 2026-09-16 选**第二块 TX-AH 当对端**
-  （模块 A = STA ↔ CH347F `P2`；模块 B = AP ↔ CH347F `P3`；两块都刷同一版固件），
-  接线/AT 配置/判据见 `docs/txah-uart-macbus.md` §七，
-  一键判据 = `python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 --text …`。
+- **✓ 2026-09-20：数据面端到端也跑通了（闭环）** —— 台架没用第二块 TX-AH，而是
+  **客户端 TX-AH EVB(FMAC, STA) ↔ T-Halow-RJ45(WNB, AP)**（V2.4 ↔ V2.4，`halowlink`/9080/bw8/open）：
+  * PC 经 **CH347F UART0** 发 3 条以太帧 → 客户端 AT 口逐条 `[mbus rx] 50/294/41 byte(s)`（= 8B HGIC 头 + 载荷）；
+  * **上行过空口**：AP per-STA `rx1_cnt 11 → 12`；
+  * **下行到达**：数据口收到 `FRM2`，内含 `src=d6:a2:2a:82:67:c0`（AP 的 MAC）的 **DHCP 应答**（UDP 67→68）——
+    这条正好补上 `docs/txah-uart-macbus.md` §7.5「下行不通」的缺口；
+  * 一键复现 = `python tools\hgic_loop_test.py`（退出码 0 = 成立）；
+  * ⚠ **仍未验证**：PC 从 **AP 侧主机口**（TH-RJ45 的 **RJ45**）注入的帧能不能下行 —— 本机没有有线网卡，没接。
+    细节与五条硬规矩（改角色不能复位、`AT+RSSI` 恒 0、判下行别用 `tx1`、AT 无数据面命令、CH347F VCP 抽风）
+    见 `docs/txah-uart-macbus.md` §八。
+- 另一条（**未走**，留档）：用户 2026-09-16 曾选**第二块 TX-AH 当对端**
+  （模块 A = STA ↔ CH347F `P2`；模块 B = AP ↔ CH347F `P3`；两块都刷同一版固件；判据 `xfer`）——
+  那条路上**只有上行通、下行不通**（§7.4 表）。
 
 ## 三、依赖（装机清单）
 
@@ -139,9 +148,10 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 
 - 本仓目前**只有规则、骨架与本文档**（`AGENTS.md` / `README.md` / `ROADMAP.md` / `.gitignore`
   / `docs/`），**没有任何代码、自家固件未上机**。
-- b 步：**物理通路已重定为 UART macbus（CH347F 两路 UART + HGIC）**，且
-  **控制面（命令/事件）+ 回程已真机跑通**（2026-09-16，见 §二末）；
-  **数据面端到端还没做**（等两块模块的实测：接线/AT 配置/判据见 `docs/txah-uart-macbus.md` §七）。
+- b 步：**物理通路已重定为 UART macbus（CH347F 两路 UART + HGIC）**；**控制面 + 回程**（2026-09-16）与
+  **数据面端到端（上行过空口 + 下行到达主机口）**（2026-09-20）**都已真机跑通** ——
+  一键判据 `python tools\hgic_loop_test.py`，详见 `docs/txah-uart-macbus.md` §7.4/§八。
+  仅剩：**从 AP 侧主机口（RJ45）注入的下行**没验（本机没有线网卡）。
 - c 步起的都未做：工具链虽已装但**本仓固件一行未写**；CH32 板 / ATECC608 未接线；
   ATECC608B 驱动、产线烧录、低功耗与取能标定全未做。
 - 客户端侧的 `seen_routers`（设备看到哪些路由器）在仿真器里仍是**演示写死值**，

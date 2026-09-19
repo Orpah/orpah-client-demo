@@ -638,6 +638,55 @@ python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 --frame-type frm --wi
 | ethertype = `0x88B5` / `0x0800` | 都不到 |
 | 头型 = `FRM2`(8B) / `FRM` + 24B info | 都不到 |
 | `hdr.ifidx` = 0…7 逐个 | 都不到 |
+
+## 八、★ 2026-09-20 实测：**下行也通了**（客户端 STA ↔ TH-RJ45 WNB-AP）
+
+§7.5 那条「下行不通」的缺口，在这条台架上补上了。台架：
+
+```
+客户端 TX-AH EVB（v2.4.1.5-39777 FMAC，**STA**）  ←空口 908.0MHz/bw8/open→  T-Halow-RJ45（v2.4.1.3-39777 WNB，**AP**）
+PC ──CH347F UART0(COM23)── 客户端 UART0(A10/A11)     数据口（HGIC / mac_bus）
+PC ──USB-UART(COM6)─────── 客户端 UART1(A12/A13)     AT/打印口（逐帧 `[mbus rx]/[mbus tx]` 日志）
+PC ──USB-UART(COM8)─────── TH-RJ45 的 USB-C           AP 的 AT 口（`STA1:` / `rx1:` / `tx1:`）
+TH-RJ45 的 RJ45 **空着**（下行由 AP 侧协议栈自己产生 —— 本脚本拿 DHCP DISCOVER 去触发它）
+```
+
+一键复现：`python tools\hgic_loop_test.py`（判据写进输出，退出码 0 = 成立；参数/前提见脚本头）。
+
+| 步骤 | 实测（2026-09-20，`hgic_loop_test.log`） |
+|---|---|
+| PC 发 3 条帧（ARP 42B / DHCP DISCOVER 286B / 0x88b5 33B，`FRM2` + 完整以太帧） | 客户端 AT 口逐条 `[mbus rx] **50 / 294 / 41** byte(s)` ✓（= 8B HGIC 头 + 载荷） |
+| 上行过空口 | AP per-STA `rx1_cnt 11 → 12` ✓（`STA1: 4a:06:59:8d:74:40 V2.4`）；**且 DHCP 应答本身已反证上行到过 AP** |
+| **下行到达** | 数据口收到 `FRM2`：`dst=ff:ff:ff:ff:ff:ff src=d6:a2:2a:82:67:c0 et=0x0800 IPv4 … UDP 67→68`（= AP 侧协议栈对我方 DISCOVER 的**应答**，324B）✓ |
+| 下行旁证 | 客户端 AT 口 `[mbus tx] 332 byte(s) 1a 2b 09 01 … d6 a2 …`（8 + 324，与上面同一帧）✓，其间无 `cookie err`/`drop` |
+
+⇒ **结论分两层，别混**：
+
+1. ✅ **AP 侧协议栈自己产生（或从空口侧下发）的帧，能到达客户端主机口** —— 这条已实测。
+2. ⚠ **仍**未验证**：PC 从 **AP 侧主机口注入**的帧能不能下行**。§7.4 在**两块 TX-AH**上试过不通；
+   本台架的 AP 是 **WNB（TH-RJ45）**，它的主机口是 **RJ45**——本机没有有线网卡→没测。
+   要验就给它的 RJ45 接一台主机（USB 转以太网）；**router 侧的产品形态走的正是这条路**。
+   注：AP 的 RJ45 ↔ 空口是厂商文档写的 **L2 透明桥**（`T-Halow-RJ45/docs/ethernet_bridge_linux.md`）。
+
+### 8.1 顺带量出来的五条硬规矩（都实测，已写进工具/判据）
+
+1. **改角色后不能复位**：`AT+WIFIMODE=ap/sta`（WNB）/`AT+MODE`（V1.6）**不跨 RST 保存** ——
+   断电或复位就回 `sta`。正确顺序：设模式 → 等 2–3s（**AP 起来会 ACS 自选信道**）→ 再压
+   `AT+CHAN_LIST=9080` → **不复位**。实测重设后 ~4s 客户端自动重连（AP `add_STA: aid= 1 …`；
+   客户端 `WPA_AUTHENTICATING→ASSOCIATING→ASSOCIATED→WPA_COMPLETED(!)`）。
+2. **`AT+RSSI=?` 恒回 0**（两块 V2.4 都如此，**已关联也是 0**）⇒ 不能拿它判关联。
+   判关联看 AP 的 `STA1: <mac> V2.4`，或客户端 UMAC 的 `VIF1 … WPA_COMPLETED`。
+3. **判下行别用 `tx1_cnt`**：广播帧记在 `mcast` 那栏，`tx1` 不动（这次 AP 明明发了 DHCP 应答，
+   `tx1_cnt` 仍是 0）⇒ 直接看数据口收到的帧 / AT 口的 `[mbus tx]` 行。
+   同理 `rx_cnt`/`tx_cnt` 是**板子自己的分区间快照**，会上下跳，别当判据。
+4. **两块 V2.4 构建的 AT 都没有数据面命令**：`AT+TXDATA`/`AT+RXDATA`/`AT+SOCKET`/`AT+DHCP`/
+   `AT+?`/`AT+HELP`/裸 `AT` 全部静默（对照：`AT+RSSI=?` 有答、`AT+ZZZ` 也静默；
+   `AT+SYSDBG=?` 回 `ERROR` 说明该命令在）。上游 `ethernet_bridge_linux.md` 也明确说别用它：
+   *"that AT path is a manual, single-frame debug interface (it enters a sticky data-mode and
+   **rewrites the EtherType**)"*。
+5. **CH347F 的 VCP 会周期性抽风**（I/O 报 `PermissionError(13, '拒绝访问')`；另有程序占着端口同样如此）⇒
+   `hgic_loop_test.py` 的办法是：**每条帧都要在 AT 口看到 `[mbus rx] <8+len> byte(s)` 才算发出去，
+   否则重发**（把"到底发出去没有"交给模组自己的日志，别信 PC 侧的写成功）。
 | 先发 `DEV_OPEN(1)`（空载荷 → `status=0` 成功） | 仍不到 |
 | 灌流 1500 帧后看 AP 的 `TX_BITRATE` 事件 | 从 1.4k/4.5k 蹿到 **14148**（像发出去过），但 STA 主机口 0 字节 |
 
