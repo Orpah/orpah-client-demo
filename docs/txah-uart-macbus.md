@@ -532,6 +532,13 @@ python tools\probe_txah_uart.py --ch347-com 0 send-eth --frame-type frm --with-f
 > `4a:06:59:8d:74:40` 那块是 **AP**、在 **P2（COM23）**；`69:6e:6b:00:00:00` 那块是 **STA**、在 **P3（COM24）**
 > ⇒ `xfer --tx-com 0` 实际是“往 AP 里塞帧”。要么对调接线，要么把 `--tx-com/--rx-com` 按实际接法写
 > （两者都行，但记录要一致）。
+>
+> 🖼 **图版（2026-09-19）**：这张接线的 Fritzing 工程 =
+> [`hardware/wiring/bstep-ch347f-2txah-evb.fzz`](../hardware/wiring/bstep-ch347f-2txah-evb.fzz)
+> （`.svg` 导出同目录）；`U4` = 客户端(STA) 走 `P2`、`U5` = 对端(AP) 走 `P3`、三块板共地。
+> 接线**逐网复验**：`python tools\fzz_nets.py` ⇒ 两张夹具图（单模块 / 两块模块）均「全部对上 ✓」；
+> 这套接线**实测能达成什么 / 还不能达成什么** 汇在
+> [`hardware/wiring/README.md`](../hardware/wiring/README.md) 的「★ 这套接线能达成什么」一节。
 
 ### 7.2 两块都要刷**我们这版固件**
 
