@@ -9436,17 +9436,18 @@
            style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.5px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;stroke:#aa4400;stroke-width:0.600945"
            x="429.29123"
            y="188.20132"
-           id="tspan40446-0">打印日志</tspan><tspan
+           id="tspan40446-0">打印日志</tspan></text>
+      <text
+         xml:space="preserve"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.5px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;fill:none;fill-rule:evenodd;stroke:#aa4400;stroke-width:0.600945;stroke-miterlimit:3.9"
+         x="262"
+         y="45"
+         id="text-data-line-label"><tspan
            sodipodi:role="line"
            style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.5px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;stroke:#aa4400;stroke-width:0.600945"
-           x="429.29123"
-           y="197.57632"
-           id="tspan46241">HGIC/MACBUS</tspan><tspan
-           sodipodi:role="line"
-           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.5px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;stroke:#aa4400;stroke-width:0.600945"
-           x="429.29123"
-           y="206.95132"
-           id="tspan46243">二进制帧</tspan></text>
+           x="262"
+           y="45"
+           id="tspan-data-line-label">HGIC/MACBUS二进制帧</tspan></text>
     </g>
   </g>
   <g
