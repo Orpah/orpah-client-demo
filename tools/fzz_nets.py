@@ -50,6 +50,13 @@ EXPECT = {
         {(MOD, "A11"), ("U3", "RXD1")},
         {(MOD, "GND"), ("U3", "GND")},
     ],
+    "bstep-ch347f-txah-evb-thrj45.fzz": [
+        # 对端换成 T-Halow-RJ45（**无线相连、图上与任何部件都没有连线**，只看它的 USB）；
+        # 客户端侧只接数据口 3 根（AT/打印口走它自己的 USB，不过桥）
+        {(MOD, "A10"), ("U3", "TXD0")},
+        {(MOD, "A11"), ("U3", "RXD0")},
+        {(MOD, "GND"), ("U3", "GND")},
+    ],
 }
 
 

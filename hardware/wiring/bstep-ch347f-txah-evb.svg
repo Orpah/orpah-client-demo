@@ -89,13 +89,13 @@
      inkscape:deskcolor="#d1d1d1"
      inkscape:document-units="in"
      showgrid="false"
-     inkscape:zoom="2.8208866"
-     inkscape:cx="440.28711"
-     inkscape:cy="165.55079"
-     inkscape:window-width="3840"
-     inkscape:window-height="2036"
-     inkscape:window-x="-12"
-     inkscape:window-y="-12"
+     inkscape:zoom="2.2898384"
+     inkscape:cx="343.69238"
+     inkscape:cy="167.04236"
+     inkscape:window-width="2560"
+     inkscape:window-height="1351"
+     inkscape:window-x="-9"
+     inkscape:window-y="-9"
      inkscape:window-maximized="1"
      inkscape:current-layer="g4293" />
   <g
@@ -9384,6 +9384,69 @@
          fill="#0a0d11"
          r="0.28801501"
          id="circle4291" />
+      <text
+         xml:space="preserve"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:center;text-anchor:middle;fill:none;fill-rule:evenodd;stroke:#333333;stroke-width:0.600945;stroke-miterlimit:3.9"
+         x="76.165573"
+         y="218.83009"
+         id="text33051-6-8"><tspan
+           sodipodi:role="line"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;stroke:#333333;stroke-width:0.600945"
+           x="76.165573"
+           y="218.83009"
+           id="tspan28871">注意：本方案仅验证了</tspan><tspan
+           sodipodi:role="line"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;stroke:#333333;stroke-width:0.600945"
+           x="76.165573"
+           y="226.33009"
+           id="tspan38255">      1. A12/A13可以刷固件、AT命令、打印日志，</tspan><tspan
+           sodipodi:role="line"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;stroke:#333333;stroke-width:0.600945"
+           x="76.165573"
+           y="233.83009"
+           id="tspan38251">      2. A10/A11可以发送HGIC/MACBUS二进制帧</tspan></text>
+      <text
+         xml:space="preserve"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.5px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:center;text-anchor:middle;fill:none;fill-rule:evenodd;stroke:#aa4400;stroke-width:0.600945;stroke-miterlimit:3.9"
+         x="250.43187"
+         y="169.42203"
+         id="text33051"><tspan
+           sodipodi:role="line"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.5px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke:#aa4400;stroke-width:0.600945"
+           x="250.43187"
+           y="169.42203"
+           id="tspan40446">供电</tspan></text>
+      <text
+         xml:space="preserve"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.5px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:center;text-anchor:middle;fill:none;fill-rule:evenodd;stroke:#aa4400;stroke-width:0.600945;stroke-miterlimit:3.9"
+         x="429.29123"
+         y="169.45132"
+         id="text33051-5"><tspan
+           sodipodi:role="line"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.5px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;stroke:#aa4400;stroke-width:0.600945"
+           x="429.29123"
+           y="169.45132"
+           id="tspan33053-1">刷固件</tspan><tspan
+           sodipodi:role="line"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.5px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;stroke:#aa4400;stroke-width:0.600945"
+           x="429.29123"
+           y="178.82632"
+           id="tspan40444-9">AT命令</tspan><tspan
+           sodipodi:role="line"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.5px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;stroke:#aa4400;stroke-width:0.600945"
+           x="429.29123"
+           y="188.20132"
+           id="tspan40446-0">打印日志</tspan><tspan
+           sodipodi:role="line"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.5px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;stroke:#aa4400;stroke-width:0.600945"
+           x="429.29123"
+           y="197.57632"
+           id="tspan46241">HGIC/MACBUS</tspan><tspan
+           sodipodi:role="line"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.5px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;stroke:#aa4400;stroke-width:0.600945"
+           x="429.29123"
+           y="206.95132"
+           id="tspan46243">二进制帧</tspan></text>
     </g>
   </g>
   <g
