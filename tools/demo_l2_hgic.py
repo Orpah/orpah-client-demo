@@ -91,6 +91,12 @@ def main():
                     help="闭环拍数（每拍 = REQ-CONNECT + REPORT + 已签 ID-REPORT）")
     ap.add_argument("--gap", type=float, default=1.8,
                     help="拍间隔秒（默认 1.8s：远快于设计常态 60s，又慢于设备自限频 1.67 条/秒）")
+    ap.add_argument("--rtc", choices=["none", "true", "false"], default="false",
+                    help="cap.rtc 三态声明（默认 false：真机 CH32V203 无 RTC）")
+    ap.add_argument("--real-ts", action="store_true",
+                    help="发真实时间戳（默认为真机形态发 ts=0）")
+    ap.add_argument("--battery-mv", type=int, default=None,
+                    help="设备自报储能电压 mV（默认 = 能量模型的 mv_of(CHARGE0_MJ, STORE_MJ)）")
     ap.add_argument("--udp-port", type=int, default=19447, help="本机 Server 的 UDP 端口")
     ap.add_argument("--orpah-dir", default=DEFAULT_ORPAH_DIR)
     args = ap.parse_args()
@@ -102,6 +108,7 @@ def main():
     try:
         import client_sim
         import downlink
+        import energy as en
         import orpah_id as oid
         import orpah_proto as op
         from client import ClientHost
@@ -126,7 +133,16 @@ def main():
     # ★ 设备侧用上游 `DeviceSim`（`cycle()` = REQ-CONNECT → REPORT → 已签 ID-REPORT，
     #   顺序与 `ui_server._report_loop` 一致）——报文/选级/签名/自限频全走它的单一源，
     #   本脚本只把传输换成真机（`client=` 注入）。
-    sim = client_sim.DeviceSim(sn=args.sn, id_report=True, client=host, log=print)
+    # ★ 设备声明按**真机形态**（无 RTC 的 CH32V203）来：ts=0 + cap.rtc=false，并如实报储能电压。
+    cap_rtc = {"none": None, "true": True, "false": False}[args.rtc]
+    batt_mv = (args.battery_mv if args.battery_mv is not None
+               else en.mv_of(en.CHARGE0_MJ, en.STORE_MJ))    # 演示标定，不是实测
+    sim = client_sim.DeviceSim(sn=args.sn, id_report=True, client=host, log=print,
+                               cap_rtc=cap_rtc, ts_zero=not args.real_ts,
+                               battery_mv=batt_mv)
+    print("   设备声明：cap.rtc=%s / ts=%s / battery_mv=%d mV（%s）"
+          % (args.rtc, "真实时间" if args.real_ts else "0", batt_mv,
+             "命令行给定" if args.battery_mv is not None else "energy.mv_of 演示映射"))
     dev = sim._ensure_device()      # ★ 登记**同一个**设备对象（不重跑一遍 (sn, gen) 派生）
     ks = oid.KeyStore()
     ks.register(dev, model="bench-l2-hgic", firmware="bench")
@@ -215,6 +231,20 @@ def main():
               rec.id_recs[-1].get("level") if rec.id_recs else "-",
               rec.id_recs[-1].get("ts_src") if rec.id_recs else "-",
               rec.id_recs[-1].get("battery_mv") if rec.id_recs else "-"))
+
+        # ⑦⑧：时间基准与电量声明（都靠已签事实说话）
+        last_id = rec.id_recs[-1] if rec.id_recs else {}
+        ok("⑦ 无 RTC 声明生效：服务端改用接收时刻（ts_src=server 且记录时刻≈现在）",
+           bool(last_id) and last_id.get("ts_src") == "server"
+           and abs(float(last_id.get("ts_eff") or 0) - time.time()) < 120,
+           "ts_src=%s ts_eff=%s cap_rtc=%s ts_ok=%s"
+           % (last_id.get("ts_src"), last_id.get("ts_eff"),
+              last_id.get("cap_rtc"), last_id.get("ts_ok")))
+        ok("⑧ 电量报进签名里（battery_mv 原样到达 Server）",
+           bool(last_id) and last_id.get("battery_mv") == batt_mv,
+           "battery_mv=%s（设备报 %d）level=%s degraded_reason=%s"
+           % (last_id.get("battery_mv"), batt_mv,
+              last_id.get("level"), last_id.get("degraded_reason")))
 
         # ---------------- 5) mark 走失 → 再跑一拍应变 TRACKED ----------------
         print("=" * 84)

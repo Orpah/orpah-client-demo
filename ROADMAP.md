@@ -163,9 +163,17 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
     · **⑥ 负对照**：把一条已签报文的 payload 改掉（连 nonce 一起换，免得先被 nonce 去重拦下）
       ⇒ `accepted=False error=signature_invalid` —— 证明验签**真在跑**，不是橡皮图章；
     · 附带看到 `[found 1] 发现走失`（Router 命中走失表后上报 FOUND，也走的真链路）。
-    ★ **如实的两点**：本夹具的设备没报 `battery_mv`（`None`）、也没声明 `cap.rtc`
-    ⇒ `ts_src=device`；真机是无 RTC 的 CH32V203，按规范该发 `ts=0` + `cap.rtc=false`
-    （上游 `DeviceSim(cap_rtc=False, ts_zero=True)` 就支持，**待定要不要现在打开**）。
+    ★ **按用户选①补上（2026-09-20 同日）**：夹具默认改成**真机形态声明** —— `ts=0` +
+    `cap.rtc=false`（无 RTC 的 CH32V203 就是这么声明的）+ 如实报储能电压 `battery_mv`
+    （默认取 `energy.mv_of(CHARGE0_MJ, STORE_MJ)` = **3900 mV**，**演示映射不是实测**）。
+    实测新增两条判据（10 项全过）：
+    · **⑦ 无 RTC 声明生效**：`ts_src=server`、`ts_eff≈现在`、`cap_rtc=False`、`ts_ok=False`
+      —— 设备发的 `ts=0` 被**如实忽略**，服务端用接收时刻（= SPEC §5.5「ts=0/缺失 → 不做时间基准」），
+      而**不是**把它当成 1970 年或假装有设备时间；
+    · **⑧ 电量报进签名里**：`battery_mv=3900` 原样到达 Server，且 `level=0` ⇒ `degraded_reason=None`
+      （**没降级就不许编成因**；成因只能由签名内的 `hdr.level` + `battery_mv` 推导）。
+    要打**有 RTC 的对照**：`--rtc true --real-ts`（那时应看到 `ts_src=device`）；电量可直接
+    `--battery-mv <mV>` 指定（例如给个 ≤3300 的值看 `id_energy` 那条低电告警的输入端）。
   * ⚠ **仍未验证（如实）**：这台 PC **仍没有有线网卡**，跑的是**家用 Wi-Fi 的 L2 域**
     （中间路由器当交换机用）；真机形态（PC / OpenWrt 的**有线口**直连 AP 的 RJ45）没验。
     （ID-REPORT / 验签那一路已补上，见**上**条。）
