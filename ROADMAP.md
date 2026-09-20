@@ -315,7 +315,8 @@ Mod97 是 `21`（我一开始凭记忆把 B 当成 Luhn32 期望值 ⇒ 自检�
   **不带 `libgcc`** ⇒ 现在能编过、只是因为 proto 全是**死代码**被 gc 丢掉了。
   实测：**追加 `-lgcc` 后全量保留也能链**（`text 15118 / data 0 / bss 20224`；flash 64 K 够用，
   bss 与接线前逐字节相同 ⇒ proto **没有静态数据**，全是调用方 arena/栈）。
-  ⇒ **状态机一旦真调用 proto，就必须给 LDFLAGS 加 `-lgcc`**（**待拍板，本次未改**）。
+  ⇒ **已按用户拍板加上 `-lgcc`**（`firmware/Makefile` 的 `LDLIBS`，**排在目标文件之后**）；
+  同一轮把 `mkdir -p` / `rm -rf` 换成 `cmd /c`（不依赖 sh）⇒ **干净树上 `make clean && make` 可跑**。
 * **未做（= c3-2b，要上机）**：`Periph/` 下的 UART2 胶水（**引脚口径待定**）+ 用户烧录。
 * ⚠ `firmware/Makefile` 两条 Windows 实测坑（已写进该文件头）：
   ① recipe 里**没有 shell 元字符**的行，make 会**直接 exec** 那个程序（不经 sh）⇒ `mkdir -p` /

@@ -16,8 +16,8 @@
 #   CreateProcess 那个程序 ⇒ `mkdir -p` / `ls -l` / `rm -rf` 都报「找不到指定的文件」。
 #   而 `make SHELL='D:/Program Files/Git/bin/sh.exe'` 在这个组合下**没能改变**这一点
 #   （`sh.exe` 确实在 D:/Program Files/Git/bin/ 里，但不在 PATH；把它加进 PATH 也没用）。
-#   ⇒ 本仓已把 recipe 里的 `ls` 去掉（改用 make 原语）；**`mkdir -p` / `rm -rf` 还在**，
-#     干净树上会挂 —— 要改得你点头。当下可用：先自行建好 build/{Core,Periph,proto}，再 `make`。
+#   ⇒ 本仓三条 recipe 已改成**不依赖 sh**：去掉 `ls`（改用 echo）、`mkdir -p`/`rm -rf`
+#     换成 `cmd /c`（见下面的 MKDIR/RMDIR；POSIX 平台仍用 mkdir/rm）⇒ 干净树上 `make` 可跑。
 #
 # ★ 另一条测出来的坑：变量赋值**不要写行内注释** —— `PROTO_DIR = ../proto   # 说明`
 #   会把注释前的对齐空格留在值里 ⇒ 先决条件变成 `../proto   /sn.c`（找不到）而规则静静失效，
@@ -48,6 +48,24 @@ ASFLAGS = $(ARCH) -ICore -IPeriph
 LDFLAGS = -nostartfiles -nostdlib -T $(LINK) \
           -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map
 
+# libgcc：**必须排在目标文件之后**（见下面 .elf 规则：放在 $(OBJS) 后面）。
+# 为何需要：32 位目标上 `jcs.c` / `sha256.c` 会用到 `__udivdi3`/`__umoddi3`/`__lshrdi3`
+# （64 位除/模/右移），而 `-nostdlib` **不会自动带上 libgcc**。2026-09-20 实测：关掉
+# `--gc-sections` 时不加它就链不上（不加也能编过，只因那时 proto 全是没人调用的死代码）。
+LDLIBS = -lgcc
+
+# 建目录 / 删目录：**不能用 `mkdir -p` / `rm -rf`** —— make 对没有 shell 元字符的行会直接
+# CreateProcess 那个程序（不经 sh），而 `mkdir`/`rm` 都不是 Windows 程序（实测都报「找不到
+# 指定的文件」；`SHELL=` 也改变不了）。改用 **cmd 这个真程序**（走 `cmd /c`）；
+# POSIX 平台（make 的 OS 不是 Windows_NT）仍用 mkdir/rm。
+ifeq ($(OS),Windows_NT)
+  MKDIR = cmd /c "if not exist $(subst /,\,$(1)) mkdir $(subst /,\,$(1))"
+  RMDIR = cmd /c "if exist $(subst /,\,$(1)) rmdir /s /q $(subst /,\,$(1))"
+else
+  MKDIR = mkdir -p $(1)
+  RMDIR = rm -rf $(1)
+endif
+
 # 固件自己的源文件。
 SRCS = Core/main.c \
        Periph/gpio.c \
@@ -67,7 +85,10 @@ OBJS += $(BUILD)/startup.o
 all: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).bin
 
 $(BUILD):
-	@mkdir -p $(BUILD)/Core $(BUILD)/Periph $(BUILD)/proto
+	@$(call MKDIR,$(BUILD))
+	@$(call MKDIR,$(BUILD)/Core)
+	@$(call MKDIR,$(BUILD)/Periph)
+	@$(call MKDIR,$(BUILD)/proto)
 
 $(BUILD)/startup.o: $(STARTUP) | $(BUILD)
 	$(CC) $(ASFLAGS) -c $< -o $@
@@ -81,7 +102,7 @@ $(BUILD)/proto/%.o: $(PROTO_DIR)/%.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/$(TARGET).elf: $(OBJS) $(LINK)
-	$(CC) $(LDFLAGS) -o $@ $(OBJS)
+	$(CC) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
 	$(SIZE) $@
 
 # ⚠ 这里**不要**用 `@ls -l $@`：make 在 Windows 上会直接去 exec `ls`（它不是 Windows 程序）
@@ -93,7 +114,7 @@ $(BUILD)/$(TARGET).bin: $(BUILD)/$(TARGET).elf
 	@echo "  built: $@  (raw binary; bytes = size text + data above)"
 
 clean:
-	rm -rf $(BUILD)
+	@$(call RMDIR,$(BUILD))
 
 # 烧录**由用户执行**（本仓不代跑）
 flash: $(BUILD)/$(TARGET).bin
