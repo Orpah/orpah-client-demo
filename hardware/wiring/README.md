@@ -10,6 +10,8 @@
 | `bstep-ch347f-2txah-evb.fzz` / `.svg` | **两块模块**夹具（b 步数据面）：CH347F 的 P2 带**客户端(STA)**、P3 带**对端(AP)**，两块各自的 USB 接 PC 看 AT/打印 |
 | `bstep-ch347f-txah-evb-thrj45.fzz` / `.svg` | **客户端 ↔ T-Halow-RJ45** 夹具（2026-09-20 实测用的那套）：客户端 STA 只接 CH347F 的数据口；TH-RJ45 当 **AP**，它的 **RJ45 空着**，只用 USB-C 看 AT |
 
+**三张图都已直接嵌在下面各自那一节里**（点图可看原尺寸 `.svg`）—— 看图不必装 Fritzing。
+
 前两张图都**内嵌**用到的部件（自包含）；`.svg` 是同图的导出，文档里直接看不必装 Fritzing。
 ⚠ 第三张（`…-thrj45`）**没有内嵌 `T-Halow-RJ45` 部件**（它引用本机 Fritzing 的
 `parts/user/T-Halow-RJ45.fzp`）⇒ 别人打开那个 `.fzz` 会**缺件**；分享只看它的 `.svg`（自包含）。
@@ -25,6 +27,11 @@ python tools\fzz_nets.py
 **2026-09-19 实跑：两张图均「全部对上 ✓」（退出码 0）。**
 
 ## 接线（从 `.fzz` 里抽出来的真实连线，2026-09-16 修订）—— 单模块那张
+
+[![单模块夹具接线图：CH347F ↔ 一块 TX-AH EVB](bstep-ch347f-txah-evb.svg)](bstep-ch347f-txah-evb.svg)
+
+**单模块夹具**：CH347F `P2` → 模组数据口（`A10/A11`）、`P3` → AT/打印口（`A12/A13`），
+共 **5 根线**（4 信号 + 1 地）；左上角那句 `fritzing` 水印是有意保留的。
 
 **共 5 根**：4 根信号 + 1 根地。**图里没有电源线**（供电见下一节）。
 
@@ -45,6 +52,11 @@ python tools\fzz_nets.py
   同区的 `VCC` 焊盘**本图不用**（供电各管各的）。
 
 ## 两块模块那张图（`bstep-ch347f-2txah-evb`）—— b 步数据面
+
+[![两块模块夹具接线图：CH347F 同时带客户端(STA)与对端(AP)](bstep-ch347f-2txah-evb.svg)](bstep-ch347f-2txah-evb.svg)
+
+**两块模块夹具**：CH347F 的 `P2` 带**客户端（STA）**、`P3` 带**接入点（AP）**；
+两块各自的 `A12/A13` 接自己的 USB-UART 到 PC 看 AT/打印（图上标成 `… USB → WindTerm`）。
 
 同样**没有电源线**（各管各的、只共地）；AT/打印口**不走 CH347F** —— 两块模块的 `J4`（= `A12/A13`）
 各自接它们自己的 USB-UART 到 PC，图上用文字标成 `供电 刷固件 AT命令 打印日志` 连到 `WindTerm`。
@@ -139,6 +151,12 @@ python tools\fzz_nets.py
   `python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 --text HELLO-ORPAH --secs 8`
 
 ## ★ 第三张图：客户端(STA) ↔ T-Halow-RJ45(AP) —— **2026-09-20 实测：下行也通了**
+
+[![客户端(STA) ↔ T-Halow-RJ45(AP) 夹具接线图](bstep-ch347f-txah-evb-thrj45.svg)](bstep-ch347f-txah-evb-thrj45.svg)
+
+**第三张图**（2026-09-20 实测用的那套）：客户端（STA）只接 CH347F 的数据口；
+**TH-RJ45 当 AP，它的 RJ45 空着**（只用 USB-C 看 AT）。⚠ 这张 `.fzz` **没有内嵌 `T-Halow-RJ45` 部件**
+（引用的是本机 Fritzing 的 `parts/user/T-Halow-RJ45.fzp`）⇒ 别人打开会缺件，**分享只看它的 `.svg`**。
 
 ```
 客户端 TX-AH EVB（FMAC，STA）  ←空口 908.0MHz/bw8/open→  T-Halow-RJ45（WNB，AP）
