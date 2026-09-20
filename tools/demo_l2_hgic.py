@@ -26,10 +26,14 @@ demo_l2_hgic.py — b 步真链路**完整闭环**：PC 同时扮 Router + Serve
      —— 证明验签真在跑，不是橡皮图章
 
 soak 模式（`--minutes > 0`）另加四条：⑨ 上游零丢弃 / ⑩ 数据口无重开无坏字节 /
-  ⑪ 期间**无真验签失败** / ⑫ 无链路中断（每次都有回执）。
+  ⑪ 期间**无真验签失败** / ⑫ **无链路中断**（不出现连续缺回执）。
   ★ ⑪ 按**理由码**分类（`BENIGN_ID_ERRORS`）：`replay_detected` = 我们自己重发出去的
     **第二份**（见 `hgic_bus.send_frame` 的确认重试），协议靠 nonce 去重正确吸收 ⇒
     **不算失败**，但速率照实打印；**其它任何理由码 ⇒ 判失败**。
+  ★ ⑫ **不要求“一帧不丢”**（2026-09-20 用户定）：这是 demo 台架（开发板 + 家用 LAN +
+    空口），实测每轮 soak 都有 ~0.4% 的回执缺口，但**每次都自愈** —— 4h/6242 拍与
+    10min/242 拍两轮，最长连续缺回执都 = **1 拍** ⇒ 判的是“**链路断没断**”；
+    缺口率只**照实打印**，不单独设阈值。阈值 `SOAK_STALL_MAX` 的来历见它的注释。
 
 用法：
   python tools\demo_l2_hgic.py                          # 有线侧网卡自动挑
@@ -56,6 +60,18 @@ DEFAULT_ORPAH_DIR = os.path.abspath(os.path.join(HERE, "..", "..", "orpah-over-h
 # ⇒ 空口上出现两份；服务端 nonce 去重（SPEC §5.5）拒掉第二份。实测 ≈0.5% 的拍，且只见于
 # 483B 的 ID 报文（3635 条 REPORT 收包零重复）。**除本表外的任何理由码都要让 ⑪ 判失败。**
 BENIGN_ID_ERRORS = ("replay_detected",)
+
+# 判据 ⑫ 的阈值（**单一源**）：连续多少拍没回执才算“链路中断”。
+# 来历（按**实测零假设分布**定，不是拍脑袋）：
+#   · 健康台架的回执缺口率实测 ≈ 0.4%/拍（4h = 25/6242、10min = 3/242），
+#     两轮（含 4 小时那轮）**最长连续都是 1 拍**；
+#   · p=0.004、6242 拍下出现「连续 2 拍」的概率 ≈ 10%，「连续 3 拍」≈ 4e-4
+#     ⇒ 取 3 避开“偶尔抖一下”的假警报，同时保留可判性：
+#     **若取 < SOAK_STALL_ABORT(=5) 是无效的** —— 连续 5 拍脚本本来就早停，
+#     那种判据永远不可能红（假判据比没判据更坏）。
+#   ⚠ 换台架 / 换 AP / 换 LAN / 换板子后缺口率会变 ⇒ 阈值要**重测重定**。
+SOAK_STALL_MAX = 3
+SOAK_STALL_ABORT = 5          # 连续这么多拍没回执 ⇒ 判定链路已断、提前结束 soak
 
 
 class Rec:
@@ -254,7 +270,7 @@ def main():
                 miss += 1
                 stall += 1
                 max_stall = max(max_stall, stall)
-                if stall >= 5:
+                if stall >= SOAK_STALL_ABORT:
                     print("   ✗ 连续 %d 拍没有回执 —— 判定链路已断，提前结束 soak" % stall)
                     break
             if time.time() >= next_log:
@@ -302,9 +318,10 @@ def main():
            n_real_bad == 0,
            "soak 期间 ID=%d：被拒=%d（重复份=%d / 真失败=%d）；soak 前另有 %d 条"
            % (n_id, n_bad_id, n_dup_id, n_real_bad, id_seen_before))
-        ok("⑫ soak：无链路中断（每次都有回执）",
-           miss == 0 and max_stall < 5,
-           "缺回执=%d 次，最长连续=%d 拍" % (miss, max_stall))
+        ok("⑫ soak：期间无链路中断（不出现连续 %d 拍缺回执）" % SOAK_STALL_MAX,
+           max_stall < SOAK_STALL_MAX,
+           "缺回执=%d 次（占 %.2f%%，%d 拍）／最长连续=%d 拍"
+           % (miss, 100.0 * miss / max(cycles - ran_cycles, 1), cycles - ran_cycles, max_stall))
 
     try:
         # ---------------- 4) 闭环：N 拍（每拍 = REQ-CONNECT → REPORT → 已签 ID-REPORT） ----------------
