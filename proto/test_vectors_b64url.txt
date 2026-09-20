@@ -1,0 +1,20 @@
+# proto/test_vectors_b64url.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**
+# 来源（单一源）：orpah_id.b64url_encode()（= urlsafe_b64encode().rstrip('=')）
+# 列：<raw-hex><TAB><b64url>
+	
+66	Zg
+666f	Zm8
+666f6f	Zm9v
+666f6f62	Zm9vYg
+666f6f6261	Zm9vYmE
+fb	-w
+ff	_w
+ffff	__8
+ffffff	____
+ffffffff	_____w
+00	AA
+0000	AAA
+000000	AAAA
+3f9a8b2c1d4e5f6a7b8c9d0e1f2a3b4c	P5qLLB1OX2p7jJ0OHyo7TA
+0000000000000000000000000000000000000000000000000000000000000000	AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab	q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urqw

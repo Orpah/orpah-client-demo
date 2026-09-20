@@ -34,6 +34,8 @@ DEFAULT_ORPAH = os.path.abspath(os.path.join(REPO, "..", "orpah-over-halow"))
 
 VEC_SN = os.path.join(HERE, "test_vectors_sn.txt")
 VEC_PARSE = os.path.join(HERE, "test_vectors_snparse.txt")
+VEC_JCS = os.path.join(HERE, "test_vectors_jcs.txt")
+VEC_B64 = os.path.join(HERE, "test_vectors_b64url.txt")
 
 HEADER_SN = (
     "# proto/test_vectors_sn.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
@@ -45,6 +47,18 @@ HEADER_PARSE = (
     "# proto/test_vectors_snparse.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
     "# 来源（单一源）：Python 参考实现 orpah-over-halow/orpah_id.py 的 sn_ok/sn_err/verify_check\n"
     "# 列：SN<TAB>ok<TAB>err<TAB>verify   （err 的 None 记作 \"-\"）\n"
+)
+HEADER_JCS = (
+    "# proto/test_vectors_jcs.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源（单一源）：orpah_id.jcs()（= json.dumps(ensure_ascii=False, sort_keys=True,\n"
+    "#                                  separators=(',',':')) 的 UTF-8 字节）\n"
+    "# 列：<case-name><TAB><jcs-hex>\n"
+    "# ⚠ case-name 必须与 proto/jcs_cli.c 里 build_case() 的名字一一对应\n"
+)
+HEADER_B64 = (
+    "# proto/test_vectors_b64url.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源（单一源）：orpah_id.b64url_encode()（= urlsafe_b64encode().rstrip('=')）\n"
+    "# 列：<raw-hex><TAB><b64url>\n"
 )
 
 
@@ -117,6 +131,53 @@ def build_rows(o):
     return rows_sn, rows_parse
 
 
+# ★ 名字必须与 proto/jcs_cli.c 里 build_case() 的完全一致（不一致会 FAIL 并指出）
+JCS_CASES = {
+    "minimal": {},
+    "empty_arr": [],
+    "flat_int": {"a": 1, "b": -2, "c": 0},
+    "big_int": {"ts": 1789879939, "neg": -9223372036854775808},
+    "strings_basic": {"b": "hello", "a": "world"},
+    "strings_escape": {"q": 'a"b', "bs": "c\\d", "nl": "e\nf",
+                       "tab": "g\th", "ctl": "\u0001x"},
+    "unicode_utf8": {"s": "\u4e2d\u6587", "e": "\u00e9"},
+    "nested": {"o": {"z": 1, "a": {"y": 2, "x": 3}}},
+    "arr_mixed": {"a": [1, "x", True, None, {"k": 2}]},
+    "bool_null": {"t": True, "f": False, "n": None},
+    "key_order_case": {"Z": 1, "a": 2, "A": 3, "1": 4, "_": 5},
+    "report_shape": {
+        "hdr": {"typ": "orpah-id-report", "ver": 1, "alg": "ES256", "level": 0},
+        "payload": {
+            "sn": "CN-WH01-9AF3C1D2", "ts": 0,
+            "nonce": "3F9A8B2C1D4E5F6A7B8C9D0E1F2A3B4C",
+            "seen_routers": [
+                {"bssid": "AA:BB:CC:DD:EE:FF", "ssid": "ORPAHID_ZONE_A", "rssi": -42},
+                {"bssid": "11:22:33:44:55:66", "ssid": "ORPAHID_ZONE_B", "rssi": -71},
+            ],
+            "cap": {"rtc": False}, "battery_mv": 3900, "firmware": "c1-bench",
+        },
+    },
+}
+
+# b64url 用例：覆盖三种余数（0/1/2 字节）+ 字母表里的 - 与 _
+B64_CASES = [
+    "", "66", "666f", "666f6f", "666f6f62", "666f6f6261",
+    "fb", "ff", "ffff", "ffffff", "ffffffff",
+    "00", "0000", "000000",
+    "3f9a8b2c1d4e5f6a7b8c9d0e1f2a3b4c",                    # 16B
+    "00" * 32,                                              # 32B
+    "ab" * 64,                                              # 64B（ES256 raw r||s 的长度）
+]
+
+
+def gen_jcs_rows(o):
+    return [(name, o.jcs(obj).hex()) for name, obj in JCS_CASES.items()]
+
+
+def gen_b64_rows(o):
+    return [(h, o.b64url_encode(bytes.fromhex(h))) for h in B64_CASES]
+
+
 def read_rows(path):
     rows = []
     with open(path, "r", encoding="utf-8") as f:
@@ -126,7 +187,6 @@ def read_rows(path):
                 continue
             rows.append(tuple(line.split("\t")))
     return rows
-
 
 def write_rows(path, header, rows):
     with open(path, "w", encoding="utf-8", newline="\n") as f:
@@ -233,19 +293,28 @@ def main():
             print("!! --refresh 需要上游 Python 参考实现；已退出")
             return 2
         rows_sn, rows_parse = build_rows(o)
+        rows_jcs = gen_jcs_rows(o)
+        rows_b64 = gen_b64_rows(o)
         write_rows(VEC_SN, HEADER_SN, rows_sn)
         write_rows(VEC_PARSE, HEADER_PARSE, rows_parse)
-        print("--refresh 已重写：%s（%d 行）、%s（%d 行）"
+        write_rows(VEC_JCS, HEADER_JCS, rows_jcs)
+        write_rows(VEC_B64, HEADER_B64, rows_b64)
+        print("--refresh 已重写：%s(%d) / %s(%d) / %s(%d) / %s(%d)"
               % (os.path.basename(VEC_SN), len(rows_sn),
-                 os.path.basename(VEC_PARSE), len(rows_parse)))
+                 os.path.basename(VEC_PARSE), len(rows_parse),
+                 os.path.basename(VEC_JCS), len(rows_jcs),
+                 os.path.basename(VEC_B64), len(rows_b64)))
 
     # ---- ② 快照 vs Python 参考 -------------------------------------------
     if o is not None:
         exp_sn, exp_parse = build_rows(o)
-        got_sn = read_rows(VEC_SN)
-        got_parse = read_rows(VEC_PARSE)
-        for name, exp, got in (("test_vectors_sn.txt", exp_sn, got_sn),
-                               ("test_vectors_snparse.txt", exp_parse, got_parse)):
+        groups = [
+            ("test_vectors_sn.txt", exp_sn, read_rows(VEC_SN)),
+            ("test_vectors_snparse.txt", exp_parse, read_rows(VEC_PARSE)),
+            ("test_vectors_jcs.txt", gen_jcs_rows(o), read_rows(VEC_JCS)),
+            ("test_vectors_b64url.txt", gen_b64_rows(o), read_rows(VEC_B64)),
+        ]
+        for name, exp, got in groups:
             if [tuple(str(x) for x in r) for r in exp] != [tuple(r) for r in got]:
                 fails.append("快照 %s 与 Python 参考不一致（用 --refresh 重生成并核对 diff）" % name)
                 print("FAIL 快照 %s 与 Python 参考不一致" % name)
@@ -253,35 +322,43 @@ def main():
                     if tuple(str(x) for x in a) != tuple(b):
                         print("   line %d: PY=%s  FILE=%s" % (i + 1, a, b))
                         break
+                else:
+                    print("   行数不同：PY=%d FILE=%d" % (len(exp), len(got)))
             else:
                 print("PASS 快照 %s 与 Python 参考逐行一致（%d 行）" % (name, len(got)))
     else:
         print("跳过 ②：拿不到 Python 参考 ⇒ 只跑 C 侧自检（**不等于**已交叉验证）")
 
-    # ---- ① C 侧自检 -------------------------------------------------------
+    # ---- ① C 侧自检（每个内核一个可执行目标） ------------------------------
+    targets = [
+        ("SN 内核", "sn_cli", ["sn.c", "sn_cli.c"],
+         [("C selfcheck（SN 内置黄金样本）", ["selfcheck"]),
+          ("C selftest（校验位向量）", ["selftest", VEC_SN]),
+          ("C sn-selftest（SN 解析向量）", ["sn-selftest", VEC_PARSE])]),
+        ("JCS/b64url", "jcs_cli", ["jcs.c", "b64url.c", "jcs_cli.c"],
+         [("C selfcheck（JCS/b64url 冒烟）", ["selfcheck"]),
+          ("C jcs-selftest（JCS 向量）", ["jcs-selftest", VEC_JCS]),
+          ("C b64url-selftest（b64url 向量）", ["b64url-selftest", VEC_B64])]),
+    ]
     with tempfile.TemporaryDirectory() as td:
-        exe = os.path.join(td, "sn_cli.exe" if os.name == "nt" else "sn_cli")
-        how, err = compile_c(exe, [os.path.join(HERE, "sn.c"), os.path.join(HERE, "sn_cli.c")])
-        if err is not None:
-            print("FAIL 编译 C 侧失败（%s）：" % (how or "找不到编译器"))
-            print(err.strip() or "(无输出)")
-            return 2
-        print("C 侧已编译（%s）" % how)
-
-        checks = [
-            ("C selfcheck（内置黄金样本）", ["selfcheck"]),
-            ("C selftest（校验位向量）", ["selftest", VEC_SN]),
-            ("C sn-selftest（SN 解析向量）", ["sn-selftest", VEC_PARSE]),
-        ]
-        for title, argv in checks:
-            p = run(exe, argv)
-            out = (p.stdout or "").strip()
-            tail = out.splitlines()[-1] if out else ""
-            ok = (p.returncode == 0) and ("FAIL" not in out) and tail.startswith("PASS")
-            print("%s %s  ->  %s" % ("PASS" if ok else "FAIL", title, tail or "(无输出)"))
-            if not ok:
-                fails.append(title)
-                print(out)
+        for tname, tbin, srcs, checks in targets:
+            exe = os.path.join(td, tbin + (".exe" if os.name == "nt" else ""))
+            how, err = compile_c(exe, [os.path.join(HERE, s) for s in srcs])
+            if err is not None:
+                print("FAIL 编译 %s 失败（%s）：" % (tname, how or "找不到编译器"))
+                print(err.strip() or "(无输出)")
+                fails.append("编译 " + tname)
+                continue
+            print("C 侧已编译：%s（%s）" % (tname, how))
+            for title, argv in checks:
+                p = run(exe, argv)
+                out = (p.stdout or "").strip()
+                tail = out.splitlines()[-1] if out else ""
+                ok = (p.returncode == 0) and ("FAIL" not in out) and tail.startswith("PASS")
+                print("%s %s  ->  %s" % ("PASS" if ok else "FAIL", title, tail or "(无输出)"))
+                if not ok:
+                    fails.append(title)
+                    print(out)
 
     print("-" * 66)
     if fails:
@@ -290,7 +367,7 @@ def main():
     if o is None:
         print("PASS（C 侧自检全过；**未与 Python 交叉验证** —— 没找到上游参考实现）")
         return 0
-    print("PASS SN 内核：C 实现与 Python 参考零偏差（校验位 + SN 解析/校验三组）")
+    print("PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 / JCS / b64url 四组）")
     return 0
 
 
