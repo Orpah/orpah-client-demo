@@ -98,13 +98,16 @@ class L2Bus:
     """有线侧的裸以太帧传输。API 与 `hgic_bus.HgicBus` / 上游 `SerialAtBus` 一致。"""
 
     def __init__(self, iface=None, ethertype=ORPAH_ETHERTYPE, log=None,
-                 promisc=True, store_outgoing=True):
+                 promisc=True, store_outgoing=True, drop_own=True):
         _need_scapy()
         self.iface = iface
         self.ethertype = ethertype
         self.log = log
         self.promisc = promisc
         self.store_outgoing = store_outgoing
+        # ⚠ Npcap 会**同时**抓到本机发出的帧 ⇒ 不加这个开关的话，Router 会把自己刚发出去的下行
+        #   当成上行收回来（回路）。默认丢掉「源 MAC = 本机网卡 MAC」的帧，并单独计数。
+        self.drop_own = bool(drop_own)
         self.mac = None
         self.sock = None
         self.sniffer = None
@@ -112,6 +115,7 @@ class L2Bus:
         self.tx_frames = 0
         self.tx_fail = 0
         self.rx_frames_n = 0
+        self.own_dropped = 0
         self.bad = 0
 
     # ---------------- 连接 ----------------
@@ -164,6 +168,9 @@ class L2Bus:
         if len(raw) < 14:
             self.bad += 1
             return
+        if self.drop_own and self.mac and raw[6:12] == bytes(int(x, 16) for x in self.mac.split(":")):
+            self.own_dropped += 1
+            return
         self.rx_frames.put(raw)
         self.rx_frames_n += 1
 
@@ -199,7 +206,8 @@ class L2Bus:
     def stats(self):
         return {"iface": self.iface, "mac": self.mac, "tx_frames": self.tx_frames,
                 "tx_fail": self.tx_fail, "rx_frames": self.rx_frames_n,
-                "queued": self.rx_frames.qsize(), "bad": self.bad}
+                "queued": self.rx_frames.qsize(), "bad": self.bad,
+                "own_dropped": self.own_dropped}
 
 
 def eth_summary(p):

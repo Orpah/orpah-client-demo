@@ -127,6 +127,32 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
   * ⚠ **仍未验证**：PC 从 **AP 侧主机口**（TH-RJ45 的 **RJ45**）注入的帧能不能下行 —— 本机没有有线网卡，没接。
     细节与五条硬规矩（改角色不能复位、`AT+RSSI` 恒 0、判下行别用 `tx1`、AT 无数据面命令、CH347F VCP 抽风）
     见 `docs/txah-uart-macbus.md` §八。
+- **✓✓ 2026-09-20 同日：b 步「L2 全链路」也闭环了** —— 台架还是上面那套，但 **PC 同时扮
+  Router + Server**（不再只是裸帧夹具），客户端跑**上游真实业务栈**（`ClientHost`）：
+
+  * 拓扑：`ClientHost` ──CH347F/UART0(HGIC)── 客户端 TX-AH(STA) ──空口── TH-RJ45(AP，L2 透明桥)
+    ──RJ45── 中间路由器(当交换机) ── 家用 Wi-Fi ── 这台 PC 的 Wi-Fi 网卡 ──(Npcap)─→ `RouterBridge`
+    → 本机 `OrpahServer`（UDP 19447）。
+  * **PC 侧两段传输**：`tools/hgic_bus.py`（客户端侧，API 与厂商 `SerialAtBus` 同形）+ `tools/l2bus.py`
+    （有线侧，Npcap + scapy 收 `ether proto 0x88b5`）；**业务逻辑一行没改**（Router 用 `bus=` 注入）。
+  * **实测（一键 = `python tools\demo_l2_hgic.py --iface <网卡 MAC>`，退出码 0 = 四条判据全过）**：
+    ① `REQ-CONNECT` → `[client] [rx 1] ORPAH-ACCESS-INFO` ✓；
+    ② `REPORT` ×3：每次 `[client] 注入` → `[router] 上行` → `[server] 收到 ts/rssi/seq`
+       → `[router] [down] TRACKING-STATUS` → `[client] [rx]` ✓；
+    ③ `mark_tracked` → 走失表下发（Router 缓存 1 项）→ 再报一次 → `status=TRACKED` ✓；
+    ④ 零丢弃：`router_dropped=0 / server_dropped=0 / client_held=0` ✓。
+  * ★ **这条同时补上了上面那句「未验证」**：从 **AP 侧 RJ45** 进去的帧**确实能下行到客户端** ——
+    下行的 `ACCESS-INFO` / `TRACKING-STATUS` 就是 PC 从网卡发出去、经 RJ45 进 AP、过空口、
+    到客户端数据口的。
+  * ⚠ 两个必须记住的坑：
+    · **Npcap 会抓到本机自己发出的帧** ⇒ 不处理的话 Router 会把自己发的下行当上行收回来（回路）。
+      `l2bus.py` 默认 `drop_own=True`（丢「源 MAC = 本机网卡」的帧），且 Router 的 `self_mac` 用
+      **同一块网卡的 MAC** —— 实测 `own_dropped=5` 正好等于 Router 那 5 帧下行。
+    · **上游 `router.py` 需要一处小改**才能挂在裸以太总线上：`bus=` 注入 + `set_transport()`
+      （见 `orpah-over-halow` 那边的对应提交）。
+  * ⚠ **仍未验证（如实）**：这台 PC **仍没有有线网卡**，跑的是**家用 Wi-Fi 的 L2 域**
+    （中间路由器当交换机用）；真机形态（PC / OpenWrt 的**有线口**直连 AP 的 RJ45）没验。
+    ID-REPORT / 验签那一路也没在本夹具里跑（Server 未配密钥库 ⇒ 会判 `unknown_device`）。
 - 另一条（**未走**，留档）：用户 2026-09-16 曾选**第二块 TX-AH 当对端**
   （模块 A = STA ↔ CH347F `P2`；模块 B = AP ↔ CH347F `P3`；两块都刷同一版固件；判据 `xfer`）——
   那条路上**只有上行通、下行不通**（§7.4 表）。
@@ -148,10 +174,13 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 
 - 本仓目前**只有规则、骨架与本文档**（`AGENTS.md` / `README.md` / `ROADMAP.md` / `.gitignore`
   / `docs/`），**没有任何代码、自家固件未上机**。
-- b 步：**物理通路已重定为 UART macbus（CH347F 两路 UART + HGIC）**；**控制面 + 回程**（2026-09-16）与
-  **数据面端到端（上行过空口 + 下行到达主机口）**（2026-09-20）**都已真机跑通** ——
-  一键判据 `python tools\hgic_loop_test.py`，详见 `docs/txah-uart-macbus.md` §7.4/§八。
-  仅剩：**从 AP 侧主机口（RJ45）注入的下行**没验（本机没有线网卡）。
+- b 步：**物理通路已重定为 UART macbus（CH347F 两路 UART + HGIC）**；**控制面 + 回程**（2026-09-16）、
+  **数据面端到端**（上行过空口 + 下行到达主机口，2026-09-20）与
+  **L2 全链路闭环**（PC 同时扮 Router + Server，2026-09-20 同日）**都已真机跑通** ——
+  一键判据 `python tools\hgic_loop_test.py`（裸帧）与 `python tools\demo_l2_hgic.py`（全链路），
+  详见 `docs/txah-uart-macbus.md` §7.4/§八 与 `ROADMAP.md` §二。
+  仅剩：**真机形态的有线口**（PC/OpenWrt 有线网卡直连 AP 的 RJ45）没验 —— 本机没有有线网卡，
+  跑的是家用 Wi-Fi 的 L2 域；另 `ID-REPORT`/验签那一路未进本夹具。
 - c 步起的都未做：工具链虽已装但**本仓固件一行未写**；CH32 板 / ATECC608 未接线；
   ATECC608B 驱动、产线烧录、低功耗与取能标定全未做。
 - 客户端侧的 `seen_routers`（设备看到哪些路由器）在仿真器里仍是**演示写死值**，
