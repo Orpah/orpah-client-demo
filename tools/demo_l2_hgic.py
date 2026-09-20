@@ -25,6 +25,12 @@ demo_l2_hgic.py — b 步真链路**完整闭环**：PC 同时扮 Router + Serve
   ⑥ **负对照**：把已签报文的 payload 改掉（连 nonce 一起换）⇒ 必须**被拒**
      —— 证明验签真在跑，不是橡皮图章
 
+soak 模式（`--minutes > 0`）另加四条：⑨ 上游零丢弃 / ⑩ 数据口无重开无坏字节 /
+  ⑪ 期间**无真验签失败** / ⑫ 无链路中断（每次都有回执）。
+  ★ ⑪ 按**理由码**分类（`BENIGN_ID_ERRORS`）：`replay_detected` = 我们自己重发出去的
+    **第二份**（见 `hgic_bus.send_frame` 的确认重试），协议靠 nonce 去重正确吸收 ⇒
+    **不算失败**，但速率照实打印；**其它任何理由码 ⇒ 判失败**。
+
 用法：
   python tools\demo_l2_hgic.py                          # 有线侧网卡自动挑
   python tools\demo_l2_hgic.py --iface "WLAN 4" --reports 3
@@ -43,6 +49,13 @@ from hgic_bus import HgicBus                      # noqa: E402
 from l2bus import L2Bus                          # noqa: E402
 
 DEFAULT_ORPAH_DIR = os.path.abspath(os.path.join(HERE, "..", "..", "orpah-over-halow"))
+
+# 判据 ⑪ 的分类依据（**单一源**）：这些理由码 = 「协议正确防住了我们自己的重复投递」，
+# 不是验签失败。来历（2026-09-20 4h soak 取证）：`hgic_bus.send_frame` 写帧后只等 1.5s
+# 模组日志 `[mbus rx] <8+len> byte(s)`，等不到就**重发同一条帧**（第一份其实已经出去了）
+# ⇒ 空口上出现两份；服务端 nonce 去重（SPEC §5.5）拒掉第二份。实测 ≈0.5% 的拍，且只见于
+# 483B 的 ID 报文（3635 条 REPORT 收包零重复）。**除本表外的任何理由码都要让 ⑪ 判失败。**
+BENIGN_ID_ERRORS = ("replay_detected",)
 
 
 class Rec:
@@ -91,6 +104,9 @@ def main():
                     help="闭环拍数（每拍 = REQ-CONNECT + REPORT + 已签 ID-REPORT）")
     ap.add_argument("--gap", type=float, default=1.8,
                     help="拍间隔秒（默认 1.8s：远快于设计常态 60s，又慢于设备自限频 1.67 条/秒）")
+    ap.add_argument("--minutes", type=float, default=0.0,
+                    help=">0 = 跑 soak（先跑完前面的短流程确立判据，再持续跑这么久）")
+    ap.add_argument("--log-every", type=float, default=60.0, help="soak 每隔多少秒打一行进度")
     ap.add_argument("--rtc", choices=["none", "true", "false"], default="false",
                     help="cap.rtc 三态声明（默认 false：真机 CH32V203 无 RTC）")
     ap.add_argument("--real-ts", action="store_true",
@@ -194,6 +210,102 @@ def main():
 
     host.send_id_report = _spy_send_id
 
+    # ---------------- 7) soak（--minutes > 0）：长跑看链路/端口稳定 ----------------
+    def soak(minutes, gap, log_every, ran_cycles):
+        """持续跑同一套闭环，周期打点；连续无回执就**如实早停**。
+
+        为什么这么做：b 步在真机上已经能跑单场闭环，但「能不能一直跑」是另一件事 ——
+        CH347F 的 VCP、USB、AP、家用 LAN 任一抽风都会现形，而**只有长跑才看得见**。
+        """
+        t0 = time.time()
+        end = t0 + minutes * 60.0
+        cycles = ran_cycles
+        # 负对照（故意篡改的那一条）发生在 soak **之前** ⇒ 它的“被拒”不能算进 soak 判据
+        id_seen_before = len(rec.id_recs)
+        miss = 0
+        stall = 0
+        max_stall = 0
+        next_log = t0 + log_every
+
+        def stat_ids():
+            """soak 期间的 ID 验签结果分类（进度行与收尾判据**共用**这一处）。
+
+            返回 (总数, 被拒, 重复份, 真失败)：重复份 = 理由码落在 `BENIGN_ID_ERRORS`
+            里的那些（我们自己重发造成的第二份）；真失败 = 其余被拒。
+            """
+            seen = rec.id_recs[id_seen_before:]
+            bad = [r for r in seen if not r["accepted"]]
+            d = sum(1 for r in bad if r.get("error") in BENIGN_ID_ERRORS)
+            return len(seen), len(bad), d, len(bad) - d
+
+        print("=" * 84)
+        print("7) soak：%g 分钟（拍间隔 %.2fs）—— 设计常态是 60s/拍，这里为演示加速 ≈ %.0f 倍"
+              % (minutes, gap, 60.0 / gap))
+        print("   ⚠ 期间别用 COM23/COM6，也别关这个 VS Code 窗口（后台任务活在这里）")
+        while time.time() < end:
+            n_t, n_i = len(rec.tracking), len(rec.id_recs)
+            sim.cycle()
+            cycles += 1
+            got = wait_for(lambda: len(rec.tracking) > n_t, timeout=8.0)
+            wait_for(lambda: len(rec.id_recs) > n_i, timeout=8.0)
+            if got:
+                stall = 0
+            else:
+                miss += 1
+                stall += 1
+                max_stall = max(max_stall, stall)
+                if stall >= 5:
+                    print("   ✗ 连续 %d 拍没有回执 —— 判定链路已断，提前结束 soak" % stall)
+                    break
+            if time.time() >= next_log:
+                next_log = time.time() + log_every
+                st = bus.stats()
+                n_id, n_bad, n_dup, n_real = stat_ids()
+                print("   [%6.0fs] 拍=%d 上/回=%d/%d ID=%d(重复份=%d 真失败=%d) "
+                      "丢(rtr/srv)=%d/%d 延后=%d 重开=%d 坏字节=%d 缺回执=%d"
+                      % (time.time() - t0, cycles, rec.reports, len(rec.tracking),
+                         n_id, n_dup, n_real, rb.rl_dropped, len(srv.rl_drops),
+                         host.self_held, st["reopens"], st["bad_bytes"], miss))
+            time.sleep(gap)
+
+        el = max(time.time() - t0, 1e-6)
+        st = bus.stats()
+        n_id, n_bad_id, n_dup_id, n_real_bad = stat_ids()
+        print("   soak 结束：%.1f 分钟 / 共 %d 拍（%.2f 拍/秒）"
+              % (el / 60.0, cycles, cycles / el))
+        if n_bad_id:
+            reasons = {}
+            for r in rec.id_recs[id_seen_before:]:
+                if not r["accepted"]:
+                    k = r.get("error")
+                    reasons[k] = reasons.get(k, 0) + 1
+            print("   ID 被拒 %d/%d，按理由码：%s（单列 %s = 重发的重复份，其余都算真失败）"
+                  % (n_bad_id, n_id, reasons, "/".join(BENIGN_ID_ERRORS)))
+            if n_dup_id:
+                print("   ⚠ 重复投递率 ≈ %.2f%%（%d/%d 条）—— 来源 = host 侧发送确认重试"
+                      "（`hgic_bus.send_frame` 1.5s 内没看到模组 `[mbus rx] n byte(s)` 就重发，"
+                      "而第一份已经出去了）；协议侧由 nonce 去重吸收（SPEC §5.5）。"
+                      % (100.0 * n_dup_id / max(n_id, 1), n_dup_id, n_id))
+            if n_real_bad:
+                r0 = next(r for r in rec.id_recs[id_seen_before:]
+                          if not r["accepted"] and r.get("error") not in BENIGN_ID_ERRORS)
+                print("   ✗ 真失败样例：error=%s trust=%s alg=%s level=%s"
+                      % (r0.get("error"), r0.get("trust"), r0.get("alg"), r0.get("level")))
+        ok("⑨ soak：上游零丢弃（Router/Server 限频）",
+           rb.rl_dropped == 0 and len(srv.rl_drops) == 0,
+           "router_dropped=%d server_dropped=%d" % (rb.rl_dropped, len(srv.rl_drops)))
+        ok("⑩ soak：数据口无重开、无坏字节",
+           st["reopens"] == 0 and st["bad_bytes"] == 0,
+           "reopens=%d bad_bytes=%d tx_retry=%d"
+           % (st["reopens"], st["bad_bytes"], st.get("tx_retry", -1)))
+        ok("⑪ soak：期间无真验签失败（重发的重复份单列，不算失败）",
+           n_real_bad == 0,
+           "soak 期间 ID=%d：被拒=%d（重复份=%d / 真失败=%d）；soak 前另有 %d 条"
+           % (n_id, n_bad_id, n_dup_id, n_real_bad, id_seen_before))
+        ok("⑫ soak：无链路中断（每次都有回执）",
+           miss == 0 and max_stall < 5,
+           "缺回执=%d 次，最长连续=%d 拍" % (miss, max_stall))
+
     try:
         # ---------------- 4) 闭环：N 拍（每拍 = REQ-CONNECT → REPORT → 已签 ID-REPORT） ----------------
         print("=" * 84)
@@ -216,8 +328,10 @@ def main():
         n_ok_id = sum(1 for r in rec.id_recs if r["accepted"])
         if any(not r["accepted"] for r in rec.id_recs):
             r0 = next(r for r in rec.id_recs if not r["accepted"])
-            print("   ⚠ 有 ID 被拒：error=%s trust=%s alg=%s level=%s"
-                  % (r0.get("error"), r0.get("trust"), r0.get("alg"), r0.get("level")))
+            print("   ⚠ 有 ID 被拒：error=%s trust=%s alg=%s level=%s%s"
+                  % (r0.get("error"), r0.get("trust"), r0.get("alg"), r0.get("level"),
+                     "（= 重发的重复份，协议用 nonce 去重正确拒掉；不是验签失败）"
+                     if r0.get("error") in BENIGN_ID_ERRORS else "（**非**重复份 → 要查）"))
         ok("① 周期上报：Server 都收下", rec.reports >= args.reports,
            "reports=%d/%d" % (rec.reports, args.reports))
         ok("② 服务端回执：收到 TRACKING-STATUS", len(rec.tracking) >= args.reports,
@@ -284,6 +398,10 @@ def main():
             print("   ⚠ 设备侧自限频**延后**了 %d 条（不是丢弃，下一拍会再发）——"
                   "说明拍间隔比设备自限频（0.6s / 1.67 条每秒）还快，把 --gap 调大即可"
                   % host.self_held)
+
+        # ---------------- 7) soak（可选，--minutes > 0） ----------------
+        if args.minutes > 0:
+            soak(args.minutes, args.gap, args.log_every, sim.tick)
     finally:
         print("=" * 84)
         print("计数（供核对）：")
