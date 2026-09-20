@@ -222,7 +222,7 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 |---|---|---|
 | **c1** | 本仓 `firmware/` 骨架：Makefile / `ld` / startup / `Core{board.h,main.c}` / `Periph{gpio,uart}` | **✅ 完成（未上机）** |
 | c2 | 协议内核 C 实现 + 与 Python 的**交叉测试**（同一批黄金向量，纯 PC） | **✅ 完成（见下）** |
-| **c3** | HGIC 数据口（UART ↔ TX-AH：8 字节头 + `FRM2` + `CMD`/`EVENT`） | **帧层 ✅ 完成（未上机）**；上机 = UART2 胶水 + 烧录（见下 c3-1） |
+| **c3** | HGIC 数据口（UART ↔ TX-AH：8 字节头 + `FRM2` + `CMD`/`EVENT`） | **帧层 ✅ 完成（未上机）**；`proto/*.c` **已编进固件**（2026-09-20）；剩 UART2 胶水 + 烧录 |
 | c4 | §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）+ 自限频 + 已签 ID 上报 | **进行中**：**降级（HS256）已达服务端验签通过**（见下 c4-α）；ES256 待拍板 |
 | c5 | 低功耗 / 取能标定 | 推后到 d/e |
 
@@ -303,7 +303,27 @@ Mod97 是 `21`（我一开始凭记忆把 B 当成 Luhn32 期望值 ⇒ 自检�
   字节 `1A 2B` = `0x2B1A`（模组→主机）；我自检里就拿错了方向（4 项红），而**向量组当时已经证明实现是对的**
   ⇒ 错的是测试数据（教训同 c2：期望值/用例也要拿证据对齐）；② C 的解析缓冲有上界（4096）而 Python 没有
   ⇒ 多一个 `overrun` 计数器（向量里恒 0，收录它就是钉住“合法数据永不触发它”）。
-* **未做（= c3-2，要上机）**：`Periph/` 下的 UART2 胶水 + 把 `proto/*.c` 编进固件 + 用户烧录。
+* **已做一半（c3-2a，2026-09-20）**：把 `proto/*.c` **编进固件**（`firmware/Makefile` 新增
+  `PROTO_DIR`/`PROTO_SRCS` + `build/proto/` 独立目录规则 —— 不能靠 `$(BUILD)/%.o: %.c`，
+  那会把 `../proto/x.c` 的目标算成 `build/../proto/x.o`，等于把 .o 写回仓库）。
+  实测：9 个 proto 源全编过（`-Wall -Wextra` **无告警**）、链接成功；`size` = **text/data/bss
+  2046/0/20224**，**与接线前逐字节相同** ⇒ `--gc-sections` 把没人调用的 proto 代码全丢了。
+  ★ 但这是**弱证据**：真正的「proto 能不能 `-nostdlib` 链接」要等状态机真调用它们才算数。
+  ★★ **于是把它当真测了一次（同日）**：把 `--gc-sections` 关掉重链 ⇒ **失败**，缺的是
+  **libgcc** 的 `__udivdi3`/`__umoddi3`（`jcs.c` 的 enc/parse）与 `__lshrdi3`（`sha256.c`
+  的 `sha256_final`）—— 32 位目标上做 64 位除/模/右移要用它们。当前 LDFLAGS 是 `-nostdlib`
+  **不带 `libgcc`** ⇒ 现在能编过、只是因为 proto 全是**死代码**被 gc 丢掉了。
+  实测：**追加 `-lgcc` 后全量保留也能链**（`text 15118 / data 0 / bss 20224`；flash 64 K 够用，
+  bss 与接线前逐字节相同 ⇒ proto **没有静态数据**，全是调用方 arena/栈）。
+  ⇒ **状态机一旦真调用 proto，就必须给 LDFLAGS 加 `-lgcc`**（**待拍板，本次未改**）。
+* **未做（= c3-2b，要上机）**：`Periph/` 下的 UART2 胶水（**引脚口径待定**）+ 用户烧录。
+* ⚠ `firmware/Makefile` 两条 Windows 实测坑（已写进该文件头）：
+  ① recipe 里**没有 shell 元字符**的行，make 会**直接 exec** 那个程序（不经 sh）⇒ `mkdir -p` /
+     `ls -l` / `rm -rf` 全都报「找不到指定的文件」；而 `make SHELL='D:/Program Files/Git/bin/sh.exe'`
+     在这个组合下**没能改变**这一点（`sh.exe` 确实在，但不在 PATH；加进 PATH 也没用）。
+     本仓已去掉 recipe 里的 `ls`；**`mkdir -p` / `rm -rf` 仍在**（干净树上会挂）—— 要改得用户点头。
+  ② 变量赋值**别写行内注释**：注释前的对齐空格会留在值里 ⇒ 先决条件变成 `../proto   /sn.c`
+     （找不到）⇒ 规则**静默失效**；同时 `-I../proto   ` 又能编译（编译器容忍尾空格）⇒ 现象很迷惑。
 
 ⚠ **剩下的两块**：① **c3-2 上机接线**（UART2 ↔ HGIC + 把 `proto/*.c` 编进固件 + 烧录）；
 ② **ECDSA P-256（level=0）** ⇒ 要先拍两个板（软件 P-256 的来源、`k`/nonce 方案，见下）。
