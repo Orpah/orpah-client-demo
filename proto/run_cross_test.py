@@ -38,6 +38,7 @@ VEC_JCS = os.path.join(HERE, "test_vectors_jcs.txt")
 VEC_B64 = os.path.join(HERE, "test_vectors_b64url.txt")
 VEC_MSG = os.path.join(HERE, "test_vectors_msg.txt")
 VEC_DL = os.path.join(HERE, "test_vectors_downlink.txt")
+VEC_SHA = os.path.join(HERE, "test_vectors_sha256.txt")
 
 HEADER_SN = (
     "# proto/test_vectors_sn.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
@@ -77,6 +78,13 @@ HEADER_DL = (
     "# 列：<json-hex><TAB>valid<TAB>type<TAB>sn<TAB>ts<TAB>tracked<TAB>status<TAB>code\n"
     "#   ⚠ 只收录“Python 也说无效”的无效用例（浮点/超 int64/嵌套过深 是 C 有意加严，\n"
     "#     不入向量，边界见 proto/README.md）\n"
+)
+HEADER_SHA = (
+    "# proto/test_vectors_sha256.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源（单一源）：Python hashlib.sha256()\n"
+    "# 列：<input-hex><TAB><digest-hex>   （空输入 = 行首就是 TAB）\n"
+    "# 覆盖：空 / 一个块边界 55/56/57/63/64/65/127/128 / 1000 字节 / 全零 128B,\n"
+    "#       以及**真实签名预像**（jcs({\"hdr\",\"payload\"})，即 c4 要签的那串字节）\n"
 )
 
 
@@ -287,6 +295,37 @@ def gen_dl_rows(o, proto):
     return rows
 
 
+# SHA-256 输入：块边界是重点（55/56/57 决定填充走一块还是两块）
+def sha_inputs(o):
+    preimage = o.jcs({
+        "hdr": {"typ": "orpah-id-report", "ver": 1, "alg": "ES256", "level": 0},
+        "payload": {
+            "sn": "CN-WH01-9AF3C1D2", "ts": 0,
+            "nonce": "3F9A8B2C1D4E5F6A7B8C9D0E1F2A3B4C",
+            "seen_routers": [{"bssid": "AA:BB:CC:DD:EE:FF", "ssid": "ORPAHID_ZONE_A",
+                              "rssi": -42}],
+            "cap": {"rtc": False}, "battery_mv": 3900, "firmware": "c4",
+        },
+    })
+    fill = lambda n: bytes([(i * 7 + 3) % 251 for i in range(n)])
+    return [
+        ("empty", b""),
+        ("abc", b"abc"),
+        ("nist-two-block", b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+        ("range-256", bytes(range(256))),
+        ("55", fill(55)), ("56", fill(56)), ("57", fill(57)),
+        ("63", fill(63)), ("64", fill(64)), ("65", fill(65)),
+        ("127", fill(127)), ("128", fill(128)), ("129", fill(129)),
+        ("1000", fill(1000)), ("zeros-128", b"\x00" * 128),
+        ("real-preimage", preimage),
+    ]
+
+
+def gen_sha_rows(o):
+    import hashlib
+    return [(data.hex(), hashlib.sha256(data).hexdigest()) for _label, data in sha_inputs(o)]
+
+
 def read_rows(path):
     rows = []
     with open(path, "r", encoding="utf-8") as f:
@@ -409,19 +448,22 @@ def main():
         rows_b64 = gen_b64_rows(o)
         rows_msg = gen_msg_rows(o, proto)
         rows_dl = gen_dl_rows(o, proto)
+        rows_sha = gen_sha_rows(o)
         write_rows(VEC_SN, HEADER_SN, rows_sn)
         write_rows(VEC_PARSE, HEADER_PARSE, rows_parse)
         write_rows(VEC_JCS, HEADER_JCS, rows_jcs)
         write_rows(VEC_B64, HEADER_B64, rows_b64)
         write_rows(VEC_MSG, HEADER_MSG, rows_msg)
         write_rows(VEC_DL, HEADER_DL, rows_dl)
-        print("--refresh 已重写：%s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d)"
+        write_rows(VEC_SHA, HEADER_SHA, rows_sha)
+        print("--refresh 已重写：%s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d)"
               % (os.path.basename(VEC_SN), len(rows_sn),
                  os.path.basename(VEC_PARSE), len(rows_parse),
                  os.path.basename(VEC_JCS), len(rows_jcs),
                  os.path.basename(VEC_B64), len(rows_b64),
                  os.path.basename(VEC_MSG), len(rows_msg),
-                 os.path.basename(VEC_DL), len(rows_dl)))
+                 os.path.basename(VEC_DL), len(rows_dl),
+                 os.path.basename(VEC_SHA), len(rows_sha)))
 
     # ---- ② 快照 vs Python 参考 -------------------------------------------
     if o is not None:
@@ -437,6 +479,7 @@ def main():
             groups.append(("test_vectors_downlink.txt", gen_dl_rows(o, proto), read_rows(VEC_DL)))
         else:
             print("跳过 test_vectors_msg/downlink.txt：拿不到 orpah_proto（报文构造/解码的单一源）")
+        groups.append(("test_vectors_sha256.txt", gen_sha_rows(o), read_rows(VEC_SHA)))
         for name, exp, got in groups:
             if [tuple(str(x) for x in r) for r in exp] != [tuple(r) for r in got]:
                 fails.append("快照 %s 与 Python 参考不一致（用 --refresh 重生成并核对 diff）" % name)
@@ -464,6 +507,9 @@ def main():
           ("C b64url-selftest（b64url 向量）", ["b64url-selftest", VEC_B64]),
           ("C msg-selftest（报文信封向量）", ["msg-selftest", VEC_MSG]),
           ("C dl-selftest（下行解码向量）", ["dl-selftest", VEC_DL])]),
+        ("SHA-256", "sha_cli", ["sha256.c", "sha_cli.c"],
+         [("C selfcheck（分块自洽）", ["selfcheck"]),
+          ("C sha256-selftest（hashlib 向量）", ["sha256-selftest", VEC_SHA])]),
     ]
     with tempfile.TemporaryDirectory() as td:
         for tname, tbin, srcs, checks in targets:
@@ -492,7 +538,7 @@ def main():
     if o is None:
         print("PASS（C 侧自检全过；**未与 Python 交叉验证** —— 没找到上游参考实现）")
         return 0
-    print("PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 / JCS / b64url / 报文信封 / 下行解码 六组）")
+    print("PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 / JCS / b64url / 报文信封 / 下行解码 / SHA-256 七组）")
     return 0
 
 

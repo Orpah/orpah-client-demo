@@ -1,7 +1,9 @@
 # proto/ — 协议内核（C 实现）+ 与 Python 的交叉测试
 
-**c2 状态（2026-09-20）：SN 内核 + JCS + b64url + 报文信封 + **下行解码** 全部完成并通过交叉测试（6 组）。
-剩余：HGIC 帧层（8 字节头 / `FRM2`）⇒ 与 c3 的数据口驱动一起做。**
+**c2 状态（2026-09-20）：SN 内核 + JCS + b64url + 报文信封 + 下行解码 + **SHA-256** 全部完成，
+交叉测试 7 组。
+剩余：HGIC 帧层（8 字节头 / `FRM2`）⇒ 与 c3 的数据口驱动一起做；
+HMAC-SHA256（降级 HS256）与 ECDSA（需先拍 P-256 来源 / k 方案）⇒ c4。**
 
 ## 为什么要这一层
 
@@ -22,8 +24,9 @@
 | `jcs.h` / `jcs.c` | **RFC 8785 JCS 规范化**（我们用到的那部分）+ 迷你 JSON 构建器；`jcs_preimage()` = `orpah_id.preimage_of`。**不用 stdio/malloc/浮点 ⇒ 可编进固件** |
 | `msg.h` / `msg.c` | 链路报文构造器：`msg_req_connect` / `msg_report` / `msg_id_report`（对齐 `orpah_proto._base`+`build_*` 的**插入序**）。`id-report` 的 `sn` 取**内层 payload.sn** |
 | `downlink.h` / `downlink.c` | **下行解码**：`dl_decode()`（同 `decode_msg`：必为对象 + `type` 已知）+ `dl_type/dl_str/dl_int/dl_truthy`（Python 真值语义） |
+| `sha256.h` / `sha256.c` | **SHA-256**（FIPS 180-4）：`sha256_init/update/final` + 一次性 `sha256()`。§5.1 的 `SHA-256(preimage)` 用；也是将来 RFC 6979 确定性 k 的前置 |
 | `b64url.h` / `b64url.c` | base64url（无填充），对应 `orpah_id.b64url_encode` |
-| `sn_cli.c` / `jcs_cli.c` | host 侧 CLI（对拍/调试用；**不编进固件**）。`jcs_cli` 同时还管 JCS/b64url/报文三组 |
+| `sn_cli.c` / `jcs_cli.c` / `sha_cli.c` | host 侧 CLI（对拍/调试用；**不编进固件**）。`jcs_cli` 同时管 JCS/b64url/报文/下行四组 |
 | `run_cross_test.py` | 一键对拍：生成/校验向量 + 编译 C + 三方比对 |
 | `test_vectors_sn.txt` | `ORG-UNIQUE<TAB>LUHN32<TAB>MOD97`（63 行） |
 | `test_vectors_snparse.txt` | `SN<TAB>ok<TAB>err<TAB>verify`（19 行） |
@@ -31,6 +34,7 @@
 | `test_vectors_b64url.txt` | `<raw-hex><TAB><b64url>`（17 行，含 0/1/2 字节三种余数与字母表里的 `-` `_`） |
 | `test_vectors_msg.txt` | `<kind><TAB>a1..a5<TAB><envelope-hex>`（8 行：req-connect / report / id-report） |
 | `test_vectors_downlink.txt` | `<json-hex><TAB>valid/type/sn/ts/tracked/status/code`（11 行：3 种下行 + 5 种畸形 + 1 个真值语义） |
+| `test_vectors_sha256.txt` | `<input-hex><TAB><digest-hex>`（16 行：空 / 块边界 55~129 / 1000B / **真实签名预像**） |
 
 > 四份向量文件全部**由 Python 参考实现生成（勿手改）**，列在脚本里统一用 `--refresh` 重生。
 
@@ -44,11 +48,13 @@ python proto/run_cross_test.py --orpah-dir ../orpah-over-halow
 
 它对三件事下结论：
 
-1. **C 侧自检**（两个可执行目标）：
+1. **C 侧自检**（三个可执行目标）：
    · **SN 内核**：`selfcheck`（11 项）+ `selftest`（63 行校验位）+ `sn-selftest`（19 行 SN 解析）
    · **JCS/b64url/msg/dl**：`selfcheck`（4 项）+ `jcs-selftest`（12 行）+ `b64url-selftest`（17 行）
      + `msg-selftest`（8 行报文信封）+ `dl-selftest`（11 行下行解码）
-2. **快照没过期**：六份向量文件与 Python 参考**逐行一致**；
+   · **SHA-256**：`selfcheck`（**分块自洽 3343 项**：同一条输入“一次算”与“分多段喂”必须逐位相同）
+     + `sha256-selftest`（16 行 hashlib 向量）
+2. **快照没过期**：七份向量文件与 Python 参考**逐行一致**；
 3. 合起来 ⇒ **C ↔ 向量文件 ↔ Python 三方零偏差**。
 
 ⚠ 找不到上游参考实现时，脚本会**明确打印"未与 Python 交叉验证"**（但仍退出 0，因为 C 侧自检确实过了）——
