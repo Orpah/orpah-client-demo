@@ -36,6 +36,7 @@ VEC_SN = os.path.join(HERE, "test_vectors_sn.txt")
 VEC_PARSE = os.path.join(HERE, "test_vectors_snparse.txt")
 VEC_JCS = os.path.join(HERE, "test_vectors_jcs.txt")
 VEC_B64 = os.path.join(HERE, "test_vectors_b64url.txt")
+VEC_MSG = os.path.join(HERE, "test_vectors_msg.txt")
 
 HEADER_SN = (
     "# proto/test_vectors_sn.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
@@ -59,6 +60,15 @@ HEADER_B64 = (
     "# proto/test_vectors_b64url.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
     "# 来源（单一源）：orpah_id.b64url_encode()（= urlsafe_b64encode().rstrip('=')）\n"
     "# 列：<raw-hex><TAB><b64url>\n"
+)
+HEADER_MSG = (
+    "# proto/test_vectors_msg.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源（单一源）：orpah_proto.build_*() + encode_msg()（**插入序**，不带 sort_keys，\n"
+    "#                  separators=(',',':')）—— 信封不是 JCS！\n"
+    "# 列：<kind><TAB><a1><TAB><a2><TAB><a3><TAB><a4><TAB><a5><TAB><envelope-hex>\n"
+    "#   req-connect : a1=sn a2=ts a3=mac|- a4=hw|- a5=-\n"
+    "#   report      : a1=sn a2=ts a3=seq a4=cap(-|0|1) a5=rssi|-\n"
+    "#   id-report   : a1=sn a2=ts a3..a5=-（内层用固定 stub，两侧一致）\n"
 )
 
 
@@ -178,6 +188,51 @@ def gen_b64_rows(o):
     return [(h, o.b64url_encode(bytes.fromhex(h))) for h in B64_CASES]
 
 
+# ★ 报文用例：与 proto/jcs_cli.c 的 msg_case_hex() 共用同一套 7 列规格
+MSG_CASES = [
+    ("req-connect", "CN-WH01-9AF3C1D2", "0", "-", "-", "-"),
+    ("req-connect", "CN-WH01-9AF3C1D2", "1789879939", "4A:06:59:00:00:01", "CH32V203+TX-AH", "-"),
+    ("report", "CN-WH01-9AF3C1D2", "0", "1", "-", "-"),
+    ("report", "CN-WH01-9AF3C1D2", "0", "1", "0", "-55"),
+    ("report", "CN-WH01-9AF3C1D2", "1789879939", "7", "1", "-42"),
+    ("report", "CN-WH01-9AF3C1D2", "0", "2", "-", "-20"),
+    ("id-report", "CN-WH01-9AF3C1D2", "0", "-", "-", "-"),
+    ("id-report", "CN-WH01-9AF3C1D2", "1789879939", "-", "-", "-"),
+]
+
+ID_STUB_NONCE = "AA" * 16
+ID_STUB_SIG = "STUB"
+
+
+def _id_stub(sn):
+    """id-report 外壳用例的内层报文 stub（**必须与 jcs_cli.c 的 id_stub() 一致**）。"""
+    return {"hdr": {"typ": "orpah-id-report", "ver": 1, "alg": "ES256", "level": 0},
+            "payload": {"sn": sn, "ts": 0, "nonce": ID_STUB_NONCE, "seen_routers": []},
+            "sig": ID_STUB_SIG}
+
+
+def build_msg_case(proto, kind, a1, a2, a3, a4, a5):
+    if kind == "req-connect":
+        msg = proto.build_req_connect(a1, mac=None if a3 == "-" else a3,
+                                      hw=None if a4 == "-" else a4, ts=int(a2))
+    elif kind == "report":
+        cap = None if a4 == "-" else {"rtc": a4 == "1"}
+        msg = proto.build_report(a1, ts=int(a2), seq=int(a3), cap=cap,
+                                 rssi=None if a5 == "-" else int(a5))
+    elif kind == "id-report":
+        msg = proto.build_id_report(_id_stub(a1), ts=int(a2))
+    else:
+        raise ValueError("unknown kind: %s" % kind)
+    return proto.encode_msg(msg).hex()
+
+
+def gen_msg_rows(o, proto):
+    rows = []
+    for kind, a1, a2, a3, a4, a5 in MSG_CASES:
+        rows.append((kind, a1, a2, a3, a4, a5, build_msg_case(proto, kind, a1, a2, a3, a4, a5)))
+    return rows
+
+
 def read_rows(path):
     rows = []
     with open(path, "r", encoding="utf-8") as f:
@@ -277,33 +332,39 @@ def main():
 
     fails = []
     o = None
+    proto = None
     if os.path.isdir(args.orpah_dir):
         sys.path.insert(0, args.orpah_dir)
         try:
             import orpah_id as o                      # noqa: F401
+            import orpah_proto as proto               # noqa: F401
         except Exception as e:                        # noqa: BLE001
-            print("!! 找到 %s 但 import orpah_id 失败：%r" % (args.orpah_dir, e))
+            print("!! 找到 %s 但 import orpah_id/orpah_proto 失败：%r" % (args.orpah_dir, e))
             o = None
+            proto = None
     else:
         print("!! 未找到上游参考实现目录 %s（--orpah-dir 指定）" % args.orpah_dir)
 
     # ---- ③ --refresh：先重写向量（需要上游） -------------------------------
     if args.refresh:
-        if o is None:
-            print("!! --refresh 需要上游 Python 参考实现；已退出")
+        if o is None or proto is None:
+            print("!! --refresh 需要上游 Python 参考实现（orpah_id + orpah_proto）；已退出")
             return 2
         rows_sn, rows_parse = build_rows(o)
         rows_jcs = gen_jcs_rows(o)
         rows_b64 = gen_b64_rows(o)
+        rows_msg = gen_msg_rows(o, proto)
         write_rows(VEC_SN, HEADER_SN, rows_sn)
         write_rows(VEC_PARSE, HEADER_PARSE, rows_parse)
         write_rows(VEC_JCS, HEADER_JCS, rows_jcs)
         write_rows(VEC_B64, HEADER_B64, rows_b64)
-        print("--refresh 已重写：%s(%d) / %s(%d) / %s(%d) / %s(%d)"
+        write_rows(VEC_MSG, HEADER_MSG, rows_msg)
+        print("--refresh 已重写：%s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d)"
               % (os.path.basename(VEC_SN), len(rows_sn),
                  os.path.basename(VEC_PARSE), len(rows_parse),
                  os.path.basename(VEC_JCS), len(rows_jcs),
-                 os.path.basename(VEC_B64), len(rows_b64)))
+                 os.path.basename(VEC_B64), len(rows_b64),
+                 os.path.basename(VEC_MSG), len(rows_msg)))
 
     # ---- ② 快照 vs Python 参考 -------------------------------------------
     if o is not None:
@@ -314,6 +375,10 @@ def main():
             ("test_vectors_jcs.txt", gen_jcs_rows(o), read_rows(VEC_JCS)),
             ("test_vectors_b64url.txt", gen_b64_rows(o), read_rows(VEC_B64)),
         ]
+        if proto is not None:
+            groups.append(("test_vectors_msg.txt", gen_msg_rows(o, proto), read_rows(VEC_MSG)))
+        else:
+            print("跳过 test_vectors_msg.txt：拿不到 orpah_proto（报文构造器的单一源）")
         for name, exp, got in groups:
             if [tuple(str(x) for x in r) for r in exp] != [tuple(r) for r in got]:
                 fails.append("快照 %s 与 Python 参考不一致（用 --refresh 重生成并核对 diff）" % name)
@@ -335,10 +400,11 @@ def main():
          [("C selfcheck（SN 内置黄金样本）", ["selfcheck"]),
           ("C selftest（校验位向量）", ["selftest", VEC_SN]),
           ("C sn-selftest（SN 解析向量）", ["sn-selftest", VEC_PARSE])]),
-        ("JCS/b64url", "jcs_cli", ["jcs.c", "b64url.c", "jcs_cli.c"],
+        ("JCS/b64url/msg", "jcs_cli", ["jcs.c", "b64url.c", "msg.c", "jcs_cli.c"],
          [("C selfcheck（JCS/b64url 冒烟）", ["selfcheck"]),
           ("C jcs-selftest（JCS 向量）", ["jcs-selftest", VEC_JCS]),
-          ("C b64url-selftest（b64url 向量）", ["b64url-selftest", VEC_B64])]),
+          ("C b64url-selftest（b64url 向量）", ["b64url-selftest", VEC_B64]),
+          ("C msg-selftest（报文信封向量）", ["msg-selftest", VEC_MSG])]),
     ]
     with tempfile.TemporaryDirectory() as td:
         for tname, tbin, srcs, checks in targets:
@@ -367,7 +433,7 @@ def main():
     if o is None:
         print("PASS（C 侧自检全过；**未与 Python 交叉验证** —— 没找到上游参考实现）")
         return 0
-    print("PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 / JCS / b64url 四组）")
+    print("PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 / JCS / b64url / 报文信封 五组）")
     return 0
 
 

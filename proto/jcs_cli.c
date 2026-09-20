@@ -20,6 +20,7 @@
 
 #include "jcs.h"
 #include "b64url.h"
+#include "msg.h"
 
 #define HEXOUT_MAX 4096
 #define LINE_MAX   6000
@@ -402,6 +403,135 @@ static int cmd_selfcheck(void)
     return fails ? 2 : 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* 链路报文（信封：**插入序**，与 run_cross_test.py 的 MSG_CASES 一一对应）*/
+/* ------------------------------------------------------------------ */
+#define ID_STUB_NONCE "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"   /* 32 hex = 16B，与 Python 镜像一致 */
+#define ID_STUB_SIG   "STUB"
+
+/* 内层已签报文的 **stub**（id-report 外壳用例用；不是真签名） */
+static jv_t *id_stub(jcs_ctx_t *c, const char *sn)
+{
+    jv_t *rep = jcs_obj(c);
+    jv_t *hdr = jcs_obj(c);
+    jv_t *payload = jcs_obj(c);
+    jv_t *seen = jcs_arr(c);
+
+    if (rep == NULL || hdr == NULL || payload == NULL || seen == NULL) return NULL;
+    jcs_put_str(c, hdr, "typ", "orpah-id-report");
+    jcs_put_int(c, hdr, "ver", 1);
+    jcs_put_str(c, hdr, "alg", "ES256");
+    jcs_put_int(c, hdr, "level", 0);
+
+    jcs_put_str(c, payload, "sn", sn);
+    jcs_put_int(c, payload, "ts", 0);
+    jcs_put_str(c, payload, "nonce", ID_STUB_NONCE);
+    jcs_put(c, payload, "seen_routers", seen);
+
+    jcs_put(c, rep, "hdr", hdr);
+    jcs_put(c, rep, "payload", payload);
+    jcs_put_str(c, rep, "sig", ID_STUB_SIG);
+    return rep;
+}
+
+/* "-"（**整字段**）表示“不给”
+ * ⚠ 不能用 s[0]=='-' 判断 —— RSSI 本来就是负数（-55 开头就是 '-'），
+ *   ts/seq 将来也可能出现负值。这个坑实打过：4/8 用例挂在这里。 */
+static int is_absent(const char *s)
+{
+    return (s == NULL || s[0] == '\0' || strcmp(s, "-") == 0);
+}
+
+static long long parse_ll(const char *s, long long dflt)
+{
+    if (is_absent(s)) return dflt;
+    return strtoll(s, NULL, 10);
+}
+
+/* 按 7 列规格（kind + 5 参数 + hex）构造并编码；失败返回 NULL */
+static const char *msg_case_hex(const char *kind, const char *a1, const char *a2,
+                                const char *a3, const char *a4, const char *a5,
+                                char *out, size_t outcap)
+{
+    static jcs_ctx_t c;            /* 单线程 CLI：静态避免把 arena 放栈上 */
+    static char buf[4096];
+    jv_t *m = NULL;
+    int n;
+
+    jcs_init(&c);
+
+    if (strcmp(kind, "req-connect") == 0) {
+        /* CLI 里的 "-" = 不给 ⇒ 交给构造器前先换成 NULL（构造器只认 NULL/空串） */
+        m = msg_req_connect(&c, a1, parse_ll(a2, 0),
+                            is_absent(a3) ? NULL : a3,
+                            is_absent(a4) ? NULL : a4);
+    } else if (strcmp(kind, "report") == 0) {
+        int cap = MSG_CAP_NONE;
+        int rssi_set = 0, rssi = 0;
+        if (!is_absent(a4)) cap = (a4[0] == '1') ? MSG_CAP_TRUE : MSG_CAP_FALSE;
+        if (!is_absent(a5)) { rssi_set = 1; rssi = (int)parse_ll(a5, 0); }
+        m = msg_report(&c, a1, parse_ll(a2, 0), (int)parse_ll(a3, 1), cap, rssi_set, rssi);
+    } else if (strcmp(kind, "id-report") == 0) {
+        jv_t *stub = id_stub(&c, a1);
+        if (stub != NULL) m = msg_id_report(&c, stub, a1, parse_ll(a2, 0));
+    } else {
+        return NULL;
+    }
+    if (m == NULL) return NULL;
+    n = jcs_encode_raw(m, buf, sizeof(buf));      /* ★ 信封：不排序 */
+    if (n < 0) return NULL;
+    to_hex((const unsigned char *)buf, (size_t)n, out, outcap);
+    return out;
+}
+
+static int cmd_msg(const char *kind, char **av, int n)
+{
+    char hex[HEXOUT_MAX];
+    const char *s;
+
+    if (n < 5) { fprintf(stderr, "msg 需要 5 个参数\n"); return 1; }
+    s = msg_case_hex(kind, av[0], av[1], av[2], av[3], av[4], hex, sizeof(hex));
+    if (s == NULL) { printf("ERR msg-case\n"); return 0; }
+    printf("%s\n", s);
+    return 0;
+}
+
+static int cmd_msg_selftest(const char *path)
+{
+    FILE *fp = fopen(path, "r");
+    char line[LINE_MAX];
+    int total = 0, bad = 0, lineno = 0;
+
+    if (fp == NULL) { fprintf(stderr, "cannot open %s\n", path); return 1; }
+    while (fgets(line, (int)sizeof(line), fp) != NULL) {
+        char *cols[7];
+        char hex[HEXOUT_MAX];
+
+        lineno++;
+        chomp(line);
+        if (line[0] == '\0' || line[0] == '#') continue;
+        if (split_tabs(line, cols, 7) != 7) {
+            printf("FAIL line %d: 需要 7 列（kind + 5 参数 + hex）\n", lineno);
+            total++; bad++;
+            continue;
+        }
+        total++;
+        if (msg_case_hex(cols[0], cols[1], cols[2], cols[3], cols[4], cols[5],
+                         hex, sizeof(hex)) == NULL) {
+            printf("FAIL line %d: 构造失败（kind=%s）\n", lineno, cols[0]);
+            bad++;
+            continue;
+        }
+        if (strcmp(hex, cols[6]) != 0) {
+            printf("FAIL line %d: %s\n  C =%s\n  PY=%s\n", lineno, cols[0], hex, cols[6]);
+            bad++;
+        }
+    }
+    fclose(fp);
+    printf("%s %d/%d\n", bad ? "FAIL" : "PASS", total - bad, total);
+    return bad ? 2 : 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *cmd, *arg;
@@ -446,6 +576,14 @@ int main(int argc, char **argv)
     }
     if (strcmp(cmd, "selfcheck") == 0) {
         return cmd_selfcheck();
+    }
+    if (strcmp(cmd, "msg") == 0) {
+        if (argc < 8) { fprintf(stderr, "msg <kind> <a1> <a2> <a3> <a4> <a5>\n"); return 1; }
+        return cmd_msg(argv[2], &argv[3], argc - 3);
+    }
+    if (strcmp(cmd, "msg-selftest") == 0) {
+        if (arg == NULL) return 1;
+        return cmd_msg_selftest(arg);
     }
     fprintf(stderr, "unknown cmd %s\n", cmd);
     return 1;

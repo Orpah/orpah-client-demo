@@ -238,20 +238,25 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 2. **参考 Makefile 的 `.bin` 目标是坏的**：它写 `objcopy -O binary $@ $<`（把**输出**当输入）
    ⇒ 本仓已改成 `$< $@`。（`halow-demo` 那边**没动** —— 不在本次范围，要同步修得你点头。）
 
-**c2（SN 内核 + JCS + b64url）：✅ 完成（2026-09-20）** —— `proto/`：
+**c2（SN 内核 + JCS + b64url + 报文信封）：✅ 完成（2026-09-20）** —— `proto/`：
 
 | 文件 | 作用 |
 |---|---|
 | `proto/sn.{h,c}` | SN 内核：Crockford / `sn_ok` / `sn_err` / `sn_parse` / Luhn32 / Mod97 / `sn_verify_check`（**无 malloc/stdio ⇒ 可直接编进固件**） |
-| `proto/jcs.{h,c}` | **RFC 8785 JCS 规范化**（我们用到的那部分）+ 迷你 JSON arena 构建器；`jcs_preimage()` = `orpah_id.preimage_of`（同样无 stdio/malloc/浮点） |
+| `proto/jcs.{h,c}` | **RFC 8785 JCS 规范化**（我们用到的那部分）+ 迷你 JSON arena 构建器；`jcs_preimage()` = `orpah_id.preimage_of`；`jcs_encode_raw()` = 信封的**插入序**编码（同样无 stdio/malloc/浮点） |
+| `proto/msg.{h,c}` | 链路报文构造器：`msg_req_connect` / `msg_report` / `msg_id_report`（对齐 `orpah_proto._base`+`build_*`） |
 | `proto/b64url.{h,c}` | base64url（无填充）= `orpah_id.b64url_encode` |
 | `proto/sn_cli.c` / `jcs_cli.c` | host 侧 CLI（对拍/调试用，**不编进固件**） |
 | `proto/run_cross_test.py` | 一键对拍：**C ↔ 向量文件 ↔ Python 三方比对** |
-| `proto/test_vectors_sn.txt` / `_snparse.txt` / `_jcs.txt` / `_b64url.txt` | 63 / 19 / 12 / 17 行（**Python 生成，勿手改**） |
+| `proto/test_vectors_sn.txt` / `_snparse.txt` / `_jcs.txt` / `_b64url.txt` / `_msg.txt` | 63 / 19 / 12 / 17 / 8 行（**Python 生成，勿手改**） |
 
 实测判据：`python proto\run_cross_test.py` → **exit 0**，输出 `SN selfcheck 11/11`、`selftest 63/63`、
-`sn-selftest 19/19`、`JCS selfcheck 4/4` + `jcs-selftest 12/12`、`b64url-selftest 17/17`，
-四份快照与 Python **逐行一致**。
+`sn-selftest 19/19`、`JCS 4/4` + `jcs-selftest 12/12`、`b64url-selftest 17/17`、`msg-selftest 8/8`，
+五份快照与 Python **逐行一致**。
+★ 一个必须分清的点：**签名预像走 JCS（排序）、链路信封走插入序**（`encode_msg` 不带 `sort_keys`）——
+两者混了就是“能发出去但服务端验不过”。
+★ 另一个实打实的坑：报文用例里用 `-` 表示“字段不给”，而 **RSSI 是负数** ⇒ `-55` 被误判成缺省，
+`msg-selftest` 当场挂 4/8；正确做法是只有**整字段**等于 `-` 才当缺省。
 
 ★ **顺手纠正的一个真事实**：SN 校验位走的是 **Luhn32（1 位）/ Mod97（2 位）**，**不是 Damm32** ——
 `verify_check()` 按校验位长度分流，Damm32 是 Phase 2 的替代算法、**当前不启用**。
@@ -259,8 +264,8 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 Mod97 是 `21`（我一开始凭记忆把 B 当成 Luhn32 期望值 ⇒ 自检当场失败。
 教训：**期望值只能来自 Python 输出**）。
 
-⚠ 仍未做（c2 剩余）：**报文封装**（`orpah_proto.encode_msg` 那个信封 —— 注意它**不排序**，
-与 JCS 是两回事）+ `build_*` 构造器（含 `seen_routers` 扫描结果）+ 外层 `build_id_report` 包装。
+⚠ **c2 剩余的只有下行解码**：设备**要收**的 ACCESS-INFO / TRACKING-STATUS / ERROR（要 JSON 解析器，
+与 c3 的数据口一起做；本次没做，也不假装做过）。
 
 **c4 开工前要拍的两个板**（属“不能自由发挥”的工程/安全取舍，2026-09-20 提出）：
 

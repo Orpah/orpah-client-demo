@@ -79,6 +79,13 @@ int   jcs_add(jcs_ctx_t *c, jv_t *a, jv_t *v);
  * 失败返回负的错误码。cap 不够返回 JCS_E_OUT（不写半截）。*/
 int   jcs_encode(jcs_ctx_t *c, const jv_t *root, char *out, size_t cap);
 
+/* **不排序**的 JSON 输出 —— 对应 `orpah_proto.encode_msg` 那个信封：
+ *     json.dumps(msg, ensure_ascii=False, separators=(",", ":"))
+ *   ⚠ 它**没有** sort_keys ⇒ 键按**插入序**。链路报文（REQ-CONNECT/REPORT/ID-REPORT）
+ *     走这个；**只有签名预像**才用 JCS（jcs_encode）—— 两者不能混。
+ *   其余行为（转义/整数/无空格）与 jcs_encode 完全一致。*/
+int   jcs_encode_raw(const jv_t *root, char *out, size_t cap);
+
 /* 签名预像 = JCS({"hdr":hdr,"payload":payload}) —— 对应 orpah_id.preimage_of */
 int   jcs_preimage(jcs_ctx_t *c, const jv_t *hdr, const jv_t *payload,
                    char *out, size_t cap);

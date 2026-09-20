@@ -238,24 +238,26 @@ static void o_json_str(out_t *o, const char *s)
 }
 
 /* ------------------------------------------------------------------ */
-/* 递归编码（对象成员先排序）                                            */
+/* 递归编码（sorted=1：对象成员先排序（JCS）；sorted=0：保持插入序）        */
 /* ------------------------------------------------------------------ */
-static void enc(out_t *o, const jv_t *v);
+static void enc(out_t *o, const jv_t *v, int sorted);
 
-static void enc_obj(out_t *o, const jv_t *v)
+static void enc_obj(out_t *o, const jv_t *v, int sorted)
 {
     int idx[JCS_MAX_MEMBERS];
     int n = v->u.obj.n;
 
     for (int i = 0; i < n; i++) idx[i] = i;
-    /* 插入排序：键按逐字节字典序（= Python 的码点序） */
-    for (int i = 1; i < n; i++) {
-        int cur = idx[i], j = i - 1;
-        while (j >= 0 && j_strcmp(v->u.obj.keys[idx[j]], v->u.obj.keys[cur]) > 0) {
-            idx[j + 1] = idx[j];
-            j--;
+    if (sorted) {
+        /* 插入排序：键按逐字节字典序（= Python 的码点序） */
+        for (int i = 1; i < n; i++) {
+            int cur = idx[i], j = i - 1;
+            while (j >= 0 && j_strcmp(v->u.obj.keys[idx[j]], v->u.obj.keys[cur]) > 0) {
+                idx[j + 1] = idx[j];
+                j--;
+            }
+            idx[j + 1] = cur;
         }
-        idx[j + 1] = cur;
     }
 
     o_byte(o, '{');
@@ -263,12 +265,12 @@ static void enc_obj(out_t *o, const jv_t *v)
         if (i) o_byte(o, ',');
         o_json_str(o, v->u.obj.keys[idx[i]]);
         o_byte(o, ':');
-        enc(o, v->u.obj.vals[idx[i]]);
+        enc(o, v->u.obj.vals[idx[i]], sorted);
     }
     o_byte(o, '}');
 }
 
-static void enc(out_t *o, const jv_t *v)
+static void enc(out_t *o, const jv_t *v, int sorted)
 {
     if (o->err) return;
     if (v == NULL) { o->err = JCS_E_TYPE; return; }
@@ -281,28 +283,38 @@ static void enc(out_t *o, const jv_t *v)
         o_byte(o, '[');
         for (int i = 0; i < v->u.arr.n; i++) {
             if (i) o_byte(o, ',');
-            enc(o, v->u.arr.items[i]);
+            enc(o, v->u.arr.items[i], sorted);
         }
         o_byte(o, ']');
         break;
-    case JV_OBJ:  enc_obj(o, v); break;
+    case JV_OBJ:  enc_obj(o, v, sorted); break;
     default:      o->err = JCS_E_TYPE; break;
     }
 }
 
-int jcs_encode(jcs_ctx_t *c, const jv_t *root, char *out, size_t cap)
+static int enc_any(const jv_t *root, char *out, size_t cap, int sorted)
 {
     out_t o;
 
-    (void)c;
     if (out == NULL || cap == 0) return JCS_E_OUT;
     o.buf = out;
     o.cap = cap;
     o.n = 0;
     o.err = 0;
-    enc(&o, root);
+    enc(&o, root, sorted);
     if (o.err) return o.err;
     return (int)o.n;
+}
+
+int jcs_encode(jcs_ctx_t *c, const jv_t *root, char *out, size_t cap)
+{
+    (void)c;
+    return enc_any(root, out, cap, 1);          /* sorted=1：JCS */
+}
+
+int jcs_encode_raw(const jv_t *root, char *out, size_t cap)
+{
+    return enc_any(root, out, cap, 0);          /* sorted=0：插入序（信封） */
 }
 
 int jcs_preimage(jcs_ctx_t *c, const jv_t *hdr, const jv_t *payload,
