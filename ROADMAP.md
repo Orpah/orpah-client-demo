@@ -29,7 +29,7 @@
 | b | **PC 侧 UART/AT 数据面** —— ✅ 已实现（在 `orpah-over-halow`：`host_serial.SerialAtBus` =
   `AT+TXDATA` 上行 + `FRAME:RX` 下行；纯 PC 排练 `demo_client_uart.py`，判据双向都断言过）。
   ⚠ **真机未验证**：上机首测要确认三件事（命令写法 / 下行格式 / 数据模式粘性）。 |
-| c | 第一版**固件**：CH32V203 裸机主循环 + host 数据口（SPI 从机/主机关系待定）+ §8.2 选级 + 无 RTC（`ts=0`）+ `cap.rtc` 声明；ATECC608B 先用**软件 P-256** 顶（SE 驱动在 d） |
+| c | 第一版**固件**：CH32V203 裸机主循环 + host 数据口（SPI 从机/主机关系待定）+ §8.2 选级 + 无 RTC（`ts=0`）+ `cap.rtc` 声明；ATECC608B 先用**软件 P-256** 顶（SE 驱动在 d）—— **进行中：c1 骨架已完成**（2026-09-20，见 §五） |
 | d | 换上**定制载板** + 真实 **ATECC608B 驱动**（Slot 0 私钥不可导出 / Slot 5 HMAC）+ 产线烧录流程（协议 §6.2） |
 | e | 一体板：+ 低功耗/取能（能量轴实测标定，SPEC F-11）、结构/天线、Gerber/PNP 交付 |
 
@@ -183,8 +183,13 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 
 ## 三、依赖（装机清单）
 
-- **工具链**：MounRiver Studio（自带 `riscv-none-elf-gcc`）—— `-DWCH_INTERRUPT_FAST` 必须用它；
-  或用 xPack 版但要**改中断模型**（参考固件已注明会跑飞）。**已装 MounRiver Studio V2.5.0**（用户 2026-09-14）。
+- **工具链**：MounRiver Studio 自带的那份（`-DWCH_INTERRUPT_FAST` **必须**用它；独立 xPack 版中断
+  模型不同、会跑飞）。**已装 MounRiver Studio 2**（用户 2026-09-14）—— **2026-09-20 实测**：
+  编译器在 `F:\MounRiver\MounRiver_Studio2\resources\app\resources\win32\components\WCH\Toolchain\RISC-V Embedded GCC\bin\`，
+  **前缀是 `riscv-none-embed-`**（不是 `riscv-none-elf-`；`--version` = *xPack GNU RISC-V Embedded GCC 8.2.0*，
+  即 WCH 在 MRS 里自带的那一份）。`firmware/Makefile` 的 `RISCV_PREFIX` 默认就指向它。
+  ⚠ Windows 上还得给 make 找一个 POSIX shell（recipe 用 `mkdir -p`/`rm -rf`）：
+  实测 `make SHELL='D:/Program Files/Git/bin/sh.exe'`（Git 自带）可用。
 - **烧录**：① **WCHISPTool V3.3**（芯片内置 bootloader，BOOT+RST 进刷机态，**不需要 COM 口**）
   —— b 步夹具就是用它刷的；② WCH-Link（SWD）+ OpenOCD `interface/wch-link.cfg` + `target/ch32v20x.cfg`，
   或 MounRiver 下载按钮。**烧录一律由用户执行**。
@@ -196,8 +201,8 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 
 ## 四、未做（如实）
 
-- 本仓目前**只有规则、骨架与本文档**（`AGENTS.md` / `README.md` / `ROADMAP.md` / `.gitignore`
-  / `docs/`），**没有任何代码、自家固件未上机**。
+- 本仓现在有：`tools/`（b 步 PC 侧夹具，**真机跑通**，见 §二）、`firmware/`（**c1 骨架：能编译出
+  `.elf`/`.bin`，但未上机**）、`docs/`、`hardware/`（接线图）。**自家固件未上机**。
 - b 步：**物理通路已重定为 UART macbus（CH347F 两路 UART + HGIC）**；**控制面 + 回程**（2026-09-16）、
   **数据面端到端**（上行过空口 + 下行到达主机口，2026-09-20）与
   **L2 全链路闭环**（PC 同时扮 Router + Server，2026-09-20 同日）**都已真机跑通** ——
@@ -205,7 +210,40 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
   详见 `docs/txah-uart-macbus.md` §7.4/§八 与 `ROADMAP.md` §二。
   仅剩：**真机形态的有线口**（PC/OpenWrt 有线网卡直连 AP 的 RJ45）没验 —— 本机没有有线网卡，
   跑的是家用 Wi-Fi 的 L2 域；另 `ID-REPORT`/验签那一路未进本夹具。
-- c 步起的都未做：工具链虽已装但**本仓固件一行未写**；CH32 板 / ATECC608 未接线；
+- c 步：**c1（骨架 + 能编译）已完成 / 未上机**；c2（协议内核 C + 交叉测试）、c3（HGIC 数据口）、
+  c4（选级 + 无 RTC + 自限频 + 已签上报）未做 —— 见 §五。CH32 板 / ATECC608 未接线；
   ATECC608B 驱动、产线烧录、低功耗与取能标定全未做。
 - 客户端侧的 `seen_routers`（设备看到哪些路由器）在仿真器里仍是**演示写死值**，
   真机要等空口侧给出可用读数（且 `xport` 不在签名内，见 SPEC F-12）。
+
+## 五、c 步进度（2026-09-20 起）
+
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| **c1** | 本仓 `firmware/` 骨架：Makefile / `ld` / startup / `Core{board.h,main.c}` / `Periph{gpio,uart}` | **✅ 完成（未上机）** |
+| c2 | 协议内核 C 实现 + 与 Python 的**交叉测试**（同一批黄金向量，纯 PC） | 未做（下一步） |
+| c3 | HGIC 数据口（UART ↔ TX-AH：8 字节头 + `FRM2` + `CMD`/`EVENT`） | 未做 |
+| c4 | §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）+ 自限频 + 已签 ID 上报 | 未做 |
+| c5 | 低功耗 / 取能标定 | 推后到 d/e |
+
+**c1 实测判据（2026-09-20）**：`make clean && make` **exit=0** ⇒ `build/orpah-client.elf` 9644 B、
+`.bin` 2108 B（`text 2046` ⚠ `bss` 20224 ≈ 整个 RAM，是 `link.ld` 里 `.heap (NOLOAD)` 从 RAM 中段
+预留到顶端 − 256 造成的，**不是真用掉**；`sp = _eusrstack` 从顶端向下长）。
+**未上机**：横幅 / 心跳灯 / `AT`→`OK` 这三条是"烧进去应该看到什么"的判据，**由用户执行后确认**。
+
+**c1 顺手更正的两条事实**（细节都写进 `firmware/README.md`）：
+
+1. **工具链前缀是 `riscv-none-embed-`**（MRS2 内嵌路径，见 §三），**不是**参考 Makefile 默认的
+   `riscv-none-elf-`；本机实测可用（`xPack GNU RISC-V Embedded GCC 8.2.0`）。
+2. **参考 Makefile 的 `.bin` 目标是坏的**：它写 `objcopy -O binary $@ $<`（把**输出**当输入）
+   ⇒ 本仓已改成 `$< $@`。（`halow-demo` 那边**没动** —— 不在本次范围，要同步修得你点头。）
+
+**c2 开工前要拍的两个板**（属"不能自由发挥"的工程/安全取舍，2026-09-20 提出）：
+
+- **软件 P-256 从哪来**：① 自己写（量大易错，不建议）；② **vendor 一个宽松许可实现**
+  （如 micro-ecc，BSD-2）—— 但按 §0c「只提交我自己创建的文件」，**第三方源码要先经你同意**
+  并随附 LICENSE；③ 先做**不签名的骨架**（c1–c3），签名留到 c4。
+- **两处随机**（已实测确认 CH32V203 **没有 TRNG**：EVT 全树 + `nanoCH32V203` 资料里查不到）：
+  `payload.nonce`（防重放，签名内 16 B）与 ECDSA 的每次签名 k（**k 用不好会直接泄漏私钥**）。
+  倾向：k 用 **RFC 6979 确定性 nonce**（不需要熵）；`payload.nonce` 用上电熵 + 计数器、
+  并**如实标注"非生产强度"**，d 步换 ATECC608B 自带的硬件 RNG。
