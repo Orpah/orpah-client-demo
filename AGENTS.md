@@ -53,6 +53,15 @@
   ★ COM32 是 Windows 现分配的号（换口/换机就变，别写进脚本常量）；
   ★ **SimulateCDC 是测试夹具，不是本仓固件**（本仓固件从 c 步开始，未写）。
 - **裸机约束照抄参考固件**：无 RTOS、`-nostdlib`、自包含寄存器定义、主频 8 MHz HSI（无 PLL）。
+- **★ 固件四条硬规则（2026-09-21 上机踩出来的，改 `firmware/` 前必看；细节 = `docs/c3-2b-bench-bringup.md`）**：
+  ① **链接基址必须 `0x00000000`**（`0x08000000` 的镜像烧进去**一条指令都不执行** —— 灯不亮、串口全静默）；
+  ② **`IRQn_Type` 必须带 `+16` 异常号偏移**（`WWDG=16 … TIM2=44, USART1=53, USART2=54`）——
+     `NVIC_EnableIRQ` 把值**直接当 PFIC 位号**用，写错就是"中断一个都进不来"；
+  ③ **`mstatus` 写 `0x1888`**（MPP=0b11 留机器模式），WCH 的 `0x88`（用户模式）下 `main` 里
+     **任何 CSR 访问都出事、写 PFIC 静默失效**；
+  ④ **TIM 的 `INTFR` 是 write-all-bits**（清标志**写 0**，写 1 反而置位 ⇒ ISR 死风暴）
+     且 **`ATRLR` 不能为 0**（不产生更新事件）。
+  另：**烧录下载完不会自动运行，必须按一次 `RST`**（不按 = "刷完什么也没有"，最易误判成固件坏了）。
 - **参考骨架 = `halow-demo/simulator/firmware/`**（Makefile / `ld/link.ld` / `startup/` / `Core/board.h`
   / `Periph/{gpio,uart,spi_slave}` / 状态机）：**复用其套路**（含 SPI1 从机 host 接口、UART2 虚拟空口、
   AT 引擎、迷你 printf），不要另起一套目录/驱动风格。
@@ -135,7 +144,12 @@ orpah-client-demo/
 ## 8. 现状与未做（如实）
 
 - **2026-09-14**：本仓骨架已就位：`AGENTS.md`（本文件）+ `README.md` + `ROADMAP.md` + `.gitignore`
-  + `LICENSE`(Apache-2.0)。**没有任何代码、没有硬件实测、没有上机验证。**
+  + `LICENSE`(Apache-2.0)。当时**没有任何代码、没有硬件实测、没有上机验证。**
+- **2026-09-21（更新）**：上面那条已过时 —— `firmware/` 已在真机上跑通（c3-2b）：控制台 + 1 ms 时基
+  + 心跳灯（板载 `D1`=PA15）+ **模组数据口**（USART2 ↔ TX-AH，HGIC 双向通）；
+  协议内核 `proto/` 与 Python 参考零偏差（`python proto\run_cross_test.py` → exit 0）。
+  现场记录（接线/判据/**四个真凶**：链接基址 0x0、`IRQn_Type` +16、`mstatus` MPP、TIM `INTFR`）
+  见 `docs/c3-2b-bench-bringup.md`；**c4（选级/无 RTC/自限频/已签上报）仍未上机**。
 - **a 步（客户端设备仿真器）已在 `orpah-over-halow` 完成**（本仓无代码交付）：
   `client_sim.py`（`DeviceSim`，可换传输）+ `demo_client_sim.py`（端到端验收：验签通过 /
   下行到达 / 零丢弃）+ `docs/client_sim.md`（含 b–e 各步的判据与两条候选物理通路）。

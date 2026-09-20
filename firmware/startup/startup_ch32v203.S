@@ -21,7 +21,8 @@ _start:
        index 16+N, i.e. WWDG=16 ... DMA1_Channel8=63)                     */
     /* ------------------------------------------------------------------ */
     .section    .vector,"ax",@progbits
-    .align      6
+    .align      1              /* 2 字节对齐：表紧接 .init @0x4（与 WCH 一致）。
+                                  ★ 别改成 6（64B 对齐）：2026-09-21 实测，表挪到 0x40 后中断全部不响应。*/
     .global     _vector_base
 _vector_base:
     .option norvc;
@@ -248,8 +249,12 @@ handle_reset:
     /* enable interrupt nesting and hardware stack */
     li     t0, 0x3
     csrw   0x804, t0
-    /* enable global interrupt and privileged mode */
-    li     t0, 0x88
+    /* enable interrupt AND **stay in machine mode** (MPP=0b11)
+     * ★ 2026-09-21 上机实测（血泪）：写成 WCH 的 `0x88`（MPP=0 = 用户模式）时，
+     *   `main` 里**任何 CSR 访问都会出事**、写 PFIC（0xE000E000）也**静默失效**
+     *   ⇒ `NVIC_EnableIRQ` 白写 ⇒ 中断一个都进不来（tick 永远是 0）。
+     *   改成 0x1888（MPP=M | MPIE | MIE）后 CSR/PFIC 才可用。*/
+    li     t0, 0x1888
     csrw   mstatus, t0
     /* configure vector table recognition mode and entry address mode */
     la     t0, _vector_base

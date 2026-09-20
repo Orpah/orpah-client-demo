@@ -69,20 +69,22 @@ endif
 # 固件自己的源文件。
 SRCS = Core/main.c \
        Periph/gpio.c \
-       Periph/uart.c
+       Periph/uart.c \
+       Periph/hgic_uart.c
 
 # 协议内核（`../proto/`）：**与 PC 侧交叉测试的是同一份源码**（AGENTS §4 的口径）。
 # 它们都是**纯代码**（无 stdio/malloc/浮点/string.h）⇒ 能直接 `-nostdlib` 链接。
-# ★ 已就位：c2（SN/JCS/b64url/报文/下行/SHA-256/HMAC/已签报文）+ c3-1（HGIC 帧层）。
-# **尚未做**：Periph/ 下的模组串口胶水（USART2 ↔ HGIC：灌字节给 `hgic_parser_feed`、
-#   发 `hgic_frame_*`）—— 它的引脚口径**待定**；现在只是把它们编进来（还没人调）。
+# ★ c3-2b（2026-09-20）：模组串口胶水已就位 = `Periph/hgic_uart.c`（中断入环 → 主循环
+#   `hgic_parser_feed`；发送用 `hgic_frame_*`）。它**已经在被调用**（main：上电探测 +
+#   收帧打印）⇒ 不再是被 gc 丢掉的死代码，`-lgcc` 的必要性也从"将来"变成"现在"。
+# ⚠ 引脚/端口口径仍是**待定**（`Core/board.h` 的 MODULE_* 宏）；定板后只改 board.h。
 PROTO_SRCS = sn.c jcs.c b64url.c msg.c downlink.c sha256.c hmac.c id_report.c hgic.c
 
 OBJS = $(addprefix $(BUILD)/, $(SRCS:.c=.o))
 OBJS += $(addprefix $(BUILD)/proto/, $(PROTO_SRCS:.c=.o))
 OBJS += $(BUILD)/startup.o
 
-all: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).bin
+all: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex
 
 $(BUILD):
 	@$(call MKDIR,$(BUILD))
@@ -112,6 +114,12 @@ $(BUILD)/$(TARGET).elf: $(OBJS) $(LINK)
 $(BUILD)/$(TARGET).bin: $(BUILD)/$(TARGET).elf
 	$(OBJCOPY) -O binary $< $@
 	@echo "  built: $@  (raw binary; bytes = size text + data above)"
+
+# ★ .hex：WCHISPTool 的“下载方式 USB”那条路用 .hex 是无歧义的（.hex 自带地址）；
+#   .bin 则要依赖工具自己按 0x08000000 处理 —— 多一个产物就多一条可走的路。
+$(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
+	$(OBJCOPY) -O ihex $< $@
+	@echo "  built: $@  (intel hex; for WCHISPTool / MounRiver download)"
 
 clean:
 	@$(call RMDIR,$(BUILD))
