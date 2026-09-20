@@ -1,9 +1,9 @@
 # proto/ — 协议内核（C 实现）+ 与 Python 的交叉测试
 
-**c2 状态（2026-09-20）：SN 内核 + JCS + b64url + 报文信封 + 下行解码 + SHA-256 + **HMAC-SHA256**
-全部完成，交叉测试 **8 组**。
-剩余：HGIC 帧层（8 字节头 / `FRM2`）⇒ 与 c3 的数据口驱动一起做；
-ECDSA P-256（需先拍 P-256 来源 / `k` 方案）⇒ c4。**
+**c2/c4-α 状态（2026-09-20）：SN / JCS / b64url / 报文信封 / 下行解码 / SHA-256 / HMAC-SHA256 / **
+设备侧已签报文（HS256+
+none）** 全部完成，交叉测试 **9 组**；并且**服务端（上游 `verify_report`）验签通过** C 产出的降级报文。
+剩余：HGIC 帧层 ⇒ c3（要上机）；**ECDSA P-256（level=0）** ⇒ 等拍板（C 侧现在明确报 `IDR_E_ES256`）。**
 
 ## 为什么要这一层
 
@@ -26,6 +26,7 @@ ECDSA P-256（需先拍 P-256 来源 / `k` 方案）⇒ c4。**
 | `downlink.h` / `downlink.c` | **下行解码**：`dl_decode()`（同 `decode_msg`：必为对象 + `type` 已知）+ `dl_type/dl_str/dl_int/dl_truthy`（Python 真值语义） |
 | `sha256.h` / `sha256.c` | **SHA-256**（FIPS 180-4）：`sha256_init/update/final` + 一次性 `sha256()`。§5.1 的 `SHA-256(preimage)` 用；也是将来 RFC 6979 确定性 k 的前置 |
 | `hmac.h` / `hmac.c` | **HMAC-SHA256**（RFC 2104）：`hmac_sha256(key, keylen, msg, msglen, out)` = §5.1 的**降级 HS256**（**直接对 preimage 做 HMAC**，不再先哈希） |
+| `id_report.h` / `id_report.c` | **设备侧已签报文组装**：`idr_build()` 组 hdr+payload → 预像 → 签名（**level 1/2 = HS256**、**level 3 = 不签名**）→ 输出报文 JSON。`level=0`（ES256）返回 `IDR_E_ES256`：**明确报未实现，不假装签了** |
 | `b64url.h` / `b64url.c` | base64url（无填充），对应 `orpah_id.b64url_encode` |
 | `sn_cli.c` / `jcs_cli.c` / `sha_cli.c` | host 侧 CLI（对拍/调试用；**不编进固件**）。`jcs_cli` 同时管 JCS/b64url/报文/下行四组 |
 | `run_cross_test.py` | 一键对拍：生成/校验向量 + 编译 C + 三方比对 |
@@ -37,6 +38,7 @@ ECDSA P-256（需先拍 P-256 来源 / `k` 方案）⇒ c4。**
 | `test_vectors_downlink.txt` | `<json-hex><TAB>valid/type/sn/ts/tracked/status/code`（11 行：3 种下行 + 5 种畸形 + 1 个真值语义） |
 | `test_vectors_sha256.txt` | `<input-hex><TAB><digest-hex>`（16 行：空 / 块边界 55~129 / 1000B / **真实签名预像**） |
 | `test_vectors_hmac.txt` | `<key-hex><TAB><msg-hex><TAB><mac-hex>`（13 行：空键 / 键 32~128（含**超分组必须先哈希**）/ **真实降级路径**） |
+| `test_vectors_id_report.txt` | 8 个参数 + `<report-hex><TAB><envelope-hex>`（5 行：level 1/2/3、带与不带 cap+battery+firmware） |
 
 > 四份向量文件全部**由 Python 参考实现生成（勿手改）**，列在脚本里统一用 `--refresh` 重生。
 
@@ -56,8 +58,12 @@ python proto/run_cross_test.py --orpah-dir ../orpah-over-halow
      + `msg-selftest`（8 行报文信封）+ `dl-selftest`（11 行下行解码）
    · **SHA-256/HMAC**：`selfcheck`（**分块自洽 3345 项** + 两条 HMAC 不变量：键超分组等价于其摘要当键；
      空消息的两种写法一致）+ `sha256-selftest`（16 行）+ `hmac-selftest`（13 行）
-2. **快照没过期**：八份向量文件与 Python 参考**逐行一致**；
-3. 合起来 ⇒ **C ↔ 向量文件 ↔ Python 三方零偏差**。
+2. **快照没过期**：九份向量文件与 Python 参考**逐行一致**；
+3. **服务端收得下**（★ 最重要的一步）：把 **C 产出的报文**交给上游 `orpah_id.verify_report()`
+   （配上 `KeyStore`）+ 真验一遍 ⇒ `level=1/2` 必须 `accepted=True` 且级别对得上
+   （L3 / `alg=none` 只陈述：规范 §8.3 它就是“只做覆盖”）。
+   —— 字节一致只证明“两边一样”，这一步才证明“**服务端真的收得下**”（离线版的服务端判据）。
+4. 合起来 ⇒ **C ↔ 向量文件 ↔ Python ↔ 服务端验签** 四层一致。
 
 ⚠ 找不到上游参考实现时，脚本会**明确打印"未与 Python 交叉验证"**（但仍退出 0，因为 C 侧自检确实过了）——
 别把那种 PASS 当成已交叉验证 ✓。
@@ -114,7 +120,7 @@ Damm32（`orpah-over-halow/damm32.py`）是**Phase 2 的替代算法**，`verify
 ⇒ 所以 `test_vectors_downlink.txt` **只收录“Python 也说无效”的无效用例**（坏 JSON / 顶层非对象 /
 未知 type / 截断），上面这几条**不入向量**（否则会变成用一个已知差异去“证明”零偏差）。
 
-## 五条踩过的坑（都写进代码注释了，别再踩）
+## 六条踩过的坑（都写进代码注释了，别再踩）
 
 1. **Luhn32 ≠ Damm32，期望值必须来自 Python 输出，不能凭记忆**：
    本仓 AGENTS 里那句"黄金样本 `WH01-9AF3C1D2 → B`"说的是 **Damm32**；
@@ -130,6 +136,11 @@ Damm32（`orpah-over-halow/damm32.py`）是**Phase 2 的替代算法**，`verify
 5. **用字符串当“缺省”哨兵时，小心它和真数据撞车**：报文用例里我用 `-` 表示“字段不给”，
    但 **RSSI 是负数**（`-55` 开头就是 `-`）⇒ 一律被当成“不给”，`msg-selftest` 当场挂 4/8。
    正确做法：只有**整字段**正好等于 `-`（`strcmp(s, "-") == 0`）才算缺省 ✓。
+6. **提交的向量必须确定性 ⇒ 任何“依赖当前时间”的东西要么置 0、要么把时间钉住**：
+   我在 id-report 向量里硬编码了一个当时从台架日志抄来的 `ts`，过一会儿再跑，
+   `verify_report` 就回 `timestamp_out_of_window`（签名其实已经过了）⇒ 3 项 FAIL。
+   做法：`ts=0`（= 真机无 RTC 的正常路径）不传 `now`；非零 ts 则把 `now` **钉到向量那个值**，
+   并在注释里说明“时间窗是另一个机制、由上游测试负责”。
 ## 下一步（c2 未完）
 
 报文编解码 + **JCS（RFC 8785）规范化** + `b64url` + **签名预像**。

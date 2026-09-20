@@ -223,7 +223,7 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 | **c1** | 本仓 `firmware/` 骨架：Makefile / `ld` / startup / `Core{board.h,main.c}` / `Periph{gpio,uart}` | **✅ 完成（未上机）** |
 | c2 | 协议内核 C 实现 + 与 Python 的**交叉测试**（同一批黄金向量，纯 PC） | **进行中**：SN 内核已完成（见下） |
 | c3 | HGIC 数据口（UART ↔ TX-AH：8 字节头 + `FRM2` + `CMD`/`EVENT`） | 未做 |
-| c4 | §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）+ 自限频 + 已签 ID 上报 | 未做 |
+| c4 | §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）+ 自限频 + 已签 ID 上报 | **进行中**：**降级（HS256）已达服务端验签通过**（见下 c4-α）；ES256 待拍板 |
 | c5 | 低功耗 / 取能标定 | 推后到 d/e |
 
 **c1 实测判据（2026-09-20）**：`make clean && make` **exit=0** ⇒ `build/orpah-client.elf` 9644 B、
@@ -237,6 +237,23 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
    `riscv-none-elf-`；本机实测可用（`xPack GNU RISC-V Embedded GCC 8.2.0`）。
 2. **参考 Makefile 的 `.bin` 目标是坏的**：它写 `objcopy -O binary $@ $<`（把**输出**当输入）
    ⇒ 本仓已改成 `$< $@`。（`halow-demo` 那边**没动** —— 不在本次范围，要同步修得你点头。）
+
+**c4-α（降级链 HS256）：✅ 完成（2026-09-20）** —— `proto/id_report.{h,c}`：
+
+* 设备侧组装：`hdr{alg,level}` + `payload{sn,ts,nonce,seen_routers[,cap][,battery_mv][,firmware]}`
+  → 预像（JCS）→ 签名 → 报文 JSON（插入序）；**level 1/2 = HMAC-SHA256**、**level 3 = 不签名**；
+  **level=0（ES256）返回 `IDR_E_ES256`：明确报未实现，不假装签了**。
+* 实测（`python proto\run_cross_test.py` → **exit 0**，交叉测试 **9 组**）：
+  · `id-report-selftest` **5/5**：与 Python `Device.report()` + `encode_msg()` **逐字节一致**（含外层信封）；
+  · ★ **服务端验签通过**：把 **C 产出的报文**交给上游 `orpah_id.verify_report()`+`KeyStore`
+    真验一遍 ⇒ **4 条 `level=1/2` 全部 `accepted=True` 且级别对得上**；
+    `level=3`（`alg=none`）服务端判定 `accepted=True / trust=none / coverage_only=True`（只陈述，不当判据）。
+
+⇒ 也就是说，c 步判据里的「**服务端收到并验签通过**」**已经先离线达成**（还没上机 —— 上机要先把 c3 的
+HGIC 帧层接上）。
+★ 一个必须知道的边界：向量里的 `ts` 是**固定值**（提交的文件必须确定性），所以验签时把 `now` **钉到向量那个 ts**；
+`ts=0`（真机无 RTC 的正常路径）则不传 `now`。**时间窗是另一个机制**，由上游测试负责。
+（踩坑经过：我曾硬编码一个抄来的 `ts`，过一会儿再跑就回 `timestamp_out_of_window`，签名其实早就过了。）
 
 **c2（SN 内核 + JCS + b64url + 报文信封 + 下行解码 + SHA-256 + HMAC）：✅ 完成（2026-09-20）** —— `proto/`：
 
@@ -272,7 +289,7 @@ Mod97 是 `21`（我一开始凭记忆把 B 当成 Luhn32 期望值 ⇒ 自检�
 教训：**期望值只能来自 Python 输出**）。
 
 ⚠ **剩下的两块**：① HGIC 帧层（8 字节头 / `FRM2` / `CMD` / `EVENT`）⇒ 与 c3 的数据口驱动一起做；
-② **ECDSA P-256** ⇒ 要先拍两个板（软件 P-256 的来源、`k`/nonce 方案，见下）。
+② **ECDSA P-256（level=0）** ⇒ 要先拍两个板（软件 P-256 的来源、`k`/nonce 方案，见下）。
 
 **c4 开工前要拍的两个板**（属“不能自由发挥”的工程/安全取舍，2026-09-20 提出）：
 

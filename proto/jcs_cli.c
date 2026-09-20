@@ -22,6 +22,7 @@
 #include "b64url.h"
 #include "msg.h"
 #include "downlink.h"
+#include "id_report.h"
 
 #define HEXOUT_MAX 4096
 #define LINE_MAX   6000
@@ -613,6 +614,97 @@ static int cmd_dl_selftest(const char *path)
     return bad ? 2 : 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* 设备侧已签报文（id-report）：与 run_cross_test.py 的 IDR_CASES 一一对应  */
+/* ------------------------------------------------------------------ */
+/* 输出：<报文-hex><TAB><信封-hex>。
+ * 参数固定 8 个：sn ts nonce level key-hex battery|- caprtc|- firmware|- */
+static void idr_line(char **av, char *out, size_t outcap)
+{
+    static jcs_ctx_t c;
+    static char repbuf[2048];
+    static char envbuf[2048];
+    unsigned char key[64];
+    jv_t *rep_node = NULL;
+    long kn;
+    size_t rn = 0;
+    int rc, en;
+    int level = (int)parse_ll(av[3], -1);
+    int cap = MSG_CAP_NONE;
+    int batt_set = 0, batt = 0;
+
+    if (!is_absent(av[6])) cap = (av[6][0] == '1') ? MSG_CAP_TRUE : MSG_CAP_FALSE;
+    if (!is_absent(av[5])) { batt_set = 1; batt = (int)parse_ll(av[5], 0); }
+    kn = from_hex(is_absent(av[4]) ? "" : av[4], key, sizeof(key));
+    if (kn < 0) { snprintf(out, outcap, "ERR key-hex"); return; }
+
+    jcs_init(&c);
+    rc = idr_build(&c, av[0], parse_ll(av[1], 0), av[2], level,
+                   cap, batt_set, batt, is_absent(av[7]) ? NULL : av[7],
+                   NULL, key, (size_t)kn, repbuf, sizeof(repbuf), &rn);
+    if (rc != 0) { snprintf(out, outcap, "ERR idr-%d", rc); return; }
+
+    /* 再包一层链路信封（= orpah_proto.build_id_report） */
+    if (json_parse(&c, repbuf, rn, &rep_node) != 0) {
+        snprintf(out, outcap, "ERR re-parse");
+        return;
+    }
+    {
+        jv_t *env = msg_id_report(&c, rep_node, av[0], parse_ll(av[1], 0));
+        if (env == NULL) { snprintf(out, outcap, "ERR envelope"); return; }
+        en = jcs_encode_raw(env, envbuf, sizeof(envbuf));
+        if (en < 0) { snprintf(out, outcap, "ERR env-%d", en); return; }
+    }
+    {
+        char rhex[4096], ehex[4096];
+        to_hex((const unsigned char *)repbuf, rn, rhex, sizeof(rhex));
+        to_hex((const unsigned char *)envbuf, (size_t)en, ehex, sizeof(ehex));
+        snprintf(out, outcap, "%s\t%s", rhex, ehex);
+    }
+}
+
+static int cmd_idr(const char *kind_unused, char **av, int n)
+{
+    char out[LINE_MAX];
+    (void)kind_unused;
+    if (n < 8) { fprintf(stderr, "id-report 需要 8 个参数\n"); return 1; }
+    idr_line(av, out, sizeof(out));
+    printf("%s\n", out);
+    return 0;
+}
+
+static int cmd_idr_selftest(const char *path)
+{
+    FILE *fp = fopen(path, "r");
+    char line[LINE_MAX];
+    int total = 0, bad = 0, lineno = 0;
+
+    if (fp == NULL) { fprintf(stderr, "cannot open %s\n", path); return 1; }
+    while (fgets(line, (int)sizeof(line), fp) != NULL) {
+        char *cols[10];
+        char got[LINE_MAX], exp[LINE_MAX];
+
+        lineno++;
+        chomp(line);
+        if (line[0] == '\0' || line[0] == '#') continue;
+        if (split_tabs(line, cols, 10) != 10) {
+            printf("FAIL line %d: 需要 10 列（8 参数 + 报文 hex + 信封 hex）\n", lineno);
+            total++; bad++;
+            continue;
+        }
+        total++;
+        idr_line(cols, got, sizeof(got));
+        snprintf(exp, sizeof(exp), "%s\t%s", cols[8], cols[9]);
+        if (strcmp(got, exp) != 0) {
+            printf("FAIL line %d:\n  C =%s\n  PY=%s\n", lineno, got, exp);
+            bad++;
+        }
+    }
+    fclose(fp);
+    printf("%s %d/%d\n", bad ? "FAIL" : "PASS", total - bad, total);
+    return bad ? 2 : 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *cmd, *arg;
@@ -673,6 +765,17 @@ int main(int argc, char **argv)
     if (strcmp(cmd, "dl-selftest") == 0) {
         if (arg == NULL) return 1;
         return cmd_dl_selftest(arg);
+    }
+    if (strcmp(cmd, "id-report") == 0) {
+        if (argc < 10) {
+            fprintf(stderr, "id-report <sn> <ts> <nonce> <level> <key-hex> <battery|-> <caprtc|-> <firmware|->\n");
+            return 1;
+        }
+        return cmd_idr(cmd, &argv[2], argc - 2);
+    }
+    if (strcmp(cmd, "id-report-selftest") == 0) {
+        if (arg == NULL) return 1;
+        return cmd_idr_selftest(arg);
     }
     fprintf(stderr, "unknown cmd %s\n", cmd);
     return 1;

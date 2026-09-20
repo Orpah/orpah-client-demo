@@ -40,6 +40,7 @@ VEC_MSG = os.path.join(HERE, "test_vectors_msg.txt")
 VEC_DL = os.path.join(HERE, "test_vectors_downlink.txt")
 VEC_SHA = os.path.join(HERE, "test_vectors_sha256.txt")
 VEC_HMAC = os.path.join(HERE, "test_vectors_hmac.txt")
+VEC_IDR = os.path.join(HERE, "test_vectors_id_report.txt")
 
 HEADER_SN = (
     "# proto/test_vectors_sn.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
@@ -93,6 +94,14 @@ HEADER_HMAC = (
     "# 列：<key-hex><TAB><msg-hex><TAB><mac-hex>\n"
     "# 覆盖：空键/空消息 / 键 32~(64)→ 超分组 65/128（**必须先哈希**）/ 消息跨块,\n"
     "#       以及★**真实降级路径**：32B 演示 HMAC 密钥 × 真实签名预像（§5.1 的 HS256）\n"
+)
+HEADER_IDR = (
+    "# proto/test_vectors_id_report.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源（单一源）：orpah_id.Device.report() + orpah_proto.encode_msg()/build_id_report()\n"
+    "# 列：<sn><TAB><ts><TAB><nonce><TAB><level><TAB><key-hex><TAB><battery|->\n"
+    "#     <TAB><caprtc|-><TAB><firmware|-><TAB><report-hex><TAB><envelope-hex>\n"
+    "# 覆盖：level 1/2（HS256，降级链）/ level 3（none，不签名）/ 无 cap 与带 cap+battery+firmware\n"
+    "#   ⚠ level=0（ES256）**不在此**：C 侧明确报未实现（IDR_E_ES256），等 P-256 拍板\n"
 )
 
 
@@ -339,6 +348,38 @@ def gen_sha_rows(o):
     return [(data.hex(), hashlib.sha256(data).hexdigest()) for _label, data in sha_inputs(o)]
 
 
+def _idr_cases(o):
+    """(sn, ts, nonce, level, battery, caprtc, firmware) —— key 由 derive_demo_hmac 填。"""
+    sn = "CN-WH01-9AF3C1D2"
+    n1 = "3F9A8B2C1D4E5F6A7B8C9D0E1F2A3B4C"
+    n2 = "00112233445566778899AABBCCDDEEFF"
+    return [
+        (sn, "0", n1, "1", "-", "-", "-"),                       # 最小降级报
+        (sn, "1789879939", n2, "2", "3900", "0", "c4a"),          # 带 cap/battery/firmware
+        (sn, "1789879939", n1, "1", "-", "1", "-"),                # cap.rtc=true
+        (sn, "0", n2, "3", "-", "-", "-"),                       # L3：不签名（alg=none）
+        (sn, "1789879939", n1, "1", "3000", "0", "-"),           # 低电量（告警输入端）
+    ]
+
+
+def idr_row(o, proto, case):
+    sn, ts, nonce, level, batt, caprtc, fw = case
+    key_hex = o.derive_demo_hmac(sn, 1).hex()
+    dev = o.Device(sn=sn)
+    dev.hmac_key = bytes.fromhex(key_hex)
+    rep = dev.report(level=int(level), ts=int(ts), nonce=nonce, seen_routers=[],
+                     battery_mv=None if batt == "-" else int(batt),
+                     firmware=None if fw == "-" else fw,
+                     cap=None if caprtc == "-" else {"rtc": caprtc == "1"})
+    return (sn, ts, nonce, level, key_hex, batt, caprtc, fw,
+            proto.encode_msg(rep).hex(),
+            proto.encode_msg(proto.build_id_report(rep, ts=int(ts))).hex())
+
+
+def gen_idr_rows(o, proto):
+    return [idr_row(o, proto, c) for c in _idr_cases(o)]
+
+
 def gen_hmac_rows(o):
     """★ 最后一条是**真实降级路径**：32B 演示 HMAC 密钥 × 真实签名预像（§5.1 的 HS256）。"""
     import hashlib
@@ -496,7 +537,9 @@ def main():
         write_rows(VEC_DL, HEADER_DL, rows_dl)
         write_rows(VEC_SHA, HEADER_SHA, rows_sha)
         write_rows(VEC_HMAC, HEADER_HMAC, rows_hmac)
-        print("--refresh 已重写：%s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d)"
+        if proto is not None:
+            write_rows(VEC_IDR, HEADER_IDR, gen_idr_rows(o, proto))
+        print("--refresh 已重写：%s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d)%s"
               % (os.path.basename(VEC_SN), len(rows_sn),
                  os.path.basename(VEC_PARSE), len(rows_parse),
                  os.path.basename(VEC_JCS), len(rows_jcs),
@@ -504,7 +547,8 @@ def main():
                  os.path.basename(VEC_MSG), len(rows_msg),
                  os.path.basename(VEC_DL), len(rows_dl),
                  os.path.basename(VEC_SHA), len(rows_sha),
-                 os.path.basename(VEC_HMAC), len(rows_hmac)))
+                 os.path.basename(VEC_HMAC), len(rows_hmac),
+                 " / %s(%d)" % (os.path.basename(VEC_IDR), len(gen_idr_rows(o, proto))) if proto else ""))
 
     # ---- ② 快照 vs Python 参考 -------------------------------------------
     if o is not None:
@@ -518,6 +562,7 @@ def main():
         if proto is not None:
             groups.append(("test_vectors_msg.txt", gen_msg_rows(o, proto), read_rows(VEC_MSG)))
             groups.append(("test_vectors_downlink.txt", gen_dl_rows(o, proto), read_rows(VEC_DL)))
+            groups.append(("test_vectors_id_report.txt", gen_idr_rows(o, proto), read_rows(VEC_IDR)))
         else:
             print("跳过 test_vectors_msg/downlink.txt：拿不到 orpah_proto（报文构造/解码的单一源）")
         groups.append(("test_vectors_sha256.txt", gen_sha_rows(o), read_rows(VEC_SHA)))
@@ -543,17 +588,21 @@ def main():
          [("C selfcheck（SN 内置黄金样本）", ["selfcheck"]),
           ("C selftest（校验位向量）", ["selftest", VEC_SN]),
           ("C sn-selftest（SN 解析向量）", ["sn-selftest", VEC_PARSE])]),
-        ("JCS/b64url/msg/dl", "jcs_cli", ["jcs.c", "b64url.c", "msg.c", "downlink.c", "jcs_cli.c"],
+        ("JCS/b64url/msg/dl/idr", "jcs_cli",
+         ["jcs.c", "b64url.c", "msg.c", "downlink.c", "sha256.c", "hmac.c",
+          "id_report.c", "jcs_cli.c"],
          [("C selfcheck（JCS/b64url 冒烟）", ["selfcheck"]),
           ("C jcs-selftest（JCS 向量）", ["jcs-selftest", VEC_JCS]),
           ("C b64url-selftest（b64url 向量）", ["b64url-selftest", VEC_B64]),
           ("C msg-selftest（报文信封向量）", ["msg-selftest", VEC_MSG]),
-          ("C dl-selftest（下行解码向量）", ["dl-selftest", VEC_DL])]),
+          ("C dl-selftest（下行解码向量）", ["dl-selftest", VEC_DL]),
+          ("C id-report-selftest（已签报文 + 信封）", ["id-report-selftest", VEC_IDR])]),
         ("SHA-256/HMAC", "sha_cli", ["sha256.c", "hmac.c", "sha_cli.c"],
          [("C selfcheck（分块自洽 + HMAC 不变量）", ["selfcheck"]),
           ("C sha256-selftest（hashlib 向量）", ["sha256-selftest", VEC_SHA]),
           ("C hmac-selftest（hmac 向量）", ["hmac-selftest", VEC_HMAC])]),
     ]
+    exes = {}
     with tempfile.TemporaryDirectory() as td:
         for tname, tbin, srcs, checks in targets:
             exe = os.path.join(td, tbin + (".exe" if os.name == "nt" else ""))
@@ -563,6 +612,7 @@ def main():
                 print(err.strip() or "(无输出)")
                 fails.append("编译 " + tname)
                 continue
+            exes[tbin] = exe
             print("C 侧已编译：%s（%s）" % (tname, how))
             for title, argv in checks:
                 p = run(exe, argv)
@@ -574,6 +624,53 @@ def main():
                     fails.append(title)
                     print(out)
 
+        # ---- ★ 最重要的一步：让 Python 的 verify_report 真去验 **C 产出的报文** ----
+        #     字节一致只证明“两边一样”；这一步证明“**服务端真的收得下**”（离线版的服务端判据）。
+        if proto is not None and "jcs_cli" in exes:
+            import json as _json
+            ks = o.KeyStore()
+            ks.register(o.Device(sn="CN-WH01-9AF3C1D2"), model="bench-c4a", firmware="c4a")
+            n_ok = 0
+            for case in _idr_cases(o):
+                sn, ts, nonce, level, batt, caprtc, fw = case
+                key_hex = o.derive_demo_hmac(sn, 1).hex()
+                p = _run([exes["jcs_cli"], "id-report", sn, ts, nonce, level,
+                          key_hex, batt, caprtc, fw])
+                out = (p.stdout or "").strip()
+                if p.returncode != 0 or "\t" not in out:
+                    print("FAIL id-report CLI 未产出（rc=%s out=%r）" % (p.returncode, out))
+                    fails.append("id-report CLI")
+                    break
+                try:
+                    rep = _json.loads(bytes.fromhex(out.split("\t")[0]).decode("utf-8"))
+                except Exception as e:                    # noqa: BLE001
+                    print("FAIL 解析 C 产出的报文失败：%r" % (e,))
+                    fails.append("解析 C 产出")
+                    break
+                # ⚠ 时间窗是**另一个机制**（上游有专门测试），这里只判签名：
+                #   向量里的 ts 是**固定值**（提交的文件必须确定性），所以把 now 钉到它上；
+                #   ts=0（设备无 RTC 的正常路径）则不传 now（协议本来就会跳过窗口）。
+                ts_int = int(ts)
+                v = o.verify_report(rep, ks, now=(None if ts_int == 0 else ts_int),
+                                    used_nonces=o.NonceCache())
+                if int(level) in (1, 2):
+                    if not v.get("accepted"):
+                        print("FAIL 服务端**不接受** C 产出的降级报文：level=%s error=%s"
+                              % (level, v.get("error")))
+                        fails.append("verify_report 拒绝 C 产出（level=%s）" % level)
+                    elif int(v.get("level", -1)) != int(level):
+                        print("FAIL 验签通过但级别不符：C=%s 服务端=%s"
+                              % (level, v.get("level")))
+                        fails.append("级别不符（level=%s）" % level)
+                    else:
+                        n_ok += 1
+                else:
+                    # L3（alg=none）：规范 §8.3 就是“只做覆盖” ⇒ 只陈述，不当判据
+                    print("   [info] L3(alg=none) 服务端判定：accepted=%s trust=%s coverage_only=%s"
+                          % (v.get("accepted"), v.get("trust"), v.get("coverage_only")))
+            if n_ok:
+                print("PASS 服务端验签 C 产出的降级报文（verify_report 接受 %d 条 level=1/2）" % n_ok)
+
     print("-" * 66)
     if fails:
         print("FAIL %d 项未过：%s" % (len(fails), fails))
@@ -581,7 +678,7 @@ def main():
     if o is None:
         print("PASS（C 侧自检全过；**未与 Python 交叉验证** —— 没找到上游参考实现）")
         return 0
-    print("PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 / JCS / b64url / 报文信封 / 下行解码 / SHA-256 / HMAC 八组）")
+    print("PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 / JCS / b64url / 报文信封 / 下行解码 / SHA-256 / HMAC / 已签报文 九组）")
     return 0
 
 
