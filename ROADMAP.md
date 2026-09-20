@@ -223,7 +223,7 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 | **c1** | 本仓 `firmware/` 骨架：Makefile / `ld` / startup / `Core{board.h,main.c}` / `Periph{gpio,uart}` | **✅ 完成（未上机）** |
 | c2 | 协议内核 C 实现 + 与 Python 的**交叉测试**（同一批黄金向量，纯 PC） | **✅ 完成（见下）** |
 | **c3** | HGIC 数据口（UART ↔ TX-AH：8 字节头 + `FRM2` + `CMD`/`EVENT`） | **帧层 ✅ 完成（未上机）**；`proto/*.c` **已编进固件**（2026-09-20）；剩 UART2 胶水 + 烧录 |
-| c4 | §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）+ 自限频 + 已签 ID 上报 | **进行中**：**降级（HS256）已达服务端验签通过**（见下 c4-α）；ES256 待拍板 |
+| c4 | §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）+ 自限频 + 已签 ID 上报 | **进行中**：**降级（HS256）已达服务端验签通过**（c4-α）；**ES256 曲线层已就位**（c4-β-1）；签名本体 + RFC 6979 = c4-β-2 |
 | c5 | 低功耗 / 取能标定 | 推后到 d/e |
 
 **c1 实测判据（2026-09-20）**：`make clean && make` **exit=0** ⇒ `build/orpah-client.elf` 9644 B、
@@ -318,6 +318,23 @@ Mod97 是 `21`（我一开始凭记忆把 B 当成 Luhn32 期望值 ⇒ 自检�
   ⇒ **已按用户拍板加上 `-lgcc`**（`firmware/Makefile` 的 `LDLIBS`，**排在目标文件之后**）；
   同一轮把 `mkdir -p` / `rm -rf` 换成 `cmd /c`（不依赖 sh）⇒ **干净树上 `make clean && make` 可跑**。
 * **未做（= c3-2b，要上机）**：`Periph/` 下的 UART2 胶水（**引脚口径待定**）+ 用户烧录。
+
+**c4-β-1（P-256 曲线层）：✅ 完成（2026-09-20）** —— `proto/p256.{h,c}` + `proto/p256_cli.c`：
+
+* 内容：素域（32 位 limb、**Montgomery 乘**、费马求逆 `a^(p-2)`）、Jacobian 点运算（含加倍/点加/退化情形）、
+  **Montgomery ladder 标量乘**、公钥派生（未压缩点 `04||X||Y`）、演示私钥派生（同上游 `derive_demo_privkey`）。
+* 判据（`python proto\run_cross_test.py` → **exit 0**，交叉测试 **13 组**）：`pubkey-selftest` **14/14**
+  与 **Python(OpenSSL) 逐字节一致** —— 这一条同时证明 **p/a/b/Gx/Gy/n 常量、Montgomery 归约、点运算、
+  ladder** 全对（任一处错公钥就不同）。用例含 `d=1 → G`、`d=n-1 → (Gx, p-Gy)`、`n+1` / `n+0x1234`
+  （**未归约**标量）、4 个定种子随机 d、3 个演示 SN（含 `gen=2`）。
+* 两个决定（用户 2026-09-20 拍板）：**① 自己写**（不 vendor 第三方：版权归本仓、且 RFC 6979 使签名
+  可确定性对拍）；**② `k` 用 RFC 6979 确定性派生**（不需要熵源，且天然防“k 复用/弱 k 泄漏私钥”）
+  —— `payload.nonce` 的来源仍留 TODO（规范写的是 ATECC608B RNG，等 SE 接线）。
+* ⚠ 如实边界：**不做常量时间**（有数据相关分支/访存）；真机若私钥在 MCU 里签名，得换常量时间实现
+  或交给 SE。
+* **未做（= c4-β-2）**：ECDSA 签名 `r||s`（对 n 取模与求逆）+ RFC 6979（`k` 派生：`bits2int`/`int2octets`）
+  + 官方向量（RFC 6979 §A.2.5，P-256/SHA-256）+ ★**上游 `verify_report` 接受 C 产出的 level=0 报文**
+  （= c4-β 的判据）。
 * ⚠ `firmware/Makefile` 两条 Windows 实测坑（已写进该文件头）：
   ① recipe 里**没有 shell 元字符**的行，make 会**直接 exec** 那个程序（不经 sh）⇒ `mkdir -p` /
      `ls -l` / `rm -rf` 全都报「找不到指定的文件」；而 `make SHELL='D:/Program Files/Git/bin/sh.exe'`

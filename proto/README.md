@@ -1,10 +1,11 @@
 # proto/ — 协议内核（C 实现）+ 与 Python 的交叉测试
 
-**状态（2026-09-20，c2 + c4-α + c3 帧层）：SN / JCS / b64url / 报文信封 / 下行解码 / SHA-256 /
-HMAC-SHA256 / 设备侧已签报文（HS256 + none）/ HGIC 帧层 全部完成**，交叉测试 **12 组**；
-并且**服务端（上游 `verify_report`）验签通过** C 产出的降级报文。
-剩余：HGIC 的**上机**（c3：UART2 ↔ 模组，见 `firmware/`，要你烧录）；**ECDSA P-256（level=0）**
-⇒ 等拍板（C 侧现在明确报 `IDR_E_ES256`，不假装签了）。
+**状态（2026-09-20，c2 + c4-α + c3 帧层 + c4-β 曲线层）：SN / JCS / b64url / 报文信封 / 下行解码 /
+SHA-256 / HMAC-SHA256 / 设备侧已签报文（HS256 + none）/ HGIC 帧层 / **P-256 曲线（素域+群+标量乘+公钥派生）**
+全部完成**，交叉测试 **13 组**；并且**服务端（上游 `verify_report`）验签通过** C 产出的降级报文。
+剩余：**ECDSA 签名（`r||s` + RFC 6979 确定性 `k`）⇒ 本组接下来做**；HGIC 的**上机**（c3-2b：
+UART2 ↔ 模组，引脚待定 + 要你烧录）；`payload.nonce` 的来源（规范写的是 **ATECC608B RNG**）⇒ 等 SE
+接线（`idr_build()` 已由调用方传 nonce，**不塞假随机**）。
 
 ## 为什么要这一层
 
@@ -45,9 +46,12 @@ HMAC-SHA256 / 设备侧已签报文（HS256 + none）/ HGIC 帧层 全部完成*
 | `test_vectors_hgic.txt` | `<kind><TAB><a1..a6><TAB><frame-hex>`（14 行：hdr/frm2/cmd；含整帧 8 与 4096 两条边界、CMD↔CMD2 分界） |
 | `test_vectors_hgic_parse.txt` | `<expect><TAB><流-hex><TAB><chunk><TAB><frames><TAB><garbage><TAB><bad_length><TAB><overrun>`（12 行：逐字节喂 / 杂音 / 假 magic / 截断 / 方向过滤） |
 | `test_vectors_hgic_ctrl.txt` | `<type><TAB><from><TAB><载荷><TAB><rc><TAB><kind><TAB><id><TAB><status><TAB><data-hex>`（13 行） |
+| `p256.h` / `p256.c` | **NIST P-256 曲线**：素域（32 位 limb + **Montgomery 乘** + 费马求逆）、Jacobian 点运算、**Montgomery ladder 标量乘**、公钥派生（未压缩点 `04||X||Y`）、演示私钥派生（同上游 `derive_demo_privkey`）。**无 stdio/malloc/浮点/string.h ⇒ 可编进固件**。⚠ **不做常量时间**（见文件头） |
+| `p256_cli.c` | P-256 的 host 侧 CLI（`pubkey` / `pubkey-sn` / `on-curve` / `fe` 单次命令 + `selfcheck` + `pubkey-selftest`） |
+| `test_vectors_p256.txt` | `<kind><TAB><a1><TAB><a2><TAB><d-hex><TAB><pub65-hex>`（14 行：`sn` 类看派生规则；`d` 类含 `d=1`→G、`n-1`→-G、`n+1` / `n+0x1234`（**未归约**标量）、4 个定种子随机 d） |
 
-> 十二份向量文件全部**由 Python 参考实现生成（勿手改）**，列在脚本里统一用 `--refresh` 重生
-> （HGIC 三份的参考在**本仓** `tools/txah_hgic.py`，其余九份在上游 `orpah-over-halow`）。
+> 十三份向量文件全部**由 Python 参考实现生成（勿手改）**，列在脚本里统一用 `--refresh` 重生
+> （HGIC 三份的参考在**本仓** `tools/txah_hgic.py`，其余十份在上游 `orpah-over-halow`）。
 
 ## 跑
 
@@ -59,7 +63,7 @@ python proto/run_cross_test.py --orpah-dir ../orpah-over-halow
 
 它对三件事下结论：
 
-1. **C 侧自检**（四个可执行目标）：
+1. **C 侧自检**（五个可执行目标）：
    · **SN 内核**：`selfcheck`（11 项）+ `selftest`（63 行校验位）+ `sn-selftest`（19 行 SN 解析）
    · **JCS/b64url/msg/dl**：`selfcheck`（4 项）+ `jcs-selftest`（12 行）+ `b64url-selftest`（17 行）
      + `msg-selftest`（8 行报文信封）+ `dl-selftest`（11 行下行解码）
@@ -67,7 +71,8 @@ python proto/run_cross_test.py --orpah-dir ../orpah-over-halow
      空消息的两种写法一致）+ `sha256-selftest`（16 行）+ `hmac-selftest`（13 行）
    · **HGIC 帧层**：`selfcheck`（不变量）+ `frame-selftest`（14 行帧构造）
      + `parse-selftest`（12 行流解析/重同步）+ `ctrl-selftest`（13 行控制面）
-2. **快照没过期**：十二份向量文件与 Python 参考**逐行一致**；
+   · **P-256 曲线**：`selfcheck`（不变量）+ `pubkey-selftest`（14 行公钥派生，与 OpenSSL 逐字节一致）
+2. **快照没过期**：十三份向量文件与 Python 参考**逐行一致**；
 3. **服务端收得下**（★ 最重要的一步）：把 **C 产出的报文**交给上游 `orpah_id.verify_report()`
    （配上 `KeyStore`）+ 真验一遍 ⇒ `level=1/2` 必须 `accepted=True` 且级别对得上
    （L3 / `alg=none` 只陈述：规范 §8.3 它就是“只做覆盖”）。

@@ -61,6 +61,7 @@ VEC_IDR = os.path.join(HERE, "test_vectors_id_report.txt")
 VEC_HGIC = os.path.join(HERE, "test_vectors_hgic.txt")
 VEC_HGIC_PARSE = os.path.join(HERE, "test_vectors_hgic_parse.txt")
 VEC_HGIC_CTRL = os.path.join(HERE, "test_vectors_hgic_ctrl.txt")
+VEC_P256 = os.path.join(HERE, "test_vectors_p256.txt")
 
 HEADER_SN = (
     "# proto/test_vectors_sn.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
@@ -148,6 +149,16 @@ HEADER_HGIC_CTRL = (
     "# 列：<type><TAB><from 0|1><TAB><载荷-hex><TAB><rc><TAB><kind><TAB><id><TAB><status><TAB><data-hex>\n"
     "#   kind ∈ req|resp|'-'（rc≠0 时全为 -）；status = 十进制或 '-'（短应答无 status）\n"
     "#   覆盖：带 status/len 的应答、短应答（只回 id）、请求、事件、CMD2/EVENT2、空载荷\n"
+)
+HEADER_P256 = (
+    "# proto/test_vectors_p256.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源（单一源）：上游 orpah_id.derive_demo_privkey(sn, gen) 的私钥 d\n"
+    "#                 + Python cryptography/OpenSSL 的 X962 未压缩公钥（04||X||Y）\n"
+    "# 列：<kind><TAB><a1><TAB><a2><TAB><d-hex><TAB><pub65-hex>\n"
+    "#   sn : a1=SN a2=gen —— d 由 C 自己按同式派生（这一列同时钉住派生规则）\n"
+    "#   d  : a1=d-hex（**不取模**，但必须 < 2^256 = 64 个十六进制字符）a2=-\n"
+    "#        覆盖 n-1（= -G）与 n+1 / n+0x1234（未归约的标量，ladder 要能吃）\n"
+    "# 为什么这样测：p/a/b/Gx/Gy/n、Montgomery 乘、点运算、标量乘 —— 任一处错，公钥就不同\n"
 )
 
 
@@ -570,6 +581,45 @@ def gen_hgic_ctrl_rows(hg):
     return out
 
 
+# ---------------------------------------------------------------------------
+# P-256 向量（c4-β）—— 单一源 = 上游 derive_demo_privkey + OpenSSL 未压缩点
+# ---------------------------------------------------------------------------
+P256_SN_CASES = [
+    ("CN-WH01-9AF3C1D2", 1),
+    ("CN-AB01-00000001", 1),
+    ("CN-ZZ99-ZZZZZZZZ", 1),
+    ("CN-WH01-9AF3C1D2", 2),          # 带代次
+]
+
+
+def gen_p256_rows(o):
+    """d 与公钥的期望值全部由 Python（OpenSSL）现算 —— 不拄任何常量。"""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    rows = []
+    for sn, gen in P256_SN_CASES:
+        k = o.derive_demo_privkey(sn, gen)
+        d = k.private_numbers().private_value
+        pub = k.public_key().public_bytes(serialization.Encoding.X962,
+                                         serialization.PublicFormat.UncompressedPoint)
+        rows.append(("sn", sn, str(gen), "%064x" % d, pub.hex()))
+
+    n = int(o._P256_ORDER)                    # noqa: SLF001 —— 阶的单一源就是它
+    d_vals = [1, 2, 3, n - 1, n + 1, n + 0x1234]      # 均 < 2^256（API 是 32 字节标量）
+    rnd = random.Random(20260920)
+    d_vals += [rnd.randrange(1, n) for _ in range(4)]
+    for dv in d_vals:
+        d_eff = dv % n                        # C 侧用**未归约**的标量，应得到同样的点
+        if d_eff == 0:
+            continue
+        k = ec.derive_private_key(d_eff, ec.SECP256R1())
+        pub = k.public_key().public_bytes(serialization.Encoding.X962,
+                                         serialization.PublicFormat.UncompressedPoint)
+        rows.append(("d", "%064x" % dv, "-", "%064x" % dv, pub.hex()))
+    return rows
+
+
 def read_rows(path):
     rows = []
     with open(path, "r", encoding="utf-8") as f:
@@ -723,6 +773,13 @@ def main():
                      os.path.basename(VEC_HGIC_CTRL), len(rows_hc)))
         else:
             print("!! 拿不到 tools/txah_hgic.py（HGIC 单一源）⇒ 跳过 HGIC 三份向量")
+        try:
+            rows_p256 = gen_p256_rows(o)
+            write_rows(VEC_P256, HEADER_P256, rows_p256)
+            print("--refresh 已重写 %s(%d)"
+                  % (os.path.basename(VEC_P256), len(rows_p256)))
+        except Exception as e:                     # noqa: BLE001
+            print("!! P-256 向量生成失败（需 cryptography）：%r" % (e,))
         if o is None or proto is None:
             print("!! --refresh 需要上游 Python 参考实现（orpah_id + orpah_proto）；已退出")
             return 2
@@ -789,6 +846,16 @@ def main():
     else:
         print("跳过 ②b：拿不到 tools/txah_hgic.py（HGIC 的单一源）")
 
+    # ---- ②c 快照：P-256（需要上游 derive_demo_privkey + cryptography） ----
+    if o is not None:
+        try:
+            cmp_snapshot("test_vectors_p256.txt", gen_p256_rows(o), read_rows(VEC_P256), fails)
+        except Exception as e:                        # noqa: BLE001
+            print("FAIL P-256 快照生成失败（需 cryptography 算未压缩点）：%r" % (e,))
+            fails.append("P-256 快照生成")
+    else:
+        print("跳过 ②c：P-256 快照需要上游参考实现")
+
     # ---- ① C 侧自检（每个内核一个可执行目标） ------------------------------
     targets = [
         ("SN 内核", "sn_cli", ["sn.c", "sn_cli.c"],
@@ -813,6 +880,9 @@ def main():
           ("C frame-selftest（帧构造向量）", ["frame-selftest", VEC_HGIC]),
           ("C parse-selftest（流解析/重同步向量）", ["parse-selftest", VEC_HGIC_PARSE]),
           ("C ctrl-selftest（控制面解码向量）", ["ctrl-selftest", VEC_HGIC_CTRL])]),
+        ("P-256 曲线", "p256_cli", ["p256.c", "sha256.c", "p256_cli.c"],
+         [("C selfcheck（P-256 不变量）", ["selfcheck"]),
+          ("C pubkey-selftest（公钥派生向量）", ["pubkey-selftest", VEC_P256])]),
     ]
     exes = {}
     with tempfile.TemporaryDirectory() as td:
@@ -891,7 +961,8 @@ def main():
         print("PASS（C 侧自检全过；**未与 Python 交叉验证** —— 没找到上游参考实现）")
         return 0
     print("PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 / JCS / b64url / 报文信封 / "
-          "下行解码 / SHA-256 / HMAC / 已签报文 / HGIC 帧构造 / HGIC 流解析 / HGIC 控制面 十二组）")
+          "下行解码 / SHA-256 / HMAC / 已签报文 / HGIC 帧构造 / HGIC 流解析 / HGIC 控制面 / "
+          "P-256 公钥派生 十三组）")
     return 0
 
 
