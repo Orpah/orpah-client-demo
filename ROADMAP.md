@@ -221,8 +221,8 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **c1** | 本仓 `firmware/` 骨架：Makefile / `ld` / startup / `Core{board.h,main.c}` / `Periph{gpio,uart}` | **✅ 完成（未上机）** |
-| c2 | 协议内核 C 实现 + 与 Python 的**交叉测试**（同一批黄金向量，纯 PC） | **进行中**：SN 内核已完成（见下） |
-| c3 | HGIC 数据口（UART ↔ TX-AH：8 字节头 + `FRM2` + `CMD`/`EVENT`） | 未做 |
+| c2 | 协议内核 C 实现 + 与 Python 的**交叉测试**（同一批黄金向量，纯 PC） | **✅ 完成（见下）** |
+| **c3** | HGIC 数据口（UART ↔ TX-AH：8 字节头 + `FRM2` + `CMD`/`EVENT`） | **帧层 ✅ 完成（未上机）**；上机 = UART2 胶水 + 烧录（见下 c3-1） |
 | c4 | §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）+ 自限频 + 已签 ID 上报 | **进行中**：**降级（HS256）已达服务端验签通过**（见下 c4-α）；ES256 待拍板 |
 | c5 | 低功耗 / 取能标定 | 推后到 d/e |
 
@@ -243,14 +243,14 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 * 设备侧组装：`hdr{alg,level}` + `payload{sn,ts,nonce,seen_routers[,cap][,battery_mv][,firmware]}`
   → 预像（JCS）→ 签名 → 报文 JSON（插入序）；**level 1/2 = HMAC-SHA256**、**level 3 = 不签名**；
   **level=0（ES256）返回 `IDR_E_ES256`：明确报未实现，不假装签了**。
-* 实测（`python proto\run_cross_test.py` → **exit 0**，交叉测试 **9 组**）：
+* 实测（`python proto\run_cross_test.py` → **exit 0**，交叉测试 **12 组**）：
   · `id-report-selftest` **5/5**：与 Python `Device.report()` + `encode_msg()` **逐字节一致**（含外层信封）；
   · ★ **服务端验签通过**：把 **C 产出的报文**交给上游 `orpah_id.verify_report()`+`KeyStore`
     真验一遍 ⇒ **4 条 `level=1/2` 全部 `accepted=True` 且级别对得上**；
     `level=3`（`alg=none`）服务端判定 `accepted=True / trust=none / coverage_only=True`（只陈述，不当判据）。
 
-⇒ 也就是说，c 步判据里的「**服务端收到并验签通过**」**已经先离线达成**（还没上机 —— 上机要先把 c3 的
-HGIC 帧层接上）。
+⇒ 也就是说，c 步判据里的「**服务端收到并验签通过**」**已经先离线达成**（还没上机 —— 上机要做 c3-2：
+把 HGIC 帧层接到 CH32 的 UART2 上 + 由你烧录）。
 ★ 一个必须知道的边界：向量里的 `ts` 是**固定值**（提交的文件必须确定性），所以验签时把 `now` **钉到向量那个 ts**；
 `ts=0`（真机无 RTC 的正常路径）则不传 `now`。**时间窗是另一个机制**，由上游测试负责。
 （踩坑经过：我曾硬编码一个抄来的 `ts`，过一会儿再跑就回 `timestamp_out_of_window`，签名其实早就过了。）
@@ -272,8 +272,9 @@ HGIC 帧层接上）。
 
 实测判据：`python proto\run_cross_test.py` → **exit 0**，输出 `SN selfcheck 11/11`、`selftest 63/63`、
 `sn-selftest 19/19`、`JCS 4/4` + `jcs-selftest 12/12`、`b64url-selftest 17/17`、`msg-selftest 8/8`、
-`dl-selftest 11/11`、`SHA/HMAC selfcheck 3345/3345`、`sha256-selftest 16/16`、**`hmac-selftest 13/13`**，
-**八份快照**与 Python **逐行一致**。
+`dl-selftest 11/11`、`SHA/HMAC selfcheck 3345/3345`、`sha256-selftest 16/16`、**`hmac-selftest 13/13`**、
+`HGIC selfcheck` + `frame-selftest 14/14` + `parse-selftest 12/12` + `ctrl-selftest 13/13`，
+**十二份快照**与 Python **逐行一致**。
 ★ SHA-256 与 HMAC 的向量里都包含**真实签名预像**（`jcs({"hdr","payload"})` 那串字节），
 HMAC 那条用的是**真实降级路径**（32B 演示 HMAC 密钥 × 真实预像 = §5.1 的 HS256）——
 c4 要签/要做 MAC 的就是这两串，先把它们钉死。
@@ -288,7 +289,23 @@ c4 要签/要做 MAC 的就是这两串，先把它们钉死。
 Mod97 是 `21`（我一开始凭记忆把 B 当成 Luhn32 期望值 ⇒ 自检当场失败。
 教训：**期望值只能来自 Python 输出**）。
 
-⚠ **剩下的两块**：① HGIC 帧层（8 字节头 / `FRM2` / `CMD` / `EVENT`）⇒ 与 c3 的数据口驱动一起做；
+**c3-1（HGIC 帧层）：✅ 完成（2026-09-20，未上机）** —— `proto/hgic.{h,c}` + `proto/hgic_cli.c`：
+
+* 内容：8 B 头的组/解（**小端**、`ifidx:4|flags:4`）、数据帧 `FRM2`、命令帧 `CMD`/`CMD2`（**4 B union 补满**，
+  参数在偏移 12）、cookie 计数器（**15 位回绕**、逐帧 +1 —— 模组做顺序检查）、控制面解码
+  （带 `status/len` 的应答 / **短应答** / 请求与事件）、**流式定帧 + 重同步**（杂音 / 假 magic / 截断 / 逐字节喂）。
+* 实测判据（同一条命令，**exit 0**）：`frame-selftest` **14/14**、`parse-selftest` **12/12**、
+  `ctrl-selftest` **13/13** 与 **本仓** `tools/txah_hgic.py` **逐行一致**（HGIC 的单一源在本仓，
+  **不需要上游仓库** ⇒ 那三组在没有 `orpah-over-halow` 时照样跑）+ `selfcheck` 不变量全过。
+* ★ 写在哪：**帧层放 `proto/`（纯逻辑、可交叉测试）**，不放 `Periph/` —— 与 c2 同一约定；
+  `Periph/` 留给硬件胶水（USART2 ↔ HGIC）。已在 `firmware/Makefile` 注释里更正（原先写的是 `Periph/hgic.c`）。
+* ⚠ 两个真踩到的坑：① **magic 是小端 u16** —— 字节 `2B 1A` = `0x1A2B`（主机→模组）、
+  字节 `1A 2B` = `0x2B1A`（模组→主机）；我自检里就拿错了方向（4 项红），而**向量组当时已经证明实现是对的**
+  ⇒ 错的是测试数据（教训同 c2：期望值/用例也要拿证据对齐）；② C 的解析缓冲有上界（4096）而 Python 没有
+  ⇒ 多一个 `overrun` 计数器（向量里恒 0，收录它就是钉住“合法数据永不触发它”）。
+* **未做（= c3-2，要上机）**：`Periph/` 下的 UART2 胶水 + 把 `proto/*.c` 编进固件 + 用户烧录。
+
+⚠ **剩下的两块**：① **c3-2 上机接线**（UART2 ↔ HGIC + 把 `proto/*.c` 编进固件 + 烧录）；
 ② **ECDSA P-256（level=0）** ⇒ 要先拍两个板（软件 P-256 的来源、`k`/nonce 方案，见下）。
 
 **c4 开工前要拍的两个板**（属“不能自由发挥”的工程/安全取舍，2026-09-20 提出）：

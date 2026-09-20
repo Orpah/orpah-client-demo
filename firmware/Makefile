@@ -37,7 +37,11 @@ ASFLAGS = $(ARCH) -ICore -IPeriph
 LDFLAGS = -nostartfiles -nostdlib -T $(LINK) \
           -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map
 
-# 骨架只有这三个；c2 加 proto/、c3 加 Periph/hgic.c
+# 骨架只有这三个。接下来的接线（c3-2，**尚未做**）：
+#   · 把 proto/ 的纯代码编进来：../proto/hgic.c（+ msg.c/jcs.c/id_report.c…，都用不到 libc）
+#   · 新增 Periph/ 下的模组串口胶水（USART2 ↔ HGIC：灌字节给 hgic_parser_feed、发 hgic_frame_*）
+# ★ HGIC 的**帧层（纯逻辑）在 proto/hgic.{h,c}**，不在这里 —— 那样它才能在 PC 上
+#   与 tools/txah_hgic.py 做交叉测试（见 proto/README.md「HGIC 帧层」一节）。
 SRCS = Core/main.c \
        Periph/gpio.c \
        Periph/uart.c

@@ -1,9 +1,10 @@
 # proto/ — 协议内核（C 实现）+ 与 Python 的交叉测试
 
-**c2/c4-α 状态（2026-09-20）：SN / JCS / b64url / 报文信封 / 下行解码 / SHA-256 / HMAC-SHA256 / **
-设备侧已签报文（HS256+
-none）** 全部完成，交叉测试 **9 组**；并且**服务端（上游 `verify_report`）验签通过** C 产出的降级报文。
-剩余：HGIC 帧层 ⇒ c3（要上机）；**ECDSA P-256（level=0）** ⇒ 等拍板（C 侧现在明确报 `IDR_E_ES256`）。**
+**状态（2026-09-20，c2 + c4-α + c3 帧层）：SN / JCS / b64url / 报文信封 / 下行解码 / SHA-256 /
+HMAC-SHA256 / 设备侧已签报文（HS256 + none）/ HGIC 帧层 全部完成**，交叉测试 **12 组**；
+并且**服务端（上游 `verify_report`）验签通过** C 产出的降级报文。
+剩余：HGIC 的**上机**（c3：UART2 ↔ 模组，见 `firmware/`，要你烧录）；**ECDSA P-256（level=0）**
+⇒ 等拍板（C 侧现在明确报 `IDR_E_ES256`，不假装签了）。
 
 ## 为什么要这一层
 
@@ -28,7 +29,7 @@ none）** 全部完成，交叉测试 **9 组**；并且**服务端（上游 `ve
 | `hmac.h` / `hmac.c` | **HMAC-SHA256**（RFC 2104）：`hmac_sha256(key, keylen, msg, msglen, out)` = §5.1 的**降级 HS256**（**直接对 preimage 做 HMAC**，不再先哈希） |
 | `id_report.h` / `id_report.c` | **设备侧已签报文组装**：`idr_build()` 组 hdr+payload → 预像 → 签名（**level 1/2 = HS256**、**level 3 = 不签名**）→ 输出报文 JSON。`level=0`（ES256）返回 `IDR_E_ES256`：**明确报未实现，不假装签了** |
 | `b64url.h` / `b64url.c` | base64url（无填充），对应 `orpah_id.b64url_encode` |
-| `sn_cli.c` / `jcs_cli.c` / `sha_cli.c` | host 侧 CLI（对拍/调试用；**不编进固件**）。`jcs_cli` 同时管 JCS/b64url/报文/下行四组 |
+| `sn_cli.c` / `jcs_cli.c` / `sha_cli.c` / `hgic_cli.c` | host 侧 CLI（对拍/调试用；**不编进固件**）。`jcs_cli` 管 JCS/b64url/报文/下行四组；`hgic_cli` 管 HGIC 三组 |
 | `run_cross_test.py` | 一键对拍：生成/校验向量 + 编译 C + 三方比对 |
 | `test_vectors_sn.txt` | `ORG-UNIQUE<TAB>LUHN32<TAB>MOD97`（63 行） |
 | `test_vectors_snparse.txt` | `SN<TAB>ok<TAB>err<TAB>verify`（19 行） |
@@ -39,8 +40,14 @@ none）** 全部完成，交叉测试 **9 组**；并且**服务端（上游 `ve
 | `test_vectors_sha256.txt` | `<input-hex><TAB><digest-hex>`（16 行：空 / 块边界 55~129 / 1000B / **真实签名预像**） |
 | `test_vectors_hmac.txt` | `<key-hex><TAB><msg-hex><TAB><mac-hex>`（13 行：空键 / 键 32~128（含**超分组必须先哈希**）/ **真实降级路径**） |
 | `test_vectors_id_report.txt` | 8 个参数 + `<report-hex><TAB><envelope-hex>`（5 行：level 1/2/3、带与不带 cap+battery+firmware） |
+| `hgic.h` / `hgic.c` | **HGIC 帧层**（模组主机口）：8 B 头组/解、`FRM2`/`CMD`/`CMD2`、cookie 计数器（15 位回绕）、控制面解码（应答/短应答/请求/事件）、**流式定帧 + 重同步**。**无 stdio/malloc/string.h ⇒ 可编进固件** |
+| `hgic_cli.c` | HGIC 的 host 侧 CLI（`frm2`/`cmd`/`hdr`/`feed`/`ctrl` 单次子命令 + `selfcheck` + 三个 `*-selftest`） |
+| `test_vectors_hgic.txt` | `<kind><TAB><a1..a6><TAB><frame-hex>`（14 行：hdr/frm2/cmd；含整帧 8 与 4096 两条边界、CMD↔CMD2 分界） |
+| `test_vectors_hgic_parse.txt` | `<expect><TAB><流-hex><TAB><chunk><TAB><frames><TAB><garbage><TAB><bad_length><TAB><overrun>`（12 行：逐字节喂 / 杂音 / 假 magic / 截断 / 方向过滤） |
+| `test_vectors_hgic_ctrl.txt` | `<type><TAB><from><TAB><载荷><TAB><rc><TAB><kind><TAB><id><TAB><status><TAB><data-hex>`（13 行） |
 
-> 四份向量文件全部**由 Python 参考实现生成（勿手改）**，列在脚本里统一用 `--refresh` 重生。
+> 十二份向量文件全部**由 Python 参考实现生成（勿手改）**，列在脚本里统一用 `--refresh` 重生
+> （HGIC 三份的参考在**本仓** `tools/txah_hgic.py`，其余九份在上游 `orpah-over-halow`）。
 
 ## 跑
 
@@ -52,13 +59,15 @@ python proto/run_cross_test.py --orpah-dir ../orpah-over-halow
 
 它对三件事下结论：
 
-1. **C 侧自检**（三个可执行目标）：
+1. **C 侧自检**（四个可执行目标）：
    · **SN 内核**：`selfcheck`（11 项）+ `selftest`（63 行校验位）+ `sn-selftest`（19 行 SN 解析）
    · **JCS/b64url/msg/dl**：`selfcheck`（4 项）+ `jcs-selftest`（12 行）+ `b64url-selftest`（17 行）
      + `msg-selftest`（8 行报文信封）+ `dl-selftest`（11 行下行解码）
    · **SHA-256/HMAC**：`selfcheck`（**分块自洽 3345 项** + 两条 HMAC 不变量：键超分组等价于其摘要当键；
      空消息的两种写法一致）+ `sha256-selftest`（16 行）+ `hmac-selftest`（13 行）
-2. **快照没过期**：九份向量文件与 Python 参考**逐行一致**；
+   · **HGIC 帧层**：`selfcheck`（不变量）+ `frame-selftest`（14 行帧构造）
+     + `parse-selftest`（12 行流解析/重同步）+ `ctrl-selftest`（13 行控制面）
+2. **快照没过期**：十二份向量文件与 Python 参考**逐行一致**；
 3. **服务端收得下**（★ 最重要的一步）：把 **C 产出的报文**交给上游 `orpah_id.verify_report()`
    （配上 `KeyStore`）+ 真验一遍 ⇒ `level=1/2` 必须 `accepted=True` 且级别对得上
    （L3 / `alg=none` 只陈述：规范 §8.3 它就是“只做覆盖”）。
@@ -67,6 +76,32 @@ python proto/run_cross_test.py --orpah-dir ../orpah-over-halow
 
 ⚠ 找不到上游参考实现时，脚本会**明确打印"未与 Python 交叉验证"**（但仍退出 0，因为 C 侧自检确实过了）——
 别把那种 PASS 当成已交叉验证 ✓。
+
+## HGIC 帧层（c3）：单一源在**本仓**，不在上游
+
+这一层与上面几组不同：它的单一源是 **本仓** `tools/txah_hgic.py`（来历 = 模组 SDK
+`sdk/include/lib/lmac/hgic.h` + `sdk/lib/bus/macbus/uart_bus.c` + 2026-09-16/20 真机实测），
+**不需要上游仓库** ⇒ 三组 HGIC 向量与 C 自检在没有 `orpah-over-halow` 时照样会跑。
+
+| 判据 | 怎么测出来的 |
+|---|---|
+| 8 B 头、**小端**、`ifidx:4\|flags:4` 按位打包 | `test_vectors_hgic.txt` 的 `hdr` 类（含 `ifidx=5,flags=10` 与全 1 边界） |
+| 整帧长度 = 8 + 载荷（`uart_bus.c` 的定帧依据）、上界 4096 | 同上：空载荷（整帧 8）与**恰好 4096** 两条边界 |
+| 数据面 = `FRM2`（8 B 头 + 载荷紧跟，不带 24 B frm_info） | `frm2` 类；与 `tools/hgic_bus.py` 真机在用的那条路径一致 |
+| 命令帧的 4 B union **必须补满**（参数在偏移 12） | `cmd` 类的带参用例 + `selfcheck` 直查 `frame[12]` |
+| `id > 255` 走 `CMD2`(13) | `cmd 255` / `cmd 256` 两条边界 |
+| cookie 逐帧 +1、15 位回绕 | `hdr` 类的 cookie 0/4660/32767 + `selfcheck` 的回绕用例 |
+| 重同步（杂音 / 假 magic / 截断 / 逐字节喂） | `test_vectors_hgic_parse.txt` 12 行（`expect` × `chunk` × 畸形流） |
+| 方向过滤（固件只收模组→主机） | 同上 `expect=rx\|tx` + 两种 magic 混流的用例 |
+| 控制面三种形状（带 status/len 的应答 / 短应答 / 请求与事件） | `test_vectors_hgic_ctrl.txt` 13 行 |
+
+**与 Python 的有意差异只有一个**：`hgic_parser_t.overrun`（C 的缓冲上界 4096，Python 无上限）。
+向量里这一列恒为 0 —— 收录它是为了钉住“合法数据永不触发它”。
+
+⚠ **大小端最容易错的一点**：magic 是**小端 u16** ⇒ 字节 `2B 1A` = `0x1A2B`（主机→模组）、
+字节 `1A 2B` = `0x2B1A`（模组→主机）。写向量或抓包时别把这两串看成一回事
+（2026-09-20 自检就踩过一次：拿主机方向的帧去喂 `expect=rx` 的解析器 ⇒ 4 项红，
+而向量组早已独立证明方向过滤是对的 —— **错的是我的测试数据，不是实现**）。
 
 ## ★ 一条最要紧的事实：校验位算法是 **Luhn32 / Mod97**，不是 Damm32
 

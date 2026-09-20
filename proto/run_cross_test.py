@@ -19,6 +19,10 @@ run_cross_test.py — c2：SN 内核「Python 参考 vs C 实现」零偏差对�
 运行：
   python proto/run_cross_test.py
   python proto/run_cross_test.py --orpah-dir ../orpah-over-halow --refresh
+
+HGIC 帧层（c3）另有 **第四组目标 `hgic_cli`**（`hgic.c` + `hgic_cli.c`）+ 三份向量
+（`test_vectors_hgic*.txt`）：它的单一源在**本仓** `tools/txah_hgic.py`（模组 SDK 源码 + 真机实测），
+**不依赖上游仓库** ⇒ 那三份快照与 C 自检在没有上游时照样会跑。
 """
 import argparse
 import os
@@ -32,6 +36,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DEFAULT_ORPAH = os.path.abspath(os.path.join(REPO, "..", "orpah-over-halow"))
 
+
+def load_hgic_ref():
+    """HGIC 帧层的单一源 = **本仓** `tools/txah_hgic.py`（模组 SDK 源码 + 真机实测）。
+
+    它**不依赖上游仓库**（与 SN/JCS/报文那几组不同）⇒ HGIC 三组快照与 C 自检
+    在没有 `orpah-over-halow` 时应照跑不误。
+    """
+    tools = os.path.join(REPO, "tools")
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    import txah_hgic
+    return txah_hgic
+
 VEC_SN = os.path.join(HERE, "test_vectors_sn.txt")
 VEC_PARSE = os.path.join(HERE, "test_vectors_snparse.txt")
 VEC_JCS = os.path.join(HERE, "test_vectors_jcs.txt")
@@ -41,6 +58,9 @@ VEC_DL = os.path.join(HERE, "test_vectors_downlink.txt")
 VEC_SHA = os.path.join(HERE, "test_vectors_sha256.txt")
 VEC_HMAC = os.path.join(HERE, "test_vectors_hmac.txt")
 VEC_IDR = os.path.join(HERE, "test_vectors_id_report.txt")
+VEC_HGIC = os.path.join(HERE, "test_vectors_hgic.txt")
+VEC_HGIC_PARSE = os.path.join(HERE, "test_vectors_hgic_parse.txt")
+VEC_HGIC_CTRL = os.path.join(HERE, "test_vectors_hgic_ctrl.txt")
 
 HEADER_SN = (
     "# proto/test_vectors_sn.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
@@ -102,6 +122,32 @@ HEADER_IDR = (
     "#     <TAB><caprtc|-><TAB><firmware|-><TAB><report-hex><TAB><envelope-hex>\n"
     "# 覆盖：level 1/2（HS256，降级链）/ level 3（none，不签名）/ 无 cap 与带 cap+battery+firmware\n"
     "#   ⚠ level=0（ES256）**不在此**：C 侧明确报未实现（IDR_E_ES256），等 P-256 拍板\n"
+)
+HEADER_HGIC = (
+    "# proto/test_vectors_hgic.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源（单一源）：**本仓** tools/txah_hgic.py（= 模组 SDK hgic.h/uart_bus.c + 真机实测）\n"
+    "# 列：<kind><TAB><a1><TAB><a2><TAB><a3><TAB><a4><TAB><a5><TAB><a6><TAB><frame-hex>\n"
+    "#   hdr : a1=magic(hex) a2=type a3=ifidx a4=flags a5=cookie a6=载荷-hex|-\n"
+    "#   frm2: a1=以太帧-hex|- a2=cookie a3..a6=-          （lean=True ⇒ FRM2）\n"
+    "#   cmd : a1=cmd_id a2=参数-hex|- a3=cookie a4..a6=-     （id>255 走 CMD2）\n"
+    "# 覆盖：长度上下界 8/4096、ifidx:4|flags:4 打包、cookie 0/32767、256 附近的 CMD↔CMD2 分界\n"
+)
+HEADER_HGIC_PARSE = (
+    "# proto/test_vectors_hgic_parse.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源（单一源）：**本仓** tools/txah_hgic.py 的 StreamParser.feed()\n"
+    "# 列：<expect><TAB><流-hex><TAB><chunk><TAB><frames><TAB><garbage><TAB><bad_length><TAB><overrun>\n"
+    "#   expect ∈ any|rx|tx（rx = 只收模组→主机，= Python 的 expect_from_module=True）\n"
+    "#   chunk  = 每次喂多少字节（0 = 一次喂完；1 = 逐字节）\n"
+    "#   frames = ';' 分隔的 <from>:<type>:<len>:<cookie>:<ifidx>:<flags>:<载荷hex|->（无帧 = -）\n"
+    "#   覆盖：逐字节喂、前置杂音、假 magic（长度非法）、截断、两种 magic 混流、方向过滤\n"
+    "#   ⚠ overrun 是 **C 独有**（Python 缓冲无上限），合法数据恒为 0 —— 收录它就是钉住“永不为 0 以外”\n"
+)
+HEADER_HGIC_CTRL = (
+    "# proto/test_vectors_hgic_ctrl.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源（单一源）：**本仓** tools/txah_hgic.py 的 ctrl_info()\n"
+    "# 列：<type><TAB><from 0|1><TAB><载荷-hex><TAB><rc><TAB><kind><TAB><id><TAB><status><TAB><data-hex>\n"
+    "#   kind ∈ req|resp|'-'（rc≠0 时全为 -）；status = 十进制或 '-'（短应答无 status）\n"
+    "#   覆盖：带 status/len 的应答、短应答（只回 id）、请求、事件、CMD2/EVENT2、空载荷\n"
 )
 
 
@@ -405,6 +451,125 @@ def gen_hmac_rows(o):
             for k, m in cases]
 
 
+# ---------------------------------------------------------------------------
+# HGIC 帧层向量（c3）—— 单一源 = 本仓 tools/txah_hgic.py
+# ---------------------------------------------------------------------------
+# kind, a1..a6（列的含义见 HEADER_HGIC）
+HGIC_FRAME_CASES = [
+    ("hdr", "1A2B", "9", "0", "0", "0", "-"),                   # 空载荷：整帧 = 8
+    ("hdr", "1A2B", "9", "5", "10", "4660", "-"),               # ifidx:4|flags:4 + cookie
+    ("hdr", "2B1A", "4", "15", "15", "32767", "aa55"),          # 另一半字节都置 1
+    ("hdr", "0000", "0", "1", "2", "1", "00ff"),              # magic/type 不校验（原样发）
+    ("hdr", "1A2B", "9", "0", "0", "0", "aa" * 4088),          # 整帧恰好 4096（上界）
+    ("frm2", "aabbccddeeff11223344556688b50102", "1", "-", "-", "-", "-"),
+    ("frm2", "-", "0", "-", "-", "-", "-"),                     # 空载荷（边界）
+    ("frm2", "88b5", "32767", "-", "-", "-", "-"),
+    ("cmd", "108", "-", "0", "-", "-", "-"),                    # GET_UART_FIXLEN
+    ("cmd", "43", "-", "7", "-", "-", "-"),                     # GET_FW_INFO
+    ("cmd", "108", "0102", "9", "-", "-", "-"),               # 带参：参数在偏移 12
+    ("cmd", "255", "-", "11", "-", "-", "-"),                   # CMD 上界
+    ("cmd", "256", "-", "12", "-", "-", "-"),                   # CMD2 下界
+    ("cmd", "65535", "aabbccdd", "13", "-", "-", "-"),         # CMD2 上界 + 4B 参数
+]
+
+
+def hgic_frame_build(hg, kind, a1, a2, a3, a4, a5, a6):
+    if kind == "hdr":
+        pl = b"" if a6 == "-" else bytes.fromhex(a6)
+        return hg.build(int(a1, 16), int(a2), pl, cookie=int(a5),
+                        ifidx=int(a3), flags=int(a4))
+    if kind == "frm2":
+        pl = b"" if a1 == "-" else bytes.fromhex(a1)
+        return hg.data_frame(pl, cookie=int(a2), lean=True)
+    if kind == "cmd":
+        pl = b"" if a2 == "-" else bytes.fromhex(a2)
+        return hg.cmd_frame(int(a1), pl, cookie=int(a3))
+    raise ValueError("unknown hgic kind: %s" % kind)
+
+
+def gen_hgic_frame_rows(hg):
+    return [tuple(list(c) + [hgic_frame_build(hg, *c).hex()]) for c in HGIC_FRAME_CASES]
+
+
+def hgic_streams(hg):
+    """(expect, 字节流, chunk) —— 流由帧拼出来，不手写十六进制（免得两边看错同一串）。"""
+    f_tx = hg.data_frame(bytes(range(1, 21)), cookie=1, lean=True)      # 主机→模组
+    f_tx2 = hg.cmd_frame(109, b"", cookie=2)
+    f_rx = hg.build(hg.MAGIC_MODULE_TO_HOST, hg.TYPE_NAMES_REV["FRM2"],
+                    b"\x88\xb5\x01\x02", cookie=5, ifidx=3, flags=4)   # 模组→主机
+    fake = bytes([0x2B, 0x1A, 9, 0, 7, 0, 0, 0])                        # 长度 7 ⇒ 假 magic
+    return [
+        ("rx", f_rx, 0),
+        ("rx", f_rx, 1),                      # 逐字节喂
+        ("rx", f_rx, 3),
+        ("any", f_rx + f_tx, 0),              # 两种 magic 混流
+        ("rx", f_rx + f_tx, 0),               # 方向过滤：主机→那帧变杂音
+        ("tx", f_rx + f_tx, 0),
+        ("any", b"\x01\x02\x03" + f_rx, 0),   # 前置杂音
+        ("any", fake + f_rx, 0),              # 假 magic：计 bad_length 后继续
+        ("any", f_rx[:4], 0),                 # 截断（只有半个头）
+        ("any", f_tx2 + f_rx + b"\x00\xff" + f_rx, 2),
+        ("any", b"\x2b", 1),                  # 只有 magic 的前半
+        ("any", b"", 0),
+    ]
+
+
+def hgic_parse_expect(hg, expect):
+    return {"any": None, "rx": True, "tx": False}[expect]
+
+
+def hgic_parse_row(hg, expect, stream, chunk):
+    sp = hg.StreamParser(expect_from_module=hgic_parse_expect(hg, expect))
+    parts = [stream] if chunk <= 0 else [stream[i:i + chunk] for i in range(0, len(stream), chunk)]
+    frames = []
+    for part in parts:
+        for hdr, payload in sp.feed(part):
+            frames.append("%d:%d:%d:%d:%d:%d:%s" % (
+                1 if hdr["from_module"] else 0, hdr["type"], hdr["length"],
+                hdr["cookie"], hdr["ifidx"], hdr["flags"], payload.hex() or "-"))
+    return (expect, stream.hex(), str(chunk), (";".join(frames) or "-"),
+            str(sp.garbage), str(sp.bad_length), "0")
+
+
+def gen_hgic_parse_rows(hg):
+    return [hgic_parse_row(hg, *c) for c in hgic_streams(hg)]
+
+
+# type, from_module, 载荷-hex
+HGIC_CTRL_CASES = [
+    (3, 1, "6c000300aabbcc"),      # CMD 108 带 status=0 / len=3 / 3B 数据
+    (3, 1, "6c000300aabb"),        # len 与 body 对不上 ⇒ 短应答
+    (3, 1, "6c"),                  # 只回 id（真机 send-cmd 1/20 就是这样）
+    (3, 1, ""),                    # 空载荷 ⇒ None
+    (3, 0, "6c01020304"),          # 请求（union 之后才是数据）
+    (3, 0, "6c0102"),
+    (4, 1, "0e01020304"),          # 事件（EVENT）
+    (13, 1, "2c01000100bb"),       # CMD2 id=300 + status/len + 1B 数据
+    (13, 1, "2c010300aa"),         # CMD2 但 len 对不上 ⇒ 短应答
+    (13, 1, "6c"),                 # CMD2 但载荷不足以取 u16 id
+    (14, 1, "2c01ff"),             # EVENT2
+    (9, 1, "aabb"),                # 数据帧（不是控制帧）
+    (2, 1, "01"),
+]
+
+
+def gen_hgic_ctrl_rows(hg):
+    out = []
+    for type_, frm, payload_hex in HGIC_CTRL_CASES:
+        payload = b"" if payload_hex == "" else bytes.fromhex(payload_hex)
+        hdr = {"type": type_, "from_module": bool(frm), "magic": 0, "length": 0,
+               "cookie": 0, "ifidx": 0, "flags": 0}
+        info = hg.ctrl_info(hdr, payload)
+        if info is None:
+            out.append((type_, frm, payload_hex, "-1", "-", "-", "-", "-"))
+            continue
+        data_hex = info["data"].hex() if info["data"] else "-"
+        status = "-" if info["status"] is None else str(info["status"])
+        out.append((type_, frm, payload_hex, "0", info["kind"], str(info["id"]),
+                    status, data_hex))
+    return out
+
+
 def read_rows(path):
     rows = []
     with open(path, "r", encoding="utf-8") as f:
@@ -420,6 +585,27 @@ def write_rows(path, header, rows):
         f.write(header)
         for r in rows:
             f.write("\t".join(str(x) for x in r) + "\n")
+
+
+def _short(v):
+    """超长列（HGIC 有 4 KB 载荷）不刷屏。"""
+    s = str(v)
+    return s if len(s) <= 200 else s[:200] + "…(%d)" % len(s)
+
+
+def cmp_snapshot(name, exp, got, fails):
+    """逐行比对快照与 Python 参考；不一致就记 FAIL 并打出首处差异。"""
+    if [tuple(str(x) for x in r) for r in exp] != [tuple(r) for r in got]:
+        fails.append("快照 %s 与 Python 参考不一致（用 --refresh 重生成并核对 diff）" % name)
+        print("FAIL 快照 %s 与 Python 参考不一致" % name)
+        for i, (a, b) in enumerate(zip(exp, got)):
+            if tuple(str(x) for x in a) != tuple(b):
+                print("   line %d:\n     PY  =%s\n     FILE=%s" % (i + 1, _short(a), _short(b)))
+                break
+        else:
+            print("   行数不同：PY=%d FILE=%d" % (len(exp), len(got)))
+    else:
+        print("PASS 快照 %s 与 Python 参考逐行一致（%d 行）" % (name, len(got)))
 
 
 # ---------------------------------------------------------------------------
@@ -505,6 +691,11 @@ def main():
     fails = []
     o = None
     proto = None
+    hg = None
+    try:
+        hg = load_hgic_ref()
+    except Exception as e:                            # noqa: BLE001
+        print("!! 拿不到 HGIC 单一源 tools/txah_hgic.py：%r" % (e,))
     if os.path.isdir(args.orpah_dir):
         sys.path.insert(0, args.orpah_dir)
         try:
@@ -517,8 +708,21 @@ def main():
     else:
         print("!! 未找到上游参考实现目录 %s（--orpah-dir 指定）" % args.orpah_dir)
 
-    # ---- ③ --refresh：先重写向量（需要上游） -------------------------------
+    # ---- ③ --refresh：先重写向量（HGIC 三份只依赖本仓 tools/；其余需要上游） ----
     if args.refresh:
+        if hg is not None:
+            rows_hf = gen_hgic_frame_rows(hg)
+            rows_hp = gen_hgic_parse_rows(hg)
+            rows_hc = gen_hgic_ctrl_rows(hg)
+            write_rows(VEC_HGIC, HEADER_HGIC, rows_hf)
+            write_rows(VEC_HGIC_PARSE, HEADER_HGIC_PARSE, rows_hp)
+            write_rows(VEC_HGIC_CTRL, HEADER_HGIC_CTRL, rows_hc)
+            print("--refresh 已重写 HGIC 三份：%s(%d) / %s(%d) / %s(%d)"
+                  % (os.path.basename(VEC_HGIC), len(rows_hf),
+                     os.path.basename(VEC_HGIC_PARSE), len(rows_hp),
+                     os.path.basename(VEC_HGIC_CTRL), len(rows_hc)))
+        else:
+            print("!! 拿不到 tools/txah_hgic.py（HGIC 单一源）⇒ 跳过 HGIC 三份向量")
         if o is None or proto is None:
             print("!! --refresh 需要上游 Python 参考实现（orpah_id + orpah_proto）；已退出")
             return 2
@@ -568,19 +772,22 @@ def main():
         groups.append(("test_vectors_sha256.txt", gen_sha_rows(o), read_rows(VEC_SHA)))
         groups.append(("test_vectors_hmac.txt", gen_hmac_rows(o), read_rows(VEC_HMAC)))
         for name, exp, got in groups:
-            if [tuple(str(x) for x in r) for r in exp] != [tuple(r) for r in got]:
-                fails.append("快照 %s 与 Python 参考不一致（用 --refresh 重生成并核对 diff）" % name)
-                print("FAIL 快照 %s 与 Python 参考不一致" % name)
-                for i, (a, b) in enumerate(zip(exp, got)):
-                    if tuple(str(x) for x in a) != tuple(b):
-                        print("   line %d: PY=%s  FILE=%s" % (i + 1, a, b))
-                        break
-                else:
-                    print("   行数不同：PY=%d FILE=%d" % (len(exp), len(got)))
-            else:
-                print("PASS 快照 %s 与 Python 参考逐行一致（%d 行）" % (name, len(got)))
+            cmp_snapshot(name, exp, got, fails)
     else:
         print("跳过 ②：拿不到 Python 参考 ⇒ 只跑 C 侧自检（**不等于**已交叉验证）")
+
+    # ---- ②b 快照：HGIC 帧层（单一源 = 本仓 tools/txah_hgic.py，**不依赖上游**） ----
+    if hg is not None:
+        for sname, spath, gen in (("test_vectors_hgic.txt", VEC_HGIC, gen_hgic_frame_rows),
+                                  ("test_vectors_hgic_parse.txt", VEC_HGIC_PARSE, gen_hgic_parse_rows),
+                                  ("test_vectors_hgic_ctrl.txt", VEC_HGIC_CTRL, gen_hgic_ctrl_rows)):
+            if not os.path.isfile(spath):
+                print("FAIL 缺向量文件 %s（先跑 --refresh）" % sname)
+                fails.append("缺 " + sname)
+                continue
+            cmp_snapshot(sname, gen(hg), read_rows(spath), fails)
+    else:
+        print("跳过 ②b：拿不到 tools/txah_hgic.py（HGIC 的单一源）")
 
     # ---- ① C 侧自检（每个内核一个可执行目标） ------------------------------
     targets = [
@@ -601,6 +808,11 @@ def main():
          [("C selfcheck（分块自洽 + HMAC 不变量）", ["selfcheck"]),
           ("C sha256-selftest（hashlib 向量）", ["sha256-selftest", VEC_SHA]),
           ("C hmac-selftest（hmac 向量）", ["hmac-selftest", VEC_HMAC])]),
+        ("HGIC 帧层", "hgic_cli", ["hgic.c", "hgic_cli.c"],
+         [("C selfcheck（HGIC 不变量）", ["selfcheck"]),
+          ("C frame-selftest（帧构造向量）", ["frame-selftest", VEC_HGIC]),
+          ("C parse-selftest（流解析/重同步向量）", ["parse-selftest", VEC_HGIC_PARSE]),
+          ("C ctrl-selftest（控制面解码向量）", ["ctrl-selftest", VEC_HGIC_CTRL])]),
     ]
     exes = {}
     with tempfile.TemporaryDirectory() as td:
@@ -678,7 +890,8 @@ def main():
     if o is None:
         print("PASS（C 侧自检全过；**未与 Python 交叉验证** —— 没找到上游参考实现）")
         return 0
-    print("PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 / JCS / b64url / 报文信封 / 下行解码 / SHA-256 / HMAC / 已签报文 九组）")
+    print("PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 / JCS / b64url / 报文信封 / "
+          "下行解码 / SHA-256 / HMAC / 已签报文 / HGIC 帧构造 / HGIC 流解析 / HGIC 控制面 十二组）")
     return 0
 
 
