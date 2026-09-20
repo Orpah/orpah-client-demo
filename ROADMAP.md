@@ -223,7 +223,8 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 | **c1** | 本仓 `firmware/` 骨架：Makefile / `ld` / startup / `Core{board.h,main.c}` / `Periph{gpio,uart}` | **✅ 完成（未上机）** |
 | c2 | 协议内核 C 实现 + 与 Python 的**交叉测试**（同一批黄金向量，纯 PC） | **✅ 完成（见下）** |
 | **c3** | HGIC 数据口（UART ↔ TX-AH：8 字节头 + `FRM2` + `CMD`/`EVENT`） | **帧层 ✅ 完成（未上机）**；`proto/*.c` **已编进固件**（2026-09-20）；剩 UART2 胶水 + 烧录 |
-| c4 | §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）+ 自限频 + 已签 ID 上报 | **进行中**：**降级（HS256）已达服务端验签通过**（c4-α）；**ES256 曲线层已就位**（c4-β-1）；签名本体 + RFC 6979 = c4-β-2 |
+| c4 | §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）+ 自限频 + 已签 ID 上报 | **进行中**：降级（HS256）已达服务端验签通过（c4-α）；**ES256 曲线层 + ECDSA 签名 + RFC 6979 已就位**
+（c4-β-1/2，对 RFC §A.2.5 官方向量**逐字节一致**）；剩把 level=0 接进 `idr_build()` + 上游验签 = c4-β-3 |
 | c5 | 低功耗 / 取能标定 | 推后到 d/e |
 
 **c1 实测判据（2026-09-20）**：`make clean && make` **exit=0** ⇒ `build/orpah-client.elf` 9644 B、
@@ -323,7 +324,8 @@ Mod97 是 `21`（我一开始凭记忆把 B 当成 Luhn32 期望值 ⇒ 自检�
 
 * 内容：素域（32 位 limb、**Montgomery 乘**、费马求逆 `a^(p-2)`）、Jacobian 点运算（含加倍/点加/退化情形）、
   **Montgomery ladder 标量乘**、公钥派生（未压缩点 `04||X||Y`）、演示私钥派生（同上游 `derive_demo_privkey`）。
-* 判据（`python proto\run_cross_test.py` → **exit 0**，交叉测试 **13 组**）：`pubkey-selftest` **14/14**
+* 判据（`python proto\run_cross_test.py` → **exit 0**，交叉测试 **13 组**（当轮口径，现为 14 组））：
+  `pubkey-selftest` **14/14**
   与 **Python(OpenSSL) 逐字节一致** —— 这一条同时证明 **p/a/b/Gx/Gy/n 常量、Montgomery 归约、点运算、
   ladder** 全对（任一处错公钥就不同）。用例含 `d=1 → G`、`d=n-1 → (Gx, p-Gy)`、`n+1` / `n+0x1234`
   （**未归约**标量）、4 个定种子随机 d、3 个演示 SN（含 `gen=2`）。
@@ -332,9 +334,29 @@ Mod97 是 `21`（我一开始凭记忆把 B 当成 Luhn32 期望值 ⇒ 自检�
   —— `payload.nonce` 的来源仍留 TODO（规范写的是 ATECC608B RNG，等 SE 接线）。
 * ⚠ 如实边界：**不做常量时间**（有数据相关分支/访存）；真机若私钥在 MCU 里签名，得换常量时间实现
   或交给 SE。
-* **未做（= c4-β-2）**：ECDSA 签名 `r||s`（对 n 取模与求逆）+ RFC 6979（`k` 派生：`bits2int`/`int2octets`）
-  + 官方向量（RFC 6979 §A.2.5，P-256/SHA-256）+ ★**上游 `verify_report` 接受 C 产出的 level=0 报文**
-  （= c4-β 的判据）。
+**c4-β-2（ECDSA 签名 + RFC 6979）：✅ 完成（2026-09-20）** —— `proto/rfc6979.{h,c}` + `proto/ecdsa.{h,c}`
++ `proto/ecdsa_cli.c` + 两份向量：
+
+* 内容：**RFC 6979 确定性 k**（K/V 迭代 + `bits2octets`，只做 P-256/SHA-256）+ **ECDSA 签名输出 `r||s`**
+  （64 B，与上游 `_sign_es256` 同格式）。`ecdsa.c` 只新写 **mod n 的 256 位算术**（乘 + 逐位长除法归约 +
+  费马求逆）；`k*G` 直接复用 `p256_pubkey_from_priv`（“以 k 为私钥的公钥”就是 k*G，不必再暴露生成元）。
+* 判据（`python proto\run_cross_test.py` → **exit 0**，交叉测试 **14 组**）：
+  · `k-selftest` **2/2** + `sign-selftest`（官方 `r||s`）**2/2** ⇒ **对 RFC 6979 §A.2.5 官方向量逐字节一致**；
+  · `sign-selftest`（本仓 25 行：演示私钥×3 消息、`h1` 边界**含 `>= n`**、私钥 1/2/n-1 + 定种子随机）**25/25**；
+  · 拿 `ecdsa_cli sign` 的输出去过 **OpenSSL 验签**（`Prehashed`）⇒ “字节一致”与“合法签名”两条都成立；
+  · C 侧 `selfcheck` 不变量：`k=1,d=1,h1=0 ⇒ r=s=Gx`、`h1` 与 `h1-n` 得同一签名、非法输入必报明确错误码。
+* ★ **静态夹具 `test_vectors_ecdsa_rfc6979.txt` 不能自动生成**（OpenSSL 只给随机 k）⇒ 手工录入 +
+  **三条独立验证**守着（key pair 自洽 / `h1 == sha256(label)` / `k == 本仓 Python RFC6979` 且 `(r,s)` 过
+  OpenSSL 验签）；`--refresh` **不改写**它。（笔记里那个 k 读着像 65 字符 ⇒ 改用“由官方 `(r,s)` 反推
+  `k=(h+d·r)·s⁻¹`”这条可验证的路子定的。）
+* ⚠ 三条如实边界：**不做常量时间**；**不做 low-s 归一化**（官方向量里 `sample` 的 s 就 > n/2，归一化
+  反而对不上）；**不做 C 侧验签**（自己验自己只是自洽，判据用 OpenSSL / 上游）。
+* 性能（如实）：费马求逆 = 256 平方 + ~128 乘 ⇒ host 毫秒级、8 MHz 固件秒级；签名是 60 s 一次的低频
+  动作 ⇒ 够用。
+* ★ 踩坑（已写进注释）：`ecdsa_cli.c` 的 selfcheck 里 `k1` 只写了末字节（前 31 字节是**栈垃圾**）⇒
+  **正确实现被自己的测试判红**；要整段参与运算的缓冲必须显式清零。
+* **未做（= c4-β-3）**：把 level=0（ES256）接进 `idr_build()` + ★**上游 `verify_report` 接受 C 产出的
+  level=0 报文**（= c4-β 的验收判据，同 c4-α 那次 HS256 的做法）。
 * ⚠ `firmware/Makefile` 两条 Windows 实测坑（已写进该文件头）：
   ① recipe 里**没有 shell 元字符**的行，make 会**直接 exec** 那个程序（不经 sh）⇒ `mkdir -p` /
      `ls -l` / `rm -rf` 全都报「找不到指定的文件」；而 `make SHELL='D:/Program Files/Git/bin/sh.exe'`
@@ -344,7 +366,8 @@ Mod97 是 `21`（我一开始凭记忆把 B 当成 Luhn32 期望值 ⇒ 自检�
      （找不到）⇒ 规则**静默失效**；同时 `-I../proto   ` 又能编译（编译器容忍尾空格）⇒ 现象很迷惑。
 
 ⚠ **剩下的两块**：① **c3-2 上机接线**（UART2 ↔ HGIC + 把 `proto/*.c` 编进固件 + 烧录）；
-② **ECDSA P-256（level=0）** ⇒ 要先拍两个板（软件 P-256 的来源、`k`/nonce 方案，见下）。
+② **把 level=0（ES256）接进报文**（c4-β-3）—— 曲线层与签名本体已完成（c4-β-1/2，含官方 RFC 6979 向量），
+两个板也拍完了（软件 P-256 自己写、`k` 用 RFC 6979）；`payload.nonce` 仍等 SE（不塞假随机）。
 
 **c4 开工前要拍的两个板**（属“不能自由发挥”的工程/安全取舍，2026-09-20 提出）：
 

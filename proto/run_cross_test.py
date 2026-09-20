@@ -23,6 +23,15 @@ run_cross_test.py — c2：SN 内核「Python 参考 vs C 实现」零偏差对�
 HGIC 帧层（c3）另有 **第四组目标 `hgic_cli`**（`hgic.c` + `hgic_cli.c`）+ 三份向量
 （`test_vectors_hgic*.txt`）：它的单一源在**本仓** `tools/txah_hgic.py`（模组 SDK 源码 + 真机实测），
 **不依赖上游仓库** ⇒ 那三份快照与 C 自检在没有上游时照样会跑。
+
+ECDSA / RFC 6979（c4-β-2）是**第五组目标 `ecdsa_cli`**（`ecdsa.c` + `rfc6979.c` + `ecdsa_cli.c`），
+两份向量性质不同、别混：
+  · `test_vectors_ecdsa.txt` —— 可被 `--refresh` 重生成（Python 侧第二实现 + **OpenSSL 算 k*G**）
+  · `test_vectors_ecdsa_rfc6979.txt` —— **静态夹具 = RFC 6979 §A.2.5 官方向量**，
+    `--refresh` **不许**改写它；它由三条**互相独立**的验证守着（key pair 自洽 / h1 == sha256(label) /
+    k == 本仓 Python RFC6979 / (r,s) 过 OpenSSL 验签），见 `proto/README.md`。
+  另有一步：拿 `ecdsa_cli sign` 的输出去过 **OpenSSL 验签** —— 字节一致只证明"两边一样"，
+  验签才证明"这确实是一份合法签名"。
 """
 import argparse
 import os
@@ -62,6 +71,8 @@ VEC_HGIC = os.path.join(HERE, "test_vectors_hgic.txt")
 VEC_HGIC_PARSE = os.path.join(HERE, "test_vectors_hgic_parse.txt")
 VEC_HGIC_CTRL = os.path.join(HERE, "test_vectors_hgic_ctrl.txt")
 VEC_P256 = os.path.join(HERE, "test_vectors_p256.txt")
+VEC_ECDSA = os.path.join(HERE, "test_vectors_ecdsa.txt")
+VEC_ECDSA_RFC = os.path.join(HERE, "test_vectors_ecdsa_rfc6979.txt")
 
 HEADER_SN = (
     "# proto/test_vectors_sn.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
@@ -159,6 +170,17 @@ HEADER_P256 = (
     "#   d  : a1=d-hex（**不取模**，但必须 < 2^256 = 64 个十六进制字符）a2=-\n"
     "#        覆盖 n-1（= -G）与 n+1 / n+0x1234（未归约的标量，ladder 要能吃）\n"
     "# 为什么这样测：p/a/b/Gx/Gy/n、Montgomery 乘、点运算、标量乘 —— 任一处错，公钥就不同\n"
+)
+HEADER_ECDSA = (
+    "# proto/test_vectors_ecdsa.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源（单一源）：RFC 6979 §3.2 的 k（本仓 Python 侧第二实现）+\n"
+    "#                 OpenSSL（cryptography）算 k*G 得 r，s 用整数算术（都不经过本仓 C 代码）\n"
+    "# 列：<label><TAB><d><TAB><h1><TAB><k><TAB><r><TAB><s>（全部小写十六进制，除 label 外各 64 字符）\n"
+    "#   label 只是给人看的（RFC 那份夹具不同：那里 label 必须是消息本身）\n"
+    "#   h1    = 直接给哈希（32 B）—— 这样才构造得出 h1 >= n 的分支\n"
+    "#   覆盖：演示私钥（SN 派生）× 3 条消息、h1 边界（0/1/n-1/n/n+0x1234/0xff..ff）、\n"
+    "#         私钥边界（1/2/n-1）+ 定种子随机\n"
+    "# ⚠ 静态官方向量在 test_vectors_ecdsa_rfc6979.txt（**不由 --refresh 生成**，别删别改）\n"
 )
 
 
@@ -620,6 +642,156 @@ def gen_p256_rows(o):
     return rows
 
 
+# ---------------------------------------------------------------------------
+# ECDSA / RFC 6979（c4-β-2）
+# ---------------------------------------------------------------------------
+def _p256_n(o):
+    """曲线阶 n —— **单一源 = 上游 `orpah_id._P256_ORDER`**（不在这边再写一个常量）。"""
+    return int(o._P256_ORDER)                     # noqa: SLF001
+
+
+# RFC 6979 §A.2.5 的 key pair（NIST P-256）—— 用来校验**静态夹具**里那把钥没抄错。
+# 出处：https://www.rfc-editor.org/rfc/rfc6979.txt （2026-09-20 取）
+RFC6979_P256_KEY = (
+    "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721",   # x
+    "60fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6",   # Ux
+    "7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299",   # Uy
+)
+
+
+def rfc6979_k_py(x, h1, n):
+    """RFC 6979 §3.2 的 k —— **本仓 Python 侧的第二实现**（用来对拍 C）。
+
+    为什么不直接问 `cryptography`：OpenSSL 的签名接口用的是**随机 k**，不暴露"确定性 k"
+    ⇒ 想验证确定性派生只能自己实现。它自己凭什么可信：RFC §A.2.5 的官方 k 必须被它复现
+    （见 check_ecdsa_rfc_fixture）—— 两条 message 都复现 ⇒ 这不是"另一份可能同样错的实现"。
+    """
+    import hashlib as _hl
+    import hmac as _hm
+
+    bx = x.to_bytes(32, "big")
+    z1 = int.from_bytes(h1, "big")
+    bh = (z1 - n if z1 >= n else z1).to_bytes(32, "big")   # bits2octets = 最多减一次 n
+    V = bytes([1]) * 32
+    K = bytes([0]) * 32
+    K = _hm.new(K, V + bytes([0]) + bx + bh, _hl.sha256).digest()
+    V = _hm.new(K, V, _hl.sha256).digest()
+    K = _hm.new(K, V + bytes([1]) + bx + bh, _hl.sha256).digest()
+    V = _hm.new(K, V, _hl.sha256).digest()
+    for _ in range(1000):
+        V = _hm.new(K, V, _hl.sha256).digest()
+        k = int.from_bytes(V, "big")
+        if 1 <= k < n:                                # ← 与 n **比大小**，不是 mod n
+            return k
+        K = _hm.new(K, V + bytes([0]), _hl.sha256).digest()
+        V = _hm.new(K, V, _hl.sha256).digest()
+    raise RuntimeError("RFC 6979 拿不到合法 k（1000 轮）")
+
+
+def ecdsa_sign_py(d, h1, n):
+    """返回 (k, r, s)。r 走 **OpenSSL**（`derive_private_key(k)` 就是 k*G），s 用整数算术
+    —— 两条路都不经过本仓 C 代码（本仓不做 C 侧验签，理由见 `ecdsa.h`）。"""
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    k = rfc6979_k_py(d, h1, n)
+    R = ec.derive_private_key(k, ec.SECP256R1()).public_key().public_numbers()
+    r = R.x % n
+    h = int.from_bytes(h1, "big") % n
+    s = (pow(k, -1, n) * (h + d * r)) % n
+    if r == 0 or s == 0:                          # 概率 ~2^-256；真碰上就是实现有问题
+        raise RuntimeError("r 或 s 为 0（应当换 k 重来）")
+    return k, r, s
+
+
+def gen_ecdsa_rows(o):
+    """ECDSA 向量（**可由 --refresh 重生成**；RFC 那份静态夹具不在此列）。
+
+    覆盖：① 演示私钥（SN 派生）× 三条消息；② h1 的边界（**含 >= n 那一条** —— 随机哈希
+    根本碰不到那个分支，不手工造就等于没测）；③ 私钥边界（1/2/n-1）+ 定种子随机。
+    """
+    import hashlib as _hl
+
+    n = _p256_n(o)
+    d0 = o.derive_demo_privkey(*P256_SN_CASES[0]).private_numbers().private_value
+    rows = []
+
+    def add(label, d, h1):
+        if not (1 <= d < n):
+            raise ValueError("私钥越界：%d" % d)
+        if len(h1) != 32:
+            raise ValueError("h1 必须 32 字节")
+        k, r, s = ecdsa_sign_py(d, h1, n)
+        rows.append((label, "%064x" % d, h1.hex(), "%064x" % k, "%064x" % r, "%064x" % s))
+
+    for sn, gen in P256_SN_CASES:
+        d = o.derive_demo_privkey(sn, gen).private_numbers().private_value
+        for msg in (b"sample", b"test", b"orpah-id-report-preimage"):
+            add("demo:%s:%d:%s" % (sn, gen, msg.decode()), d, _hl.sha256(msg).digest())
+
+    for label, hv in (("edge:h1=0", 0),
+                      ("edge:h1=1", 1),
+                      ("edge:h1=n-1", n - 1),
+                      ("edge:h1=n", n),
+                      ("edge:h1=n+0x1234", n + 0x1234),
+                      ("edge:h1=0xff..ff", (1 << 256) - 1)):
+        add(label, d0, hv.to_bytes(32, "big"))
+
+    rnd = random.Random(20260920)
+    for i, dv in enumerate([1, 2, n - 1] + [rnd.randrange(1, n) for _ in range(4)]):
+        add("edge:d#%d" % (i + 1), dv, _hl.sha256(b"orpah-ecdsa-vector").digest())
+    return rows
+
+
+def check_ecdsa_rfc_fixture(o, fails):
+    """静态夹具（RFC 6979 §A.2.5）的**三条独立验证** —— 缺一条就不算数。
+
+    ① key pair：夹具那把私钥必须真的是 RFC 的 x，且它派生的公钥 == RFC 的 Ux/Uy
+    ② h1 == SHA-256(label 的 UTF-8 字节)：防"message 抄错"（这份夹具的 label 就是消息本身）
+    ③ k == 本仓 Python RFC 6979，且 (r,s) 过 **OpenSSL 验签**（Prehashed 直接拿 h1 验）
+       —— 这两条一起把"k 抄错"和"r,s 抄错"都堵上。
+    """
+    import hashlib as _hl
+    from cryptography.hazmat.primitives import hashes as _hashes
+    from cryptography.hazmat.primitives.asymmetric import ec, utils
+
+    n = _p256_n(o)
+    x_hex, ux_hex, uy_hex = RFC6979_P256_KEY
+    pk_ref = ec.derive_private_key(int(x_hex, 16), ec.SECP256R1()).public_key().public_numbers()
+    if "%064x" % pk_ref.x != ux_hex or "%064x" % pk_ref.y != uy_hex:
+        print("FAIL RFC 6979 的 key pair 常量自相矛盾（x 派生不出 Ux/Uy）")
+        fails.append("RFC 6979 key pair 常量")
+        return
+
+    if not os.path.isfile(VEC_ECDSA_RFC):
+        print("FAIL 缺静态夹具 %s" % os.path.basename(VEC_ECDSA_RFC))
+        fails.append("缺 RFC 6979 静态夹具")
+        return
+    rows = read_rows(VEC_ECDSA_RFC)
+    bad, nb = 0, 0
+    for label, d_hex, h1_hex, k_hex, r_hex, s_hex in rows:
+        nb += 1
+        d = int(d_hex, 16)
+        h1 = bytes.fromhex(h1_hex)
+        try:
+            if d_hex != x_hex:
+                raise ValueError("夹具的私钥不是 RFC 的 x")
+            if _hl.sha256(label.encode("utf-8")).hexdigest() != h1_hex:
+                raise ValueError("h1 != SHA-256(%r)" % label)
+            if "%064x" % rfc6979_k_py(d, h1, n) != k_hex:
+                raise ValueError("k != 本仓 RFC 6979")
+            ec.derive_private_key(d, ec.SECP256R1()).public_key().verify(
+                utils.encode_dss_signature(int(r_hex, 16), int(s_hex, 16)),
+                h1, ec.ECDSA(utils.Prehashed(_hashes.SHA256())))
+        except Exception as e:                    # noqa: BLE001
+            bad += 1
+            print("FAIL RFC 6979 夹具第 %d 行[%s]未过：%r" % (nb, label, e))
+    if bad:
+        fails.append("RFC 6979 静态夹具自检")
+    else:
+        print("PASS RFC 6979 静态夹具 %d 行（h1=sha256(label) / k=本仓RFC6979 / (r,s) 过 OpenSSL 验签）"
+              % nb)
+
+
 def read_rows(path):
     rows = []
     with open(path, "r", encoding="utf-8") as f:
@@ -780,6 +952,14 @@ def main():
                   % (os.path.basename(VEC_P256), len(rows_p256)))
         except Exception as e:                     # noqa: BLE001
             print("!! P-256 向量生成失败（需 cryptography）：%r" % (e,))
+        try:
+            rows_ec = gen_ecdsa_rows(o)
+            write_rows(VEC_ECDSA, HEADER_ECDSA, rows_ec)
+            print("--refresh 已重写 %s(%d)" % (os.path.basename(VEC_ECDSA), len(rows_ec)))
+        except Exception as e:                     # noqa: BLE001
+            print("!! ECDSA 向量生成失败（需 cryptography）：%r" % (e,))
+        print("   （%s 是**静态夹具**（RFC §A.2.5 官方向量），--refresh **不会**改写它；"
+              "它由 ②e 的三条独立验证守着）" % os.path.basename(VEC_ECDSA_RFC))
         if o is None or proto is None:
             print("!! --refresh 需要上游 Python 参考实现（orpah_id + orpah_proto）；已退出")
             return 2
@@ -856,6 +1036,17 @@ def main():
     else:
         print("跳过 ②c：P-256 快照需要上游参考实现")
 
+    # ---- ②d/②e：ECDSA / RFC 6979（②d 可重生成；②e 是官方静态向量） --------
+    if o is not None:
+        try:
+            cmp_snapshot("test_vectors_ecdsa.txt", gen_ecdsa_rows(o), read_rows(VEC_ECDSA), fails)
+        except Exception as e:                        # noqa: BLE001
+            print("FAIL ECDSA 快照生成失败（需 cryptography）：%r" % (e,))
+            fails.append("ECDSA 快照生成")
+        check_ecdsa_rfc_fixture(o, fails)
+    else:
+        print("跳过 ②d/②e：ECDSA 快照与 RFC 夹具自检需要上游参考实现（n 的单一源在它那里）")
+
     # ---- ① C 侧自检（每个内核一个可执行目标） ------------------------------
     targets = [
         ("SN 内核", "sn_cli", ["sn.c", "sn_cli.c"],
@@ -883,6 +1074,13 @@ def main():
         ("P-256 曲线", "p256_cli", ["p256.c", "sha256.c", "p256_cli.c"],
          [("C selfcheck（P-256 不变量）", ["selfcheck"]),
           ("C pubkey-selftest（公钥派生向量）", ["pubkey-selftest", VEC_P256])]),
+        ("ECDSA/RFC6979", "ecdsa_cli",
+         ["p256.c", "sha256.c", "hmac.c", "rfc6979.c", "ecdsa.c", "ecdsa_cli.c"],
+         [("C selfcheck（ECDSA/RFC6979 不变量）", ["selfcheck"]),
+          ("C k-selftest（RFC 6979 官方 k 向量）", ["k-selftest", VEC_ECDSA_RFC]),
+          ("C sign-selftest（RFC 6979 官方 r||s 向量）", ["sign-selftest", VEC_ECDSA_RFC])]
+         + ([("C sign-selftest（本仓 ECDSA 向量）", ["sign-selftest", VEC_ECDSA])]
+            if os.path.isfile(VEC_ECDSA) else [])),
     ]
     exes = {}
     with tempfile.TemporaryDirectory() as td:
@@ -953,6 +1151,37 @@ def main():
             if n_ok:
                 print("PASS 服务端验签 C 产出的降级报文（verify_report 接受 %d 条 level=1/2）" % n_ok)
 
+        # ---- ★ 拿 **OpenSSL 验签 C 产出的 r||s**（不是只比字节）----------------
+        #   层级：字节一致只说明"两边一样"；验签才说明"这确实是一份合法签名"。
+        #   这里是 OpenSSL 的曲线/模幂实现，与本仓 p256.c/ecdsa.c **无关** ⇒ 不是自己验自己。
+        if "ecdsa_cli" in exes and os.path.isfile(VEC_ECDSA_RFC):
+            try:
+                from cryptography.hazmat.primitives import hashes as _hashes
+                from cryptography.hazmat.primitives.asymmetric import ec as _ec
+                from cryptography.hazmat.primitives.asymmetric import utils as _utils
+                n_ok = 0
+                for label, d_hex, h1_hex, k_hex, r_hex, s_hex in read_rows(VEC_ECDSA_RFC):
+                    p = _run([exes["ecdsa_cli"], "sign", d_hex, h1_hex])
+                    out = (p.stdout or "").strip()
+                    if p.returncode != 0 or "\t" not in out:
+                        print("FAIL ecdsa_cli sign 未产出（rc=%s out=%r）" % (p.returncode, out))
+                        fails.append("ecdsa_cli sign")
+                        break
+                    k_c, sig_c = out.split("\t", 1)
+                    if k_c != k_hex or sig_c[:64] != r_hex or sig_c[64:] != s_hex:
+                        print("FAIL C 产出的 r||s 与 RFC 官方向量不符（%s）" % label)
+                        fails.append("C 的 r||s 与 RFC 官方向量不符（%s）" % label)
+                        break
+                    _ec.derive_private_key(int(d_hex, 16), _ec.SECP256R1()).public_key().verify(
+                        _utils.encode_dss_signature(int(r_hex, 16), int(s_hex, 16)),
+                        bytes.fromhex(h1_hex), _ec.ECDSA(_utils.Prehashed(_hashes.SHA256())))
+                    n_ok += 1
+                if n_ok:
+                    print("PASS OpenSSL 验签通过 C 产出的 r||s（%d 条 RFC 官方向量）" % n_ok)
+            except Exception as e:                    # noqa: BLE001
+                print("FAIL ECDSA/OpenSSL 验签环节出错：%r" % (e,))
+                fails.append("ECDSA/OpenSSL 验签")
+
     print("-" * 66)
     if fails:
         print("FAIL %d 项未过：%s" % (len(fails), fails))
@@ -962,7 +1191,7 @@ def main():
         return 0
     print("PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 / JCS / b64url / 报文信封 / "
           "下行解码 / SHA-256 / HMAC / 已签报文 / HGIC 帧构造 / HGIC 流解析 / HGIC 控制面 / "
-          "P-256 公钥派生 十三组）")
+          "P-256 公钥派生 / ECDSA 签名（RFC 6979，含 RFC §A.2.5 官方向量）十四组）")
     return 0
 
 

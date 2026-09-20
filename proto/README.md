@@ -1,11 +1,13 @@
 # proto/ — 协议内核（C 实现）+ 与 Python 的交叉测试
 
-**状态（2026-09-20，c2 + c4-α + c3 帧层 + c4-β 曲线层）：SN / JCS / b64url / 报文信封 / 下行解码 /
-SHA-256 / HMAC-SHA256 / 设备侧已签报文（HS256 + none）/ HGIC 帧层 / **P-256 曲线（素域+群+标量乘+公钥派生）**
-全部完成**，交叉测试 **13 组**；并且**服务端（上游 `verify_report`）验签通过** C 产出的降级报文。
-剩余：**ECDSA 签名（`r||s` + RFC 6979 确定性 `k`）⇒ 本组接下来做**；HGIC 的**上机**（c3-2b：
-UART2 ↔ 模组，引脚待定 + 要你烧录）；`payload.nonce` 的来源（规范写的是 **ATECC608B RNG**）⇒ 等 SE
-接线（`idr_build()` 已由调用方传 nonce，**不塞假随机**）。
+**状态（2026-09-20，c2 + c4-α + c3 帧层 + c4-β 曲线层 + c4-β-2 签名）：SN / JCS / b64url / 报文信封 /
+下行解码 / SHA-256 / HMAC-SHA256 / 设备侧已签报文（HS256 + none）/ HGIC 帧层 /
+**P-256 曲线（素域+群+标量乘+公钥派生）** / **ECDSA 签名（`r||s` + RFC 6979 确定性 `k`，
+对 RFC §A.2.5 官方向量逐字节一致）** 全部完成**，交叉测试 **14 组**；
+并且**服务端（上游 `verify_report`）验签通过** C 产出的降级报文。
+剩余：**把 level=0（ES256）接进 `idr_build()` 并让上游 `verify_report` 接受 C 产出的 level=0 报文**
+（= c4-β-3）；HGIC 的**上机**（c3-2b：UART2 ↔ 模组，引脚待定 + 要你烧录）；`payload.nonce` 的来源
+（规范写的是 **ATECC608B RNG**）⇒ 等 SE 接线（`idr_build()` 已由调用方传 nonce，**不塞假随机**）。
 
 ## 为什么要这一层
 
@@ -49,9 +51,16 @@ UART2 ↔ 模组，引脚待定 + 要你烧录）；`payload.nonce` 的来源（
 | `p256.h` / `p256.c` | **NIST P-256 曲线**：素域（32 位 limb + **Montgomery 乘** + 费马求逆）、Jacobian 点运算、**Montgomery ladder 标量乘**、公钥派生（未压缩点 `04||X||Y`）、演示私钥派生（同上游 `derive_demo_privkey`）。**无 stdio/malloc/浮点/string.h ⇒ 可编进固件**。⚠ **不做常量时间**（见文件头） |
 | `p256_cli.c` | P-256 的 host 侧 CLI（`pubkey` / `pubkey-sn` / `on-curve` / `fe` 单次命令 + `selfcheck` + `pubkey-selftest`） |
 | `test_vectors_p256.txt` | `<kind><TAB><a1><TAB><a2><TAB><d-hex><TAB><pub65-hex>`（14 行：`sn` 类看派生规则；`d` 类含 `d=1`→G、`n-1`→-G、`n+1` / `n+0x1234`（**未归约**标量）、4 个定种子随机 d） |
+| `rfc6979.h` / `rfc6979.c` | **RFC 6979 确定性 `k`**（只做 P-256 + SHA-256）：K/V 迭代 + `bits2octets`（qlen=256 ⇒ **最多减一次 n**）。用它的理由：设备侧**没有可信熵源**，而 k **复用/可预测就泄漏私钥**；副作用是**同一输入必得同一签名** ⇒ 可拿官方向量逐字节对拍。**无 stdio/malloc/浮点/string.h ⇒ 可编进固件** |
+| `ecdsa.h` / `ecdsa.c` | **ECDSA(P-256) 签名，输出 `r||s`（64 B，与上游 `_sign_es256` 同格式）**。内部只新写 **mod n 的 256 位算术**（乘 + 逐位长除法归约 + 费马求逆）；`k*G` 直接复用 `p256_pubkey_from_priv`（“以 k 为私钥的公钥”就是 k*G，不必再暴露生成元）。⚠ **不做 low-s 归一化**、**不做常量时间**、**不做验签**（理由见下面 c4-β-2 那节） |
+| `ecdsa_cli.c` | ECDSA/RFC 6979 的 host 侧 CLI（`h1` / `k` / `k-msg` / `sign` / `sign-msg` / `sign-k` + `selfcheck` + `k-selftest` / `sign-selftest`） |
+| `test_vectors_ecdsa.txt` | `<label><TAB><d><TAB><h1><TAB><k><TAB><r><TAB><s>`（25 行：演示私钥×3 消息、`h1` 边界（**含 `>= n` 那一条**）、私钥 1/2/n-1 + 定种子随机） |
+| `test_vectors_ecdsa_rfc6979.txt` | ★ **静态夹具**（**不由 `--refresh` 生成**）：RFC 6979 §A.2.5 的 P-256/SHA-256 两组（`sample` / `test`）。凭什么信它见下面 c4-β-2 那节 |
 
-> 十三份向量文件全部**由 Python 参考实现生成（勿手改）**，列在脚本里统一用 `--refresh` 重生
-> （HGIC 三份的参考在**本仓** `tools/txah_hgic.py`，其余十份在上游 `orpah-over-halow`）。
+> **十四份**向量文件**由 Python 参考实现生成（勿手改）**，统一用 `--refresh` 重生
+> （HGIC 三份的参考在**本仓** `tools/txah_hgic.py`，其余十一份在上游 `orpah-over-halow`）。
+> 另有 **1 份静态夹具** `test_vectors_ecdsa_rfc6979.txt`（RFC 官方向量）——
+> **`--refresh` 不会改写它**，它由三条独立验证守着（见下节）。
 
 ## 跑
 
@@ -72,11 +81,17 @@ python proto/run_cross_test.py --orpah-dir ../orpah-over-halow
    · **HGIC 帧层**：`selfcheck`（不变量）+ `frame-selftest`（14 行帧构造）
      + `parse-selftest`（12 行流解析/重同步）+ `ctrl-selftest`（13 行控制面）
    · **P-256 曲线**：`selfcheck`（不变量）+ `pubkey-selftest`（14 行公钥派生，与 OpenSSL 逐字节一致）
-2. **快照没过期**：十三份向量文件与 Python 参考**逐行一致**；
+   · **ECDSA/RFC6979**：`selfcheck`（不变量，含 `k=1,d=1,h1=0 ⇒ r=s=Gx`、`h1` 与 `h1-n` 同签名、
+     非法输入必报明确错误码）+ `k-selftest`（**RFC 6979 官方 `k`，2 行**）
+     + `sign-selftest`（**官方 `r||s` 2 行** + 本仓 25 行）
+2. **快照没过期**：十四份向量文件与 Python 参考**逐行一致**；另加一步：**静态 RFC 夹具**的三条验证
+   （key pair 自洽 / `h1 == sha256(label)` / `k == 本仓 Python RFC6979` 且 `(r,s)` 过 OpenSSL 验签）；
 3. **服务端收得下**（★ 最重要的一步）：把 **C 产出的报文**交给上游 `orpah_id.verify_report()`
    （配上 `KeyStore`）+ 真验一遍 ⇒ `level=1/2` 必须 `accepted=True` 且级别对得上
    （L3 / `alg=none` 只陈述：规范 §8.3 它就是“只做覆盖”）。
    —— 字节一致只证明“两边一样”，这一步才证明“**服务端真的收得下**”（离线版的服务端判据）。
+   同类的一步：拿 `ecdsa_cli sign` 的输出去过 **OpenSSL 验签**（`Prehashed`）——
+   **字节一致只说明两边一样，验签才说明这确实是一份合法签名**。
 4. 合起来 ⇒ **C ↔ 向量文件 ↔ Python ↔ 服务端验签** 四层一致。
 
 ⚠ 找不到上游参考实现时，脚本会**明确打印"未与 Python 交叉验证"**（但仍退出 0，因为 C 侧自检确实过了）——
@@ -186,3 +201,51 @@ Damm32（`orpah-over-halow/damm32.py`）是**Phase 2 的替代算法**，`verify
 报文编解码 + **JCS（RFC 8785）规范化** + `b64url` + **签名预像**。
 JCS 是要害（键序按 UTF-16 码元、数字最短表示，差一个字节整条链就验不过），
 同样按"**黄金向量 + 对拍**"做，**不与本目录的 SN 内核混在一起**（一次只动一件事）。
+
+## ECDSA / RFC 6979（c4-β-2）：k 为什么是确定性的，那张静态夹具凭什么可信
+
+### k 用 RFC 6979 确定性派生（而不是随机）
+
+设备侧**没有可信熵源**（ATECC608B 未接线、CH32V203 也没有可用 RNG），而 ECDSA 的 `k`
+**一旦重复/可预测就泄漏私钥**（同一 k 签两条 ⇒ 联立即可解出私钥）。RFC 6979 用 `HMAC_DRBG`
+从 (私钥 x, 消息哈希 h1) 导出 k ⇒ **不需要熵源**；副作用是**签名可确定性复现**，于是能拿官方
+向量逐字节对拍 —— 这是这个方案最大的工程好处（**可测**）。
+
+⚠ 与规范的关系：§5.1 只规定 `sig = ECDSA-P256-sign(privkey, SHA-256(preimage))`，**k 怎么来规范不管**；
+`OrpahIDProtocol.md` §5.4 表里的 `nonce` 是**报文防重放字段**（要求 ATECC608B RNG），与 k 是两件事。
+
+### ★ 为什么有一张**不能自动生成**的向量表
+
+`test_vectors_ecdsa_rfc6979.txt` 是 RFC 6979 §A.2.5 的官方向量（P-256 + SHA-256，`sample` / `test`）。
+不能由脚本生成的原因很实在：**OpenSSL 的签名接口只吐随机 k 的签名**，本机也没有 `ecdsa` 库
+⇒ 官方的 `k/r/s` 只能**手工录入**。手工录入就靠**三条互相独立的验证**兜底
+（`check_ecdsa_rfc_fixture()`，每次跑脚本都执行）：
+
+| # | 验证什么 | 防的是什么 |
+|---|---|---|
+| ① | 夹具的私钥派生出的公钥 == RFC 的 `Ux/Uy` | key pair 抄串行 |
+| ② | `h1 == SHA-256(label 的 UTF-8 字节)` | 消息名抄错（h1 与 message 对不上） |
+| ③ | `k == 本仓 Python RFC 6979`，且 `(r,s)` 过 **OpenSSL 验签** | k 抄错 / r,s 抄错 |
+
+③ 里的“k”用的是**本仓自己写的 Python 第二实现**（`rfc6979_k_py`）—— 它凭什么能当参照？
+因为**它也必须复现官方夹具的 k**（两条 message 都过）⇒ 它不是“另一份可能同样错的实现”。
+
+> 实测背景（2026-09-20）：我笔记里记的 `test` 那条 `k` 读起来像 65 个十六进制字符（奇数 = 不可能）
+> ⇒ 于是改用**可验证的路子**定它：`k` 由官方 `(r,s)` 唯一反推 `k = (h + d·r)·s⁻¹ mod n`，
+> 再用 OpenSSL 验 `(r,s)`、再与本仓 Python RFC 6979 对三条 —— 三方一致才写进夹具。
+> 教训：**夹具里每个数字都要有能自动重算的参照**，凭记忆/凭眼看都不算。
+
+### 三条如实边界（别当“已防住”）
+
+1. **不做常量时间**：mod n 归约是教科书式逐位长除法，私钥相关分支/访存可辨。演示台架可以；
+   真机若私钥在 MCU 内签名，必须换常量时间实现，或交给 ATECC608B 签。
+2. **不做 low-s 归一化**：官方向量里 `sample` 那条的 `s` 就 > n/2。归一化会对不上官方夹具；
+   验签方本来就两种都收。（这也是“别自作主张优化”的一个实例。）
+3. **不做 C 侧验签**：自己验自己只是“自洽”，证据力弱。判据用外部实现 —— host 侧 OpenSSL、
+   端到端用上游 `orpah_id.verify_report()`。
+
+### 性能（如实的代价）
+
+费马求逆 = 256 次平方 + ~128 次乘，每次模乘要做一次 512 步长除法 ⇒ **host 上毫秒级、8 MHz 固件
+上秒级**。签名是低频动作（设计常态 60 s/次）⇒ 够用；要快得上 Barrett/Montgomery 或二进制
+扩展欧几里得求逆。
