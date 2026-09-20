@@ -1,0 +1,22 @@
+# proto/test_vectors_snparse.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**
+# 来源（单一源）：Python 参考实现 orpah-over-halow/orpah_id.py 的 sn_ok/sn_err/verify_check
+# 列：SN<TAB>ok<TAB>err<TAB>verify   （err 的 None 记作 "-"）
+CN-WH01-9AF3C1D2	1	-	1
+CN-WH01-9AF3C1D2-E	1	-	1
+CN-WH01-9AF3C1D2-21	1	-	1
+CN-WH01-9AF3C1D2-Z	1	-	0
+cn-wh01-9af3c1d2	0	bad-format	0
+CN-WH01-9AF3C1D2-	0	bad-format	0
+CN-WH01-9AF3C1D2-EE	1	-	0
+CN-WH01-9AF3C1D2-EXY	0	bad-format	0
+CN-WH1-9AF3C1D2	1	-	1
+CN-WH01-9AF3C1D	0	bad-format	0
+CN-WH01-9AF3C1D2X	1	-	1
+CN-WH01-9AF3C1I2	0	bad-format	0
+CN-WH01-9AF3C1O2	0	bad-format	0
+C1-WH01-9AF3C1D2	0	bad-format	0
+WH01-9AF3C1D2	0	bad-format	0
+CN-WH01-9AF3C1D2-I	0	bad-format	0
+CN-WH01-9AF3C1D2-ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ	0	too-long	0
+CN-ABCDEFG-9AF3C1D2	0	bad-format	0
+	0	empty	0

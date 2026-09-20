@@ -221,7 +221,7 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **c1** | 本仓 `firmware/` 骨架：Makefile / `ld` / startup / `Core{board.h,main.c}` / `Periph{gpio,uart}` | **✅ 完成（未上机）** |
-| c2 | 协议内核 C 实现 + 与 Python 的**交叉测试**（同一批黄金向量，纯 PC） | 未做（下一步） |
+| c2 | 协议内核 C 实现 + 与 Python 的**交叉测试**（同一批黄金向量，纯 PC） | **进行中**：SN 内核已完成（见下） |
 | c3 | HGIC 数据口（UART ↔ TX-AH：8 字节头 + `FRM2` + `CMD`/`EVENT`） | 未做 |
 | c4 | §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）+ 自限频 + 已签 ID 上报 | 未做 |
 | c5 | 低功耗 / 取能标定 | 推后到 d/e |
@@ -238,7 +238,27 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 2. **参考 Makefile 的 `.bin` 目标是坏的**：它写 `objcopy -O binary $@ $<`（把**输出**当输入）
    ⇒ 本仓已改成 `$< $@`。（`halow-demo` 那边**没动** —— 不在本次范围，要同步修得你点头。）
 
-**c2 开工前要拍的两个板**（属"不能自由发挥"的工程/安全取舍，2026-09-20 提出）：
+**c2 第一批（SN 内核）：✅ 完成（2026-09-20）** —— `proto/`：
+
+| 文件 | 作用 |
+|---|---|
+| `proto/sn.{h,c}` | SN 内核：Crockford / `sn_ok` / `sn_err` / `sn_parse` / Luhn32 / Mod97 / `sn_verify_check`（**无 malloc/stdio ⇒ 可直接编进固件**） |
+| `proto/sn_cli.c` | host 侧 CLI（对拍/调试用，**不编进固件**） |
+| `proto/run_cross_test.py` | 一键对拍：**C ↔ 向量文件 ↔ Python 三方比对** |
+| `proto/test_vectors_sn.txt` / `test_vectors_snparse.txt` | 63 行校验位 + 19 行 SN 解析（**Python 生成，勿手改**） |
+
+实测判据：`python proto\run_cross_test.py` → **exit 0**，输出 `selfcheck 11/11`、`selftest 63/63`、
+`sn-selftest 19/19`，两份快照与 Python **逐行一致**。
+
+★ **顺手纠正的一个真事实**：SN 校验位走的是 **Luhn32（1 位）/ Mod97（2 位）**，**不是 Damm32** ——
+`verify_check()` 按校验位长度分流，Damm32 是 Phase 2 的替代算法、**当前不启用**。
+本仓 AGENTS 里“黄金样本 `WH01-9AF3C1D2 → B`”那句说的是 **Damm32**；**Luhn32 真值是 `E`**、
+Mod97 是 `21`（我一开始凭记忆把 B 当成 Luhn32 期望值 ⇒ 自检当场失败。
+教训：**期望值只能来自 Python 输出**）。
+
+⚠ 仍未做（c2 剩余）：报文编解码 + **JCS（RFC 8785）规范化** + `b64url` + 签名预像。
+
+**c4 开工前要拍的两个板**（属“不能自由发挥”的工程/安全取舍，2026-09-20 提出）：
 
 - **软件 P-256 从哪来**：① 自己写（量大易错，不建议）；② **vendor 一个宽松许可实现**
   （如 micro-ecc，BSD-2）—— 但按 §0c「只提交我自己创建的文件」，**第三方源码要先经你同意**
