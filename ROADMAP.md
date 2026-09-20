@@ -238,7 +238,7 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 2. **参考 Makefile 的 `.bin` 目标是坏的**：它写 `objcopy -O binary $@ $<`（把**输出**当输入）
    ⇒ 本仓已改成 `$< $@`。（`halow-demo` 那边**没动** —— 不在本次范围，要同步修得你点头。）
 
-**c2（SN 内核 + JCS + b64url + 报文信封 + 下行解码 + SHA-256）：✅ 完成（2026-09-20）** —— `proto/`：
+**c2（SN 内核 + JCS + b64url + 报文信封 + 下行解码 + SHA-256 + HMAC）：✅ 完成（2026-09-20）** —— `proto/`：
 
 | 文件 | 作用 |
 |---|---|
@@ -247,17 +247,19 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 | `proto/msg.{h,c}` | 链路报文构造器：`msg_req_connect` / `msg_report` / `msg_id_report`（对齐 `orpah_proto._base`+`build_*`） |
 | `proto/downlink.{h,c}` | **下行解码**：`dl_decode()`（同 `decode_msg`）+ `dl_type/dl_str/dl_int/dl_truthy`（Python 真值语义）；JSON 解析器在 `jcs.c`（**有意比 Python 严**，边界见 `proto/README.md`） |
 | `proto/sha256.{h,c}` | **SHA-256**（FIPS 180-4，无 stdio/malloc）；§5.1 的 `SHA-256(preimage)` 与将来 RFC 6979 确定性 k 的前置 |
+| `proto/hmac.{h,c}` | **HMAC-SHA256**（RFC 2104）= §5.1 的**降级 HS256**；键超分组先哈希、用完清栈上的密钥派生值 |
 | `proto/b64url.{h,c}` | base64url（无填充）= `orpah_id.b64url_encode` |
 | `proto/sn_cli.c` / `jcs_cli.c` | host 侧 CLI（对拍/调试用，**不编进固件**） |
 | `proto/run_cross_test.py` | 一键对拍：**C ↔ 向量文件 ↔ Python 三方比对** |
-| `proto/test_vectors_*.txt`（7 份） | 63 / 19 / 12 / 17 / 8 / 11 / 16 行（**Python 生成，勿手改**） |
+| `proto/test_vectors_*.txt`（8 份） | 63 / 19 / 12 / 17 / 8 / 11 / 16 / 13 行（**Python 生成，勿手改**） |
 
 实测判据：`python proto\run_cross_test.py` → **exit 0**，输出 `SN selfcheck 11/11`、`selftest 63/63`、
 `sn-selftest 19/19`、`JCS 4/4` + `jcs-selftest 12/12`、`b64url-selftest 17/17`、`msg-selftest 8/8`、
-`dl-selftest 11/11`、`SHA-256 分块自洽 3343/3343` + `sha256-selftest 16/16`，
-**七份快照**与 Python **逐行一致**。
-★ SHA-256 的向量里包含**真实签名预像**（`jcs({"hdr","payload"})` 那串字节）—— 它就是 c4
-要交给 ECDSA 去签的东西，先把它钉死。
+`dl-selftest 11/11`、`SHA/HMAC selfcheck 3345/3345`、`sha256-selftest 16/16`、**`hmac-selftest 13/13`**，
+**八份快照**与 Python **逐行一致**。
+★ SHA-256 与 HMAC 的向量里都包含**真实签名预像**（`jcs({"hdr","payload"})` 那串字节），
+HMAC 那条用的是**真实降级路径**（32B 演示 HMAC 密钥 × 真实预像 = §5.1 的 HS256）——
+c4 要签/要做 MAC 的就是这两串，先把它们钉死。
 ★ 一个必须分清的点：**签名预像走 JCS（排序）、链路信封走插入序**（`encode_msg` 不带 `sort_keys`）——
 两者混了就是“能发出去但服务端验不过”。
 ★ 另一个实打实的坑：报文用例里用 `-` 表示“字段不给”，而 **RSSI 是负数** ⇒ `-55` 被误判成缺省，
@@ -269,9 +271,8 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 Mod97 是 `21`（我一开始凭记忆把 B 当成 Luhn32 期望值 ⇒ 自检当场失败。
 教训：**期望值只能来自 Python 输出**）。
 
-⚠ **剩下的三块**：① HGIC 帧层（8 字节头 / `FRM2` / `CMD` / `EVENT`）⇒ 与 c3 的数据口驱动一起做；
-② **HMAC-SHA256**（降级 HS256：直接对 preimage 做 HMAC，不再先哈希）；
-③ **ECDSA P-256** ⇒ 要先拍两个板（软件 P-256 的来源、`k`/nonce 方案，见下）。
+⚠ **剩下的两块**：① HGIC 帧层（8 字节头 / `FRM2` / `CMD` / `EVENT`）⇒ 与 c3 的数据口驱动一起做；
+② **ECDSA P-256** ⇒ 要先拍两个板（软件 P-256 的来源、`k`/nonce 方案，见下）。
 
 **c4 开工前要拍的两个板**（属“不能自由发挥”的工程/安全取舍，2026-09-20 提出）：
 

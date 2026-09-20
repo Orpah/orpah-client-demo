@@ -39,6 +39,7 @@ VEC_B64 = os.path.join(HERE, "test_vectors_b64url.txt")
 VEC_MSG = os.path.join(HERE, "test_vectors_msg.txt")
 VEC_DL = os.path.join(HERE, "test_vectors_downlink.txt")
 VEC_SHA = os.path.join(HERE, "test_vectors_sha256.txt")
+VEC_HMAC = os.path.join(HERE, "test_vectors_hmac.txt")
 
 HEADER_SN = (
     "# proto/test_vectors_sn.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
@@ -85,6 +86,13 @@ HEADER_SHA = (
     "# 列：<input-hex><TAB><digest-hex>   （空输入 = 行首就是 TAB）\n"
     "# 覆盖：空 / 一个块边界 55/56/57/63/64/65/127/128 / 1000 字节 / 全零 128B,\n"
     "#       以及**真实签名预像**（jcs({\"hdr\",\"payload\"})，即 c4 要签的那串字节）\n"
+)
+HEADER_HMAC = (
+    "# proto/test_vectors_hmac.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源（单一源）：Python hmac.new(key, msg, hashlib.sha256).digest()\n"
+    "# 列：<key-hex><TAB><msg-hex><TAB><mac-hex>\n"
+    "# 覆盖：空键/空消息 / 键 32~(64)→ 超分组 65/128（**必须先哈希**）/ 消息跨块,\n"
+    "#       以及★**真实降级路径**：32B 演示 HMAC 密钥 × 真实签名预像（§5.1 的 HS256）\n"
 )
 
 
@@ -295,9 +303,9 @@ def gen_dl_rows(o, proto):
     return rows
 
 
-# SHA-256 输入：块边界是重点（55/56/57 决定填充走一块还是两块）
-def sha_inputs(o):
-    preimage = o.jcs({
+# 真实签名预像（= c4 要签的那串字节）。SHA-256 与 HMAC 两组共用同一份定义。
+def real_preimage(o):
+    return o.jcs({
         "hdr": {"typ": "orpah-id-report", "ver": 1, "alg": "ES256", "level": 0},
         "payload": {
             "sn": "CN-WH01-9AF3C1D2", "ts": 0,
@@ -307,6 +315,11 @@ def sha_inputs(o):
             "cap": {"rtc": False}, "battery_mv": 3900, "firmware": "c4",
         },
     })
+
+
+# SHA-256 输入：块边界是重点（55/56/57 决定填充走一块还是两块）
+def sha_inputs(o):
+    preimage = real_preimage(o)
     fill = lambda n: bytes([(i * 7 + 3) % 251 for i in range(n)])
     return [
         ("empty", b""),
@@ -324,6 +337,31 @@ def sha_inputs(o):
 def gen_sha_rows(o):
     import hashlib
     return [(data.hex(), hashlib.sha256(data).hexdigest()) for _label, data in sha_inputs(o)]
+
+
+def gen_hmac_rows(o):
+    """★ 最后一条是**真实降级路径**：32B 演示 HMAC 密钥 × 真实签名预像（§5.1 的 HS256）。"""
+    import hashlib
+    import hmac as py_hmac
+
+    fill = lambda n, s=1: bytes([(i * s + 7) % 251 for i in range(n)])
+    rk = o.derive_demo_hmac("CN-WH01-9AF3C1D2", 1)
+    real_key = bytes.fromhex(rk) if isinstance(rk, str) else bytes(rk)
+
+    cases = [
+        (b"", b""),
+        (b"key", b"The quick brown fox jumps over the lazy dog"),
+        (fill(32), b""),
+        (fill(32), fill(1)),
+        (fill(32), fill(55)), (fill(32), fill(56)), (fill(32), fill(57)),
+        (fill(32), fill(64)), (fill(32), fill(65)),
+        (fill(64), fill(100)),          # 键正好一个分组
+        (fill(65), fill(100)),          # 键超分组 ⇒ 实现必须先哈希
+        (fill(128), fill(1000)),
+        (real_key, real_preimage(o)),
+    ]
+    return [(k.hex(), m.hex(), py_hmac.new(k, m, hashlib.sha256).digest().hex())
+            for k, m in cases]
 
 
 def read_rows(path):
@@ -449,6 +487,7 @@ def main():
         rows_msg = gen_msg_rows(o, proto)
         rows_dl = gen_dl_rows(o, proto)
         rows_sha = gen_sha_rows(o)
+        rows_hmac = gen_hmac_rows(o)
         write_rows(VEC_SN, HEADER_SN, rows_sn)
         write_rows(VEC_PARSE, HEADER_PARSE, rows_parse)
         write_rows(VEC_JCS, HEADER_JCS, rows_jcs)
@@ -456,14 +495,16 @@ def main():
         write_rows(VEC_MSG, HEADER_MSG, rows_msg)
         write_rows(VEC_DL, HEADER_DL, rows_dl)
         write_rows(VEC_SHA, HEADER_SHA, rows_sha)
-        print("--refresh 已重写：%s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d)"
+        write_rows(VEC_HMAC, HEADER_HMAC, rows_hmac)
+        print("--refresh 已重写：%s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d)"
               % (os.path.basename(VEC_SN), len(rows_sn),
                  os.path.basename(VEC_PARSE), len(rows_parse),
                  os.path.basename(VEC_JCS), len(rows_jcs),
                  os.path.basename(VEC_B64), len(rows_b64),
                  os.path.basename(VEC_MSG), len(rows_msg),
                  os.path.basename(VEC_DL), len(rows_dl),
-                 os.path.basename(VEC_SHA), len(rows_sha)))
+                 os.path.basename(VEC_SHA), len(rows_sha),
+                 os.path.basename(VEC_HMAC), len(rows_hmac)))
 
     # ---- ② 快照 vs Python 参考 -------------------------------------------
     if o is not None:
@@ -480,6 +521,7 @@ def main():
         else:
             print("跳过 test_vectors_msg/downlink.txt：拿不到 orpah_proto（报文构造/解码的单一源）")
         groups.append(("test_vectors_sha256.txt", gen_sha_rows(o), read_rows(VEC_SHA)))
+        groups.append(("test_vectors_hmac.txt", gen_hmac_rows(o), read_rows(VEC_HMAC)))
         for name, exp, got in groups:
             if [tuple(str(x) for x in r) for r in exp] != [tuple(r) for r in got]:
                 fails.append("快照 %s 与 Python 参考不一致（用 --refresh 重生成并核对 diff）" % name)
@@ -507,9 +549,10 @@ def main():
           ("C b64url-selftest（b64url 向量）", ["b64url-selftest", VEC_B64]),
           ("C msg-selftest（报文信封向量）", ["msg-selftest", VEC_MSG]),
           ("C dl-selftest（下行解码向量）", ["dl-selftest", VEC_DL])]),
-        ("SHA-256", "sha_cli", ["sha256.c", "sha_cli.c"],
-         [("C selfcheck（分块自洽）", ["selfcheck"]),
-          ("C sha256-selftest（hashlib 向量）", ["sha256-selftest", VEC_SHA])]),
+        ("SHA-256/HMAC", "sha_cli", ["sha256.c", "hmac.c", "sha_cli.c"],
+         [("C selfcheck（分块自洽 + HMAC 不变量）", ["selfcheck"]),
+          ("C sha256-selftest（hashlib 向量）", ["sha256-selftest", VEC_SHA]),
+          ("C hmac-selftest（hmac 向量）", ["hmac-selftest", VEC_HMAC])]),
     ]
     with tempfile.TemporaryDirectory() as td:
         for tname, tbin, srcs, checks in targets:
@@ -538,7 +581,7 @@ def main():
     if o is None:
         print("PASS（C 侧自检全过；**未与 Python 交叉验证** —— 没找到上游参考实现）")
         return 0
-    print("PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 / JCS / b64url / 报文信封 / 下行解码 / SHA-256 七组）")
+    print("PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 / JCS / b64url / 报文信封 / 下行解码 / SHA-256 / HMAC 八组）")
     return 0
 
 
