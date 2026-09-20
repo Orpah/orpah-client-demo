@@ -57,6 +57,8 @@ typedef struct {
 #define JCS_E_DUPKEY  (-5)      /* 重复键（Python dict 不可能出现 => 必须报错） */
 #define JCS_E_OUT     (-6)      /* 输出缓冲不够 */
 #define JCS_E_KEYLEN  (-7)      /* 键太长 */
+#define JCS_E_PARSE   (-8)      /* JSON 解析失败（见 jcs.h 的 json_parse 说明）*/
+#define JCS_E_DEPTH   (-9)      /* 嵌套太深（节点/容量用满）*/
 
 void  jcs_init(jcs_ctx_t *c);
 jv_t *jcs_obj(jcs_ctx_t *c);                    /* 失败返回 NULL */
@@ -89,5 +91,29 @@ int   jcs_encode_raw(const jv_t *root, char *out, size_t cap);
 /* 签名预像 = JCS({"hdr":hdr,"payload":payload}) —— 对应 orpah_id.preimage_of */
 int   jcs_preimage(jcs_ctx_t *c, const jv_t *hdr, const jv_t *payload,
                    char *out, size_t cap);
+
+/* ------------------------------------------------------------------ */
+/* JSON 解析（下行报文用；无 malloc / 无 stdio）                          */
+/* ------------------------------------------------------------------ */
+/* 把 buf（长度 len，**不必** NUL 结尾）解析到 c 的 arena，*out 指向根节点。
+ * 成功返回 0；失败返回负的错误码（JCS_E_PARSE / JCS_E_NODES / JCS_E_POOL /
+ * JCS_E_CAP / JCS_E_DEPTH）。
+ *
+ * 接受：对象 / 数组 / 字符串（含 \" \\ \/ \b \f \n \r \t \uXXXX 与代理对）/ 整数 /
+ *       true / false / null / 空白。
+ * 拒绝（与 Python `json.loads` 一致的严格度，宁可报错不猜）：
+ *   · 浮点/指数（`1.5` / `1e3`）—— 我们的报文里没有浮点，报了才知道有人改了规范；
+ *   · 尾随数据（`{} x`）、单引号、尾逗号、注释；
+ *   · 整数超出 int64。
+ * ⚠ 已知边界（不测、但要知道）：Python 的 json 默认接受 `NaN`/`Infinity`，本实现拒绝；
+ *   我们的报文不用它们（见 proto/README.md）。
+ * ⚠ 解析结果占 arena：嵌套/字符串多时要预留够（JCS_MAX_NODES / JCS_POOL_SIZE）。*/
+int   json_parse(jcs_ctx_t *c, const char *buf, size_t len, jv_t **out);
+
+/* 对象取值（解析后的报文用）：缺失/类型不符时
+ *   jv_get() → NULL；jv_get_str() → NULL；jv_get_int() 返回 0 */
+jv_t       *jv_get(const jv_t *obj, const char *key);
+const char *jv_get_str(const jv_t *obj, const char *key);
+int         jv_get_int(const jv_t *obj, const char *key, long long *out);
 
 #endif /* ORPAH_JCS_H */

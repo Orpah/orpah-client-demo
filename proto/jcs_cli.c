@@ -21,6 +21,7 @@
 #include "jcs.h"
 #include "b64url.h"
 #include "msg.h"
+#include "downlink.h"
 
 #define HEXOUT_MAX 4096
 #define LINE_MAX   6000
@@ -532,6 +533,86 @@ static int cmd_msg_selftest(const char *path)
     return bad ? 2 : 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* 下行解码（与 run_cross_test.py 的 DL_CASES 一一对应）                  */
+/* ------------------------------------------------------------------ */
+/* 输出 7 个 TAB 分隔的字段（= 向量文件第 2..8 列）：
+ *   valid<TAB>type<TAB>sn<TAB>ts<TAB>tracked<TAB>status<TAB>code */
+static void dl_report_line(const char *json_hex, char *out, size_t outcap)
+{
+    static jcs_ctx_t c;
+    unsigned char raw[HEXOUT_MAX / 2];
+    jv_t *msg = NULL;
+    long n;
+    int tv = 0;
+    long long ts = 0;
+    const char *type_s, *sn_s, *status_s, *code_s;
+    char tsbuf[32];
+    const char *ts_s;
+
+    jcs_init(&c);
+    n = from_hex(json_hex, raw, sizeof(raw));
+    if (n < 0 || dl_decode(&c, (const char *)raw, (size_t)n, &msg) != 0) {
+        snprintf(out, outcap, "0\t-\t-\t-\t-\t-\t-");
+        return;
+    }
+    type_s = dl_type(msg);
+    sn_s = dl_str(msg, "sn");
+    status_s = dl_str(msg, "status");
+    code_s = dl_str(msg, "code");
+    if (dl_int(msg, "ts", &ts)) {
+        snprintf(tsbuf, sizeof(tsbuf), "%lld", ts);
+        ts_s = tsbuf;
+    } else {
+        ts_s = "-";
+    }
+    snprintf(out, outcap, "1\t%s\t%s\t%s\t%s\t%s\t%s",
+             type_s ? type_s : "-", sn_s ? sn_s : "-", ts_s,
+             dl_truthy(msg, "tracked", &tv) ? (tv ? "1" : "0") : "-",
+             status_s ? status_s : "-", code_s ? code_s : "-");
+}
+
+static int cmd_dl(const char *json_hex)
+{
+    char out[512];
+    dl_report_line(json_hex, out, sizeof(out));
+    printf("%s\n", out);
+    return 0;
+}
+
+static int cmd_dl_selftest(const char *path)
+{
+    FILE *fp = fopen(path, "r");
+    char line[LINE_MAX];
+    int total = 0, bad = 0, lineno = 0;
+
+    if (fp == NULL) { fprintf(stderr, "cannot open %s\n", path); return 1; }
+    while (fgets(line, (int)sizeof(line), fp) != NULL) {
+        char *cols[8];
+        char got[512], exp[512];
+
+        lineno++;
+        chomp(line);
+        if (line[0] == '\0' || line[0] == '#') continue;
+        if (split_tabs(line, cols, 8) != 8) {
+            printf("FAIL line %d: 需要 8 列（json-hex + 7 个期望字段）\n", lineno);
+            total++; bad++;
+            continue;
+        }
+        total++;
+        dl_report_line(cols[0], got, sizeof(got));
+        snprintf(exp, sizeof(exp), "%s\t%s\t%s\t%s\t%s\t%s\t%s",
+                 cols[1], cols[2], cols[3], cols[4], cols[5], cols[6], cols[7]);
+        if (strcmp(got, exp) != 0) {
+            printf("FAIL line %d:\n  C =%s\n  PY=%s\n", lineno, got, exp);
+            bad++;
+        }
+    }
+    fclose(fp);
+    printf("%s %d/%d\n", bad ? "FAIL" : "PASS", total - bad, total);
+    return bad ? 2 : 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *cmd, *arg;
@@ -584,6 +665,14 @@ int main(int argc, char **argv)
     if (strcmp(cmd, "msg-selftest") == 0) {
         if (arg == NULL) return 1;
         return cmd_msg_selftest(arg);
+    }
+    if (strcmp(cmd, "dl") == 0) {
+        if (arg == NULL) return 1;
+        return cmd_dl(arg);
+    }
+    if (strcmp(cmd, "dl-selftest") == 0) {
+        if (arg == NULL) return 1;
+        return cmd_dl_selftest(arg);
     }
     fprintf(stderr, "unknown cmd %s\n", cmd);
     return 1;

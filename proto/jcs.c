@@ -28,6 +28,15 @@ static int j_strcmp(const char *a, const char *b)      /* 逐字节（UTF-8 下 
     }
 }
 
+/* 十六进制位（解析 \uXXXX 用）；非十六进制返回 -1 */
+static int hex_val(char ch)
+{
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+    if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+    return -1;
+}
+
 void jcs_init(jcs_ctx_t *c)
 {
     if (c == NULL) return;
@@ -331,4 +340,328 @@ int jcs_preimage(jcs_ctx_t *c, const jv_t *hdr, const jv_t *payload,
     rc = jcs_put(c, root, "payload", (jv_t *)payload);
     if (rc != 0) return rc;
     return jcs_encode(c, root, out, cap);
+}
+
+/* ------------------------------------------------------------------ */
+/* 对象取值                                                            */
+/* ------------------------------------------------------------------ */
+jv_t *jv_get(const jv_t *obj, const char *key)
+{
+    if (obj == NULL || key == NULL || obj->type != JV_OBJ) return NULL;
+    for (int i = 0; i < obj->u.obj.n; i++) {
+        if (j_strcmp(obj->u.obj.keys[i], key) == 0) return obj->u.obj.vals[i];
+    }
+    return NULL;
+}
+
+const char *jv_get_str(const jv_t *obj, const char *key)
+{
+    jv_t *v = jv_get(obj, key);
+    return (v != NULL && v->type == JV_STR) ? v->u.s : NULL;
+}
+
+int jv_get_int(const jv_t *obj, const char *key, long long *out)
+{
+    jv_t *v = jv_get(obj, key);
+    if (v == NULL || v->type != JV_INT) return 0;
+    if (out != NULL) *out = v->u.i;
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* JSON 解析（下行报文用；递归下降，无 malloc）                            */
+/* ------------------------------------------------------------------ */
+#define PARSER_MAX_DEPTH 8
+#define PARSER_STR_MAX   256
+
+typedef struct {
+    jcs_ctx_t *c;
+    const char *p;
+    const char *end;
+    int depth;
+} pctx_t;
+
+static void p_ws(pctx_t *q)
+{
+    while (q->p < q->end && (*q->p == ' ' || *q->p == '\t' ||\
+                             *q->p == '\n' || *q->p == '\r')) {
+        q->p++;
+    }
+}
+
+static int p_peek(pctx_t *q, char *out)
+{
+    if (q->p >= q->end) return 0;
+    *out = *q->p;
+    return 1;
+}
+
+static int p_lit(pctx_t *q, const char *word)
+{
+    size_t n = j_len(word);
+    if ((size_t)(q->end - q->p) < n) return JCS_E_PARSE;
+    for (size_t i = 0; i < n; i++) {
+        if (q->p[i] != word[i]) return JCS_E_PARSE;
+    }
+    q->p += n;
+    return 0;
+}
+
+static int u_hex4(pctx_t *q, unsigned int *out)
+{
+    unsigned int v = 0;
+    for (int i = 0; i < 4; i++) {
+        int d;
+        if (q->p >= q->end) return JCS_E_PARSE;
+        d = hex_val(*q->p);
+        if (d < 0) return JCS_E_PARSE;
+        v = (v << 4) | (unsigned int)d;
+        q->p++;
+    }
+    *out = v;
+    return 0;
+}
+
+static int u8_put(char *buf, size_t cap, size_t *n, unsigned int cp)
+{
+    if (cp < 0x80) {
+        if (*n + 1 > cap) return JCS_E_PARSE;
+        buf[(*n)++] = (char)cp;
+    } else if (cp < 0x800) {
+        if (*n + 2 > cap) return JCS_E_PARSE;
+        buf[(*n)++] = (char)(0xC0 | (cp >> 6));
+        buf[(*n)++] = (char)(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        if (cp >= 0xD800 && cp <= 0xDFFF) return JCS_E_PARSE;   /* 孤立代理项：拒绝 */
+        if (*n + 3 > cap) return JCS_E_PARSE;
+        buf[(*n)++] = (char)(0xE0 | (cp >> 12));
+        buf[(*n)++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[(*n)++] = (char)(0x80 | (cp & 0x3F));
+    } else {
+        if (cp > 0x10FFFF) return JCS_E_PARSE;
+        if (*n + 4 > cap) return JCS_E_PARSE;
+        buf[(*n)++] = (char)(0xF0 | (cp >> 18));
+        buf[(*n)++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        buf[(*n)++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[(*n)++] = (char)(0x80 | (cp & 0x3F));
+    }
+    return 0;
+}
+
+static int p_string(pctx_t *q, char *buf, size_t cap, size_t *out_n)
+{
+    size_t n = 0;
+
+    if (q->p >= q->end || *q->p != '"') return JCS_E_PARSE;
+    q->p++;
+    for (;;) {
+        char ch;
+        if (q->p >= q->end) return JCS_E_PARSE;
+        ch = *q->p++;
+        if (ch == '"') break;
+        if (ch == '\\') {
+            char e;
+            if (q->p >= q->end) return JCS_E_PARSE;
+            e = *q->p++;
+            switch (e) {
+            case '"': case '\\': case '/':
+                if (n + 1 > cap) return JCS_E_PARSE;
+                buf[n++] = e;
+                break;
+            case 'b': if (n + 1 > cap) return JCS_E_PARSE; buf[n++] = '\b'; break;
+            case 'f': if (n + 1 > cap) return JCS_E_PARSE; buf[n++] = '\f'; break;
+            case 'n': if (n + 1 > cap) return JCS_E_PARSE; buf[n++] = '\n'; break;
+            case 'r': if (n + 1 > cap) return JCS_E_PARSE; buf[n++] = '\r'; break;
+            case 't': if (n + 1 > cap) return JCS_E_PARSE; buf[n++] = '\t'; break;
+            case 'u': {
+                unsigned int cp, lo;
+                int rc = u_hex4(q, &cp);
+                if (rc != 0) return rc;
+                if (cp >= 0xD800 && cp <= 0xDBFF) {          /* 高代理：找下一个 \u 低代理 */
+                    unsigned int hi = cp;
+                    if (q->p + 1 >= q->end || q->p[0] != '\\' || q->p[1] != 'u') {
+                        return JCS_E_PARSE;
+                    }
+                    q->p += 2;
+                    rc = u_hex4(q, &lo);
+                    if (rc != 0) return rc;
+                    if (lo < 0xDC00 || lo > 0xDFFF) return JCS_E_PARSE;
+                    cp = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+                }
+                rc = u8_put(buf, cap, &n, cp);
+                if (rc != 0) return rc;
+                break;
+            }
+            default:
+                return JCS_E_PARSE;
+            }
+        } else if ((unsigned char)ch < 0x20) {
+            return JCS_E_PARSE;                             /* 未转义的控制字符 */
+        } else {
+            if (n + 1 > cap) return JCS_E_PARSE;
+            buf[n++] = ch;                                  /* UTF-8 字节原样收 */
+        }
+    }
+    *out_n = n;
+    return 0;
+}
+
+static int p_number(pctx_t *q, long long *out)
+{
+    int neg = 0;
+    unsigned long long mag = 0;
+    int ndig = 0;
+
+    if (q->p < q->end && *q->p == '-') { neg = 1; q->p++; }
+    while (q->p < q->end && *q->p >= '0' && *q->p <= '9') {
+        int d = *q->p - '0';
+        if (mag > (0xFFFFFFFFFFFFFFFFULL - (unsigned long long)d) / 10ULL) {
+            return JCS_E_PARSE;                             /* 整数溢出 */
+        }
+        mag = mag * 10ULL + (unsigned long long)d;
+        ndig++;
+        q->p++;
+    }
+    if (ndig == 0) return JCS_E_PARSE;
+    if (ndig > 1 && *(q->p - ndig) == '0') return JCS_E_PARSE;      /* 前导零：Python json 也拒 */
+    if (q->p < q->end && (*q->p == '.' || *q->p == 'e' || *q->p == 'E')) {
+        return JCS_E_PARSE;                                     /* 浮点/指数：我们不用，报了才安全 */
+    }
+    if (!neg) {
+        if (mag > 9223372036854775807ULL) return JCS_E_PARSE;
+        *out = (long long)mag;
+    } else {
+        if (mag > 9223372036854775808ULL) return JCS_E_PARSE;
+        *out = (mag == 9223372036854775808ULL) ? (-9223372036854775807LL - 1LL)
+                                               : -(long long)mag;
+    }
+    return 0;
+}
+
+static int parse_value(pctx_t *q, jv_t **out);
+
+static int p_object(pctx_t *q, jv_t **out)
+{
+    jv_t *o = jcs_obj(q->c);
+    int rc;
+
+    if (o == NULL) return JCS_E_NODES;
+    q->p++;                                              /* '{' */
+    p_ws(q);
+    if (q->p < q->end && *q->p == '}') { q->p++; *out = o; return 0; }
+    for (;;) {
+        char key[PARSER_STR_MAX];
+        size_t klen = 0;
+        jv_t *val = NULL;
+
+        p_ws(q);
+        rc = p_string(q, key, sizeof(key) - 1, &klen);
+        if (rc != 0) return rc;
+        key[klen] = '\0';
+        p_ws(q);
+        if (q->p >= q->end || *q->p != ':') return JCS_E_PARSE;
+        q->p++;
+        p_ws(q);
+        rc = parse_value(q, &val);
+        if (rc != 0) return rc;
+        rc = jcs_put(q->c, o, key, val);
+        if (rc != 0) return rc;                          /* 含重复键 → 报错（见 README 边界）*/
+        p_ws(q);
+        if (q->p < q->end && *q->p == ',') { q->p++; continue; }
+        if (q->p < q->end && *q->p == '}') { q->p++; *out = o; return 0; }
+        return JCS_E_PARSE;
+    }
+}
+
+static int p_array(pctx_t *q, jv_t **out)
+{
+    jv_t *a = jcs_arr(q->c);
+    int rc;
+
+    if (a == NULL) return JCS_E_NODES;
+    q->p++;                                              /* '[' */
+    p_ws(q);
+    if (q->p < q->end && *q->p == ']') { q->p++; *out = a; return 0; }
+    for (;;) {
+        jv_t *val = NULL;
+        p_ws(q);
+        rc = parse_value(q, &val);
+        if (rc != 0) return rc;
+        rc = jcs_add(q->c, a, val);
+        if (rc != 0) return rc;
+        p_ws(q);
+        if (q->p < q->end && *q->p == ',') { q->p++; continue; }
+        if (q->p < q->end && *q->p == ']') { q->p++; *out = a; return 0; }
+        return JCS_E_PARSE;
+    }
+}
+
+static int parse_value(pctx_t *q, jv_t **out)
+{
+    char ch;
+    int rc;
+
+    if (q->depth >= PARSER_MAX_DEPTH) return JCS_E_DEPTH;
+    p_ws(q);
+    if (!p_peek(q, &ch)) return JCS_E_PARSE;
+
+    if (ch == '{') {
+        q->depth++;
+        rc = p_object(q, out);
+        q->depth--;
+        return rc;
+    }
+    if (ch == '[') {
+        q->depth++;
+        rc = p_array(q, out);
+        q->depth--;
+        return rc;
+    }
+    if (ch == '"') {
+        char buf[PARSER_STR_MAX];
+        size_t n = 0;
+        jv_t *v;
+        rc = p_string(q, buf, sizeof(buf) - 1, &n);
+        if (rc != 0) return rc;
+        buf[n] = '\0';
+        v = jcs_str(q->c, buf);
+        if (v == NULL) return JCS_E_POOL;
+        *out = v;
+        return 0;
+    }
+    if (ch == 't') { if (p_lit(q, "true") != 0) return JCS_E_PARSE;  *out = jcs_bool(q->c, 1); return (*out ? 0 : JCS_E_NODES); }
+    if (ch == 'f') { if (p_lit(q, "false") != 0) return JCS_E_PARSE; *out = jcs_bool(q->c, 0); return (*out ? 0 : JCS_E_NODES); }
+    if (ch == 'n') { if (p_lit(q, "null") != 0) return JCS_E_PARSE;  *out = jcs_null(q->c);     return (*out ? 0 : JCS_E_NODES); }
+    if (ch == '-' || (ch >= '0' && ch <= '9')) {
+        long long iv = 0;
+        jv_t *v;
+        rc = p_number(q, &iv);
+        if (rc != 0) return rc;
+        v = jcs_int(q->c, iv);
+        if (v == NULL) return JCS_E_NODES;
+        *out = v;
+        return 0;
+    }
+    return JCS_E_PARSE;
+}
+
+int json_parse(jcs_ctx_t *c, const char *buf, size_t len, jv_t **out)
+{
+    pctx_t q;
+    jv_t *root = NULL;
+    int rc;
+
+    if (c == NULL || buf == NULL || out == NULL) return JCS_E_PARSE;
+    q.c = c;
+    q.p = buf;
+    q.end = buf + len;
+    q.depth = 0;
+    *out = NULL;
+
+    rc = parse_value(&q, &root);
+    if (rc != 0) return rc;
+    p_ws(&q);
+    if (q.p != q.end) return JCS_E_PARSE;                /* 尾随数据 */
+    *out = root;
+    return 0;
 }

@@ -1,7 +1,7 @@
 # proto/ — 协议内核（C 实现）+ 与 Python 的交叉测试
 
-**c2 状态（2026-09-20）：SN 内核 + JCS 规范化 + b64url + 报文信封 已完成并通过交叉测试（5 组）。
-剩余：设备**要收**的那几条下行报文（ACCESS-INFO / TRACKING-STATUS / ERROR）的解码 —— 与 c3 的数据口一起做。**
+**c2 状态（2026-09-20）：SN 内核 + JCS + b64url + 报文信封 + **下行解码** 全部完成并通过交叉测试（6 组）。
+剩余：HGIC 帧层（8 字节头 / `FRM2`）⇒ 与 c3 的数据口驱动一起做。**
 
 ## 为什么要这一层
 
@@ -21,6 +21,7 @@
 | `sn.h` / `sn.c` | SN 内核：Crockford / `sn_ok` / `sn_err` / `sn_parse` / Luhn32 / Mod97 / `sn_verify_check`。**无 malloc、无 stdio ⇒ 可直接编进固件** |
 | `jcs.h` / `jcs.c` | **RFC 8785 JCS 规范化**（我们用到的那部分）+ 迷你 JSON 构建器；`jcs_preimage()` = `orpah_id.preimage_of`。**不用 stdio/malloc/浮点 ⇒ 可编进固件** |
 | `msg.h` / `msg.c` | 链路报文构造器：`msg_req_connect` / `msg_report` / `msg_id_report`（对齐 `orpah_proto._base`+`build_*` 的**插入序**）。`id-report` 的 `sn` 取**内层 payload.sn** |
+| `downlink.h` / `downlink.c` | **下行解码**：`dl_decode()`（同 `decode_msg`：必为对象 + `type` 已知）+ `dl_type/dl_str/dl_int/dl_truthy`（Python 真值语义） |
 | `b64url.h` / `b64url.c` | base64url（无填充），对应 `orpah_id.b64url_encode` |
 | `sn_cli.c` / `jcs_cli.c` | host 侧 CLI（对拍/调试用；**不编进固件**）。`jcs_cli` 同时还管 JCS/b64url/报文三组 |
 | `run_cross_test.py` | 一键对拍：生成/校验向量 + 编译 C + 三方比对 |
@@ -29,6 +30,7 @@
 | `test_vectors_jcs.txt` | `<case-name><TAB><jcs-hex>`（12 行；case 名与 `jcs_cli.c` 的 `build_case()` 一一对应） |
 | `test_vectors_b64url.txt` | `<raw-hex><TAB><b64url>`（17 行，含 0/1/2 字节三种余数与字母表里的 `-` `_`） |
 | `test_vectors_msg.txt` | `<kind><TAB>a1..a5<TAB><envelope-hex>`（8 行：req-connect / report / id-report） |
+| `test_vectors_downlink.txt` | `<json-hex><TAB>valid/type/sn/ts/tracked/status/code`（11 行：3 种下行 + 5 种畸形 + 1 个真值语义） |
 
 > 四份向量文件全部**由 Python 参考实现生成（勿手改）**，列在脚本里统一用 `--refresh` 重生。
 
@@ -44,9 +46,9 @@ python proto/run_cross_test.py --orpah-dir ../orpah-over-halow
 
 1. **C 侧自检**（两个可执行目标）：
    · **SN 内核**：`selfcheck`（11 项）+ `selftest`（63 行校验位）+ `sn-selftest`（19 行 SN 解析）
-   · **JCS/b64url/msg**：`selfcheck`（4 项）+ `jcs-selftest`（12 行）+ `b64url-selftest`（17 行）
-     + `msg-selftest`（8 行报文信封）
-2. **快照没过期**：五份向量文件与 Python 参考**逐行一致**；
+   · **JCS/b64url/msg/dl**：`selfcheck`（4 项）+ `jcs-selftest`（12 行）+ `b64url-selftest`（17 行）
+     + `msg-selftest`（8 行报文信封）+ `dl-selftest`（11 行下行解码）
+2. **快照没过期**：六份向量文件与 Python 参考**逐行一致**；
 3. 合起来 ⇒ **C ↔ 向量文件 ↔ Python 三方零偏差**。
 
 ⚠ 找不到上游参考实现时，脚本会**明确打印"未与 Python 交叉验证"**（但仍退出 0，因为 C 侧自检确实过了）——
@@ -87,6 +89,22 @@ Damm32（`orpah-over-halow/damm32.py`）是**Phase 2 的替代算法**，`verify
 
 所以：报文 JSON 里的键序要求**逐字节复现 Python 源码里的插入顺序**（`msg_report` 是
 `v,type,ts,sn,seq,cap,rssi` ✓）；而签名预像才走 JCS 排序。两者混了就是“能发出去但服务端验不过”。
+
+## JSON 解析器的**已知边界**（解析器在 `jcs.c`，下行用）
+
+解析器**有意比 Python 的 `json` 严**（我们的报文不会长成这些形状 ⇒ 真收到了宁可报错，不要猜）：
+
+| 输入 | Python `json.loads` | 本 C |
+|---|---|---|
+| `1.5` / `1e3`（浮点/指数） | 接受 | **拒**（我们报文只用整数） |
+| 超出 int64 的整数 | 接受（任意精度） | **拒** |
+| 嵌套 > 8 层 | 接受 | **拒** |
+| 重复键 | 后者覆盖前者 | **拒**（Python dict 不会重复，报了才安全） |
+| 孤立代理项 `"\ud800"` | 接受（得到一个孤立代理） | **拒**（无法编成合法 UTF-8） |
+| `NaN` / `Infinity` | 默认接受 | **拒** |
+
+⇒ 所以 `test_vectors_downlink.txt` **只收录“Python 也说无效”的无效用例**（坏 JSON / 顶层非对象 /
+未知 type / 截断），上面这几条**不入向量**（否则会变成用一个已知差异去“证明”零偏差）。
 
 ## 五条踩过的坑（都写进代码注释了，别再踩）
 

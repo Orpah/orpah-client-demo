@@ -37,6 +37,7 @@ VEC_PARSE = os.path.join(HERE, "test_vectors_snparse.txt")
 VEC_JCS = os.path.join(HERE, "test_vectors_jcs.txt")
 VEC_B64 = os.path.join(HERE, "test_vectors_b64url.txt")
 VEC_MSG = os.path.join(HERE, "test_vectors_msg.txt")
+VEC_DL = os.path.join(HERE, "test_vectors_downlink.txt")
 
 HEADER_SN = (
     "# proto/test_vectors_sn.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
@@ -69,6 +70,13 @@ HEADER_MSG = (
     "#   req-connect : a1=sn a2=ts a3=mac|- a4=hw|- a5=-\n"
     "#   report      : a1=sn a2=ts a3=seq a4=cap(-|0|1) a5=rssi|-\n"
     "#   id-report   : a1=sn a2=ts a3..a5=-（内层用固定 stub，两侧一致）\n"
+)
+HEADER_DL = (
+    "# proto/test_vectors_downlink.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源（单一源）：orpah_proto.decode_msg() + 设备侧取值习惯（client.py / DeviceSim.on_down）\n"
+    "# 列：<json-hex><TAB>valid<TAB>type<TAB>sn<TAB>ts<TAB>tracked<TAB>status<TAB>code\n"
+    "#   ⚠ 只收录“Python 也说无效”的无效用例（浮点/超 int64/嵌套过深 是 C 有意加严，\n"
+    "#     不入向量，边界见 proto/README.md）\n"
 )
 
 
@@ -233,6 +241,52 @@ def gen_msg_rows(o, proto):
     return rows
 
 
+# ★ 下行解码用例：与 proto/jcs_cli.c 的 dl_report_line() 共用同一套 8 列规格
+DL_CASES = [
+    ("access-info-tracked", lambda p: p.encode_msg(
+        p.build_access_info("CN-WH01-9AF3C1D2", True, status=p.ST_TRACKED, ts=1789879939))),
+    ("access-info-untracked", lambda p: p.encode_msg(
+        p.build_access_info("CN-WH01-9AF3C1D2", False, ts=0))),
+    ("tracking-status", lambda p: p.encode_msg(
+        p.build_tracking_status("CN-WH01-9AF3C1D2", p.ST_NOT_TRACKED, msg_text="ok", ts=5))),
+    ("error", lambda p: p.encode_msg(
+        p.build_error("RATELIMIT", sn="CN-WH01-9AF3C1D2", msg_text="slow", ts=7))),
+    ("found", lambda p: p.encode_msg({"v": 1, "type": p.MSG_FOUND, "ts": 0})),
+    ("bad-json", lambda p: b"not json"),
+    ("top-array", lambda p: b"[]"),
+    ("empty-object", lambda p: b"{}"),
+    ("unknown-type", lambda p: b'{"v":1,"type":"NOPE","ts":0}'),
+    ("truncated", lambda p: b'{"v":1,'),
+    ("tracked-as-string", lambda p: b'{"v":1,"type":"ORPAH-ACCESS-INFO","ts":1,'
+                                    b'"sn":"X","tracked":"no"}'),
+]
+
+
+def dl_expect(proto, raw):
+    """与 C 侧 dl_report_line() 同语义：只认 str / int（bool 不算 int）。"""
+    msg = proto.decode_msg(raw)
+    if msg is None:
+        return ["0", "-", "-", "-", "-", "-", "-"]
+
+    def s(v):
+        return v if isinstance(v, str) else "-"
+
+    def i(v):
+        return str(v) if (isinstance(v, int) and not isinstance(v, bool)) else "-"
+
+    tracked = "-" if "tracked" not in msg else ("1" if msg["tracked"] else "0")
+    return ["1", s(msg.get("type")), s(msg.get("sn")), i(msg.get("ts")),
+            tracked, s(msg.get("status")), s(msg.get("code"))]
+
+
+def gen_dl_rows(o, proto):
+    rows = []
+    for label, mk in DL_CASES:
+        raw = mk(proto)
+        rows.append((raw.hex(),) + tuple(dl_expect(proto, raw)))
+    return rows
+
+
 def read_rows(path):
     rows = []
     with open(path, "r", encoding="utf-8") as f:
@@ -354,17 +408,20 @@ def main():
         rows_jcs = gen_jcs_rows(o)
         rows_b64 = gen_b64_rows(o)
         rows_msg = gen_msg_rows(o, proto)
+        rows_dl = gen_dl_rows(o, proto)
         write_rows(VEC_SN, HEADER_SN, rows_sn)
         write_rows(VEC_PARSE, HEADER_PARSE, rows_parse)
         write_rows(VEC_JCS, HEADER_JCS, rows_jcs)
         write_rows(VEC_B64, HEADER_B64, rows_b64)
         write_rows(VEC_MSG, HEADER_MSG, rows_msg)
-        print("--refresh 已重写：%s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d)"
+        write_rows(VEC_DL, HEADER_DL, rows_dl)
+        print("--refresh 已重写：%s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d)"
               % (os.path.basename(VEC_SN), len(rows_sn),
                  os.path.basename(VEC_PARSE), len(rows_parse),
                  os.path.basename(VEC_JCS), len(rows_jcs),
                  os.path.basename(VEC_B64), len(rows_b64),
-                 os.path.basename(VEC_MSG), len(rows_msg)))
+                 os.path.basename(VEC_MSG), len(rows_msg),
+                 os.path.basename(VEC_DL), len(rows_dl)))
 
     # ---- ② 快照 vs Python 参考 -------------------------------------------
     if o is not None:
@@ -377,8 +434,9 @@ def main():
         ]
         if proto is not None:
             groups.append(("test_vectors_msg.txt", gen_msg_rows(o, proto), read_rows(VEC_MSG)))
+            groups.append(("test_vectors_downlink.txt", gen_dl_rows(o, proto), read_rows(VEC_DL)))
         else:
-            print("跳过 test_vectors_msg.txt：拿不到 orpah_proto（报文构造器的单一源）")
+            print("跳过 test_vectors_msg/downlink.txt：拿不到 orpah_proto（报文构造/解码的单一源）")
         for name, exp, got in groups:
             if [tuple(str(x) for x in r) for r in exp] != [tuple(r) for r in got]:
                 fails.append("快照 %s 与 Python 参考不一致（用 --refresh 重生成并核对 diff）" % name)
@@ -400,11 +458,12 @@ def main():
          [("C selfcheck（SN 内置黄金样本）", ["selfcheck"]),
           ("C selftest（校验位向量）", ["selftest", VEC_SN]),
           ("C sn-selftest（SN 解析向量）", ["sn-selftest", VEC_PARSE])]),
-        ("JCS/b64url/msg", "jcs_cli", ["jcs.c", "b64url.c", "msg.c", "jcs_cli.c"],
+        ("JCS/b64url/msg/dl", "jcs_cli", ["jcs.c", "b64url.c", "msg.c", "downlink.c", "jcs_cli.c"],
          [("C selfcheck（JCS/b64url 冒烟）", ["selfcheck"]),
           ("C jcs-selftest（JCS 向量）", ["jcs-selftest", VEC_JCS]),
           ("C b64url-selftest（b64url 向量）", ["b64url-selftest", VEC_B64]),
-          ("C msg-selftest（报文信封向量）", ["msg-selftest", VEC_MSG])]),
+          ("C msg-selftest（报文信封向量）", ["msg-selftest", VEC_MSG]),
+          ("C dl-selftest（下行解码向量）", ["dl-selftest", VEC_DL])]),
     ]
     with tempfile.TemporaryDirectory() as td:
         for tname, tbin, srcs, checks in targets:
@@ -433,7 +492,7 @@ def main():
     if o is None:
         print("PASS（C 侧自检全过；**未与 Python 交叉验证** —— 没找到上游参考实现）")
         return 0
-    print("PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 / JCS / b64url / 报文信封 五组）")
+    print("PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 / JCS / b64url / 报文信封 / 下行解码 六组）")
     return 0
 
 
