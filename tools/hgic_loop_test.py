@@ -135,57 +135,6 @@ def ap_counts(txt):
     return d
 
 
-def eth(dst, src, et, payload):
-    return dst + src + struct.pack(">H", et) + payload
-
-
-def ip_cksum(b):
-    if len(b) % 2:
-        b += b"\0"
-    s = sum(struct.unpack(">%dH" % (len(b) // 2), b))
-    while s >> 16:
-        s = (s & 0xFFFF) + (s >> 16)
-    return (~s) & 0xFFFF
-
-
-def arp_request(who, tell):
-    return eth(b"\xff" * 6, HOST_MAC, 0x0806,
-               struct.pack(">HHBBH", 1, 0x0800, 6, 4, 1) + HOST_MAC + tell + b"\0" * 6 + who)
-
-
-def dhcp_discover():
-    """一条最小可用的 DHCP DISCOVER（广播）——用它触发 AP 侧协议栈回一条下行帧。"""
-    bootp = (b"\x01\x01\x06\x00" + struct.pack(">I", 0x12345678) + b"\x00\x00\x80\x00" +
-             b"\0" * 16 + HOST_MAC + b"\0" * 10 + b"\0" * 64 + b"\0" * 128)
-    opts = b"\x63\x82\x53\x63" + b"\x35\x01\x01" + b"\xff"
-    udp = struct.pack(">HHHH", 68, 67, 8 + len(bootp + opts), 0) + bootp + opts
-    ip = (b"\x45\x00" + struct.pack(">H", 20 + len(udp)) + b"\x00\x01\x00\x00\x40\x11\x00\x00" +
-          b"\x00\x00\x00\x00" + b"\xff\xff\xff\xff")
-    ip = ip[:10] + struct.pack(">H", ip_cksum(ip)) + ip[12:]
-    return eth(b"\xff" * 6, HOST_MAC, 0x0800, ip + udp)
-
-
-def eth_summary(p):
-    """把一条以太帧讲成人话（ARP/IPv4/UDP/DHCP/0x88b5 认出来）。"""
-    if len(p) < 14:
-        return "（%d 字节，不像完整以太帧）" % len(p)
-    dst, src, et = p[:6].hex(":"), p[6:12].hex(":"), struct.unpack(">H", p[12:14])[0]
-    ex = ""
-    if et == 0x0806 and len(p) >= 42:
-        ex = " ARP op=%d %s->%s" % (struct.unpack(">H", p[20:22])[0],
-                                    ".".join(map(str, p[28:32])), ".".join(map(str, p[38:42])))
-    elif et == 0x0800 and len(p) >= 34:
-        ex = " IPv4 %s->%s" % (".".join(map(str, p[26:30])), ".".join(map(str, p[30:34])))
-        if p[23] == 17 and len(p) >= 38:
-            sp, dp = struct.unpack(">HH", p[34:38])
-            ex += " UDP %d->%d" % (sp, dp) + ("  ★DHCP!" if 67 in (sp, dp) else "")
-    elif et == 0x86DD:
-        ex = " IPv6"
-    elif et == 0x88B5:
-        ex = " ★ORPAH(0x88b5) %r" % p[14:34]
-    return "dst=%s src=%s et=0x%04x%s [%dB]" % (dst, src, et, ex, len(p))
-
-
 def main():
     ap = argparse.ArgumentParser(description="b 步受控闭环台架（HGIC 数据口 + 空口 + AP 计数）")
     ap.add_argument("--ap-port", default="COM8", help="TH-RJ45 的 AT 口（USB-C，CH340）")
@@ -215,8 +164,8 @@ def main():
 
     FRAMES = [("ARP who-has 192.168.1.1（42B）",
                arp_request(struct.pack(">BBBB", 192, 168, 1, 1),
-                           struct.pack(">BBBB", 192, 168, 1, 225)), 50),
-              ("DHCP DISCOVER（286B）", dhcp_discover(), 294),
+                           struct.pack(">BBBB", 192, 168, 1, 225), HOST_MAC), 50),
+              ("DHCP DISCOVER（286B）", dhcp_discover(HOST_MAC), 294),
               ("ORPAH 0x88b5（33B）", eth(b"\xff" * 6, HOST_MAC, 0x88B5, b"ORPAH-DOWNLINK-TEST"), 41)]
 
     say("=" * 84)
