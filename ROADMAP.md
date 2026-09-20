@@ -128,31 +128,47 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
     细节与五条硬规矩（改角色不能复位、`AT+RSSI` 恒 0、判下行别用 `tx1`、AT 无数据面命令、CH347F VCP 抽风）
     见 `docs/txah-uart-macbus.md` §八。
 - **✓✓ 2026-09-20 同日：b 步「L2 全链路」也闭环了** —— 台架还是上面那套，但 **PC 同时扮
-  Router + Server**（不再只是裸帧夹具），客户端跑**上游真实业务栈**（`ClientHost`）：
+  Router + Server**（不再只是裸帧夹具），客户端跑**上游真实业务栈**（`client_sim.DeviceSim`
+  + `client.ClientHost`）：
 
   * 拓扑：`ClientHost` ──CH347F/UART0(HGIC)── 客户端 TX-AH(STA) ──空口── TH-RJ45(AP，L2 透明桥)
     ──RJ45── 中间路由器(当交换机) ── 家用 Wi-Fi ── 这台 PC 的 Wi-Fi 网卡 ──(Npcap)─→ `RouterBridge`
     → 本机 `OrpahServer`（UDP 19447）。
   * **PC 侧两段传输**：`tools/hgic_bus.py`（客户端侧，API 与厂商 `SerialAtBus` 同形）+ `tools/l2bus.py`
     （有线侧，Npcap + scapy 收 `ether proto 0x88b5`）；**业务逻辑一行没改**（Router 用 `bus=` 注入）。
-  * **实测（一键 = `python tools\demo_l2_hgic.py --iface <网卡 MAC>`，退出码 0 = 四条判据全过）**：
+  * **实测（一键 = `python tools\demo_l2_hgic.py --iface <网卡 MAC>`，退出码 0 = 判据全过，见脚本 docstring ①–⑥）**：
     ① `REQ-CONNECT` → `[client] [rx 1] ORPAH-ACCESS-INFO` ✓；
     ② `REPORT` ×3：每次 `[client] 注入` → `[router] 上行` → `[server] 收到 ts/rssi/seq`
        → `[router] [down] TRACKING-STATUS` → `[client] [rx]` ✓；
-    ③ `mark_tracked` → 走失表下发（Router 缓存 1 项）→ 再报一次 → `status=TRACKED` ✓；
-    ④ 零丢弃：`router_dropped=0 / server_dropped=0 / client_held=0` ✓。
+    ③ `mark_tracked` → 走失表下发（Router 缓存 1 项）→ 再跑一拍 → `status=TRACKED` ✓；
+    ④ 零丢弃：`router_dropped=0 / server_dropped=0` ✓（设备侧自限频的 `held` **另列**，
+       那是「延后不是丢弃」，不当判据）。
   * ★ **这条同时补上了上面那句「未验证」**：从 **AP 侧 RJ45** 进去的帧**确实能下行到客户端** ——
     下行的 `ACCESS-INFO` / `TRACKING-STATUS` 就是 PC 从网卡发出去、经 RJ45 进 AP、过空口、
     到客户端数据口的。
   * ⚠ 两个必须记住的坑：
     · **Npcap 会抓到本机自己发出的帧** ⇒ 不处理的话 Router 会把自己发的下行当上行收回来（回路）。
       `l2bus.py` 默认 `drop_own=True`（丢「源 MAC = 本机网卡」的帧），且 Router 的 `self_mac` 用
-      **同一块网卡的 MAC** —— 实测 `own_dropped=5` 正好等于 Router 那 5 帧下行。
+      **同一块网卡的 MAC** —— 实测 `own_dropped` 恒等于 Router 发出的下行动数（首次 5、补上 ID 后 8）。
     · **上游 `router.py` 需要一处小改**才能挂在裸以太总线上：`bus=` 注入 + `set_transport()`
       （见 `orpah-over-halow` 那边的对应提交）。
+  * ★ **拍间隔是按桶容量算出来的，不是拍的**：设备自限频是 0.6 s/条（= 1.67 条/秒），
+    而一拍要发 3 条（REQ-CONNECT + REPORT + ID）⇒ 拍间隔得 ≳ 1.55 s 才不会被自己的闸门
+    延后（默认取 **1.8 s**）。比这快**不会报错**，只会看到 `held > 0`（延后不是丢弃）。
+  * **✓ 用户选①后补上：ID 验签（`ORPAH-ID-REPORT`）也进了夹具**（2026-09-20 实测）——
+    设备侧换成上游 `client_sim.DeviceSim`（`cycle()` = REQ-CONNECT → REPORT → 已签 ID-REPORT，
+    顺序与 `ui_server` 一致），密钥库用上游 `orpah_id.KeyStore` 登记**同一个**设备对象：
+    · **⑤ 验签通过**：3 拍都是 `alg=ES256 level=0 trust=high accepted=True` ——
+      **已签报文过空口 + 有线到 Server，服务端 ECDSA 验签通过**（= b 步判据「服务端收到并验签通过」）；
+    · **⑥ 负对照**：把一条已签报文的 payload 改掉（连 nonce 一起换，免得先被 nonce 去重拦下）
+      ⇒ `accepted=False error=signature_invalid` —— 证明验签**真在跑**，不是橡皮图章；
+    · 附带看到 `[found 1] 发现走失`（Router 命中走失表后上报 FOUND，也走的真链路）。
+    ★ **如实的两点**：本夹具的设备没报 `battery_mv`（`None`）、也没声明 `cap.rtc`
+    ⇒ `ts_src=device`；真机是无 RTC 的 CH32V203，按规范该发 `ts=0` + `cap.rtc=false`
+    （上游 `DeviceSim(cap_rtc=False, ts_zero=True)` 就支持，**待定要不要现在打开**）。
   * ⚠ **仍未验证（如实）**：这台 PC **仍没有有线网卡**，跑的是**家用 Wi-Fi 的 L2 域**
     （中间路由器当交换机用）；真机形态（PC / OpenWrt 的**有线口**直连 AP 的 RJ45）没验。
-    ID-REPORT / 验签那一路也没在本夹具里跑（Server 未配密钥库 ⇒ 会判 `unknown_device`）。
+    （ID-REPORT / 验签那一路已补上，见**上**条。）
 - 另一条（**未走**，留档）：用户 2026-09-16 曾选**第二块 TX-AH 当对端**
   （模块 A = STA ↔ CH347F `P2`；模块 B = AP ↔ CH347F `P3`；两块都刷同一版固件；判据 `xfer`）——
   那条路上**只有上行通、下行不通**（§7.4 表）。
