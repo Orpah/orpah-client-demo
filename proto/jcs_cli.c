@@ -618,7 +618,11 @@ static int cmd_dl_selftest(const char *path)
 /* 设备侧已签报文（id-report）：与 run_cross_test.py 的 IDR_CASES 一一对应  */
 /* ------------------------------------------------------------------ */
 /* 输出：<报文-hex><TAB><信封-hex>。
- * 参数固定 8 个：sn ts nonce level key-hex battery|- caprtc|- firmware|- */
+ * 参数固定 8 个：sn ts nonce level key-hex battery|- caprtc|- firmware|-
+ *   ⚠ `key-hex` 的含义**按 level 分**（列的个数不变，免得改向量格式）：
+ *     level 0   = **P-256 私钥 d**（32 B 大端 hex）——ES256 走 RFC 6979
+ *     level 1/2 = **HMAC 降级密钥**（32 B hex）
+ *     level 3   = 用不上（写 -）*/
 static void idr_line(char **av, char *out, size_t outcap)
 {
     static jcs_ctx_t c;
@@ -641,7 +645,10 @@ static void idr_line(char **av, char *out, size_t outcap)
     jcs_init(&c);
     rc = idr_build(&c, av[0], parse_ll(av[1], 0), av[2], level,
                    cap, batt_set, batt, is_absent(av[7]) ? NULL : av[7],
-                   NULL, key, (size_t)kn, repbuf, sizeof(repbuf), &rn);
+                   NULL,
+                   (level == 0) ? NULL : key, (level == 0) ? 0 : (size_t)kn,
+                   (level == 0) ? key : NULL, (level == 0) ? (size_t)kn : 0,
+                   repbuf, sizeof(repbuf), &rn);
     if (rc != 0) { snprintf(out, outcap, "ERR idr-%d", rc); return; }
 
     /* 再包一层链路信封（= orpah_proto.build_id_report） */
@@ -768,7 +775,8 @@ int main(int argc, char **argv)
     }
     if (strcmp(cmd, "id-report") == 0) {
         if (argc < 10) {
-            fprintf(stderr, "id-report <sn> <ts> <nonce> <level> <key-hex> <battery|-> <caprtc|-> <firmware|->\n");
+            fprintf(stderr, "id-report <sn> <ts> <nonce> <level> <key-hex> <battery|-> <caprtc|-> <firmware|->\n"
+                            "  key-hex: level 0 = P-256 私钥 d（32B 大端）; level 1/2 = HMAC 密钥; level 3 = -\n");
             return 1;
         }
         return cmd_idr(cmd, &argv[2], argc - 2);

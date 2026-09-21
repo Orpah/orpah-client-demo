@@ -132,8 +132,10 @@ HEADER_IDR = (
     "# 来源（单一源）：orpah_id.Device.report() + orpah_proto.encode_msg()/build_id_report()\n"
     "# 列：<sn><TAB><ts><TAB><nonce><TAB><level><TAB><key-hex><TAB><battery|->\n"
     "#     <TAB><caprtc|-><TAB><firmware|-><TAB><report-hex><TAB><envelope-hex>\n"
-    "# 覆盖：level 1/2（HS256，降级链）/ level 3（none，不签名）/ 无 cap 与带 cap+battery+firmware\n"
-    "#   ⚠ level=0（ES256）**不在此**：C 侧明确报未实现（IDR_E_ES256），等 P-256 拍板\n"
+    "#   ⚠ key-hex 的含义**按 level 分**：level 0 = P-256 私钥 d（32B 大端）；level 1/2 = HMAC 密钥；level 3 = -\n"
+    "#   ⚠ level 0 的签名用 **RFC 6979 确定性 k**（参考实现默认随机 k，那样两侧逐字节比不了）；\n"
+    "#     算法本身的独立证据 = RFC 6979 §A.2.5 官方向量 + OpenSSL 验签 + 上游 verify_report 接受\n"
+    "# 覆盖：level 0（ES256）/ level 1、2（HS256 降级链）/ level 3（none，不签名）/ 无 cap 与带 cap+battery+firmware\n"
 )
 HEADER_HGIC = (
     "# proto/test_vectors_hgic.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
@@ -428,7 +430,11 @@ def gen_sha_rows(o):
 
 
 def _idr_cases(o):
-    """(sn, ts, nonce, level, battery, caprtc, firmware) —— key 由 derive_demo_hmac 填。"""
+    """(sn, ts, nonce, level, battery, caprtc, firmware)。
+
+    key 那一列由 `idr_row` 按 level 填：**level 0 = P-256 私钥 d**（演示派生），
+    level 1/2 = `derive_demo_hmac`。
+    """
     sn = "CN-WH01-9AF3C1D2"
     n1 = "3F9A8B2C1D4E5F6A7B8C9D0E1F2A3B4C"
     n2 = "00112233445566778899AABBCCDDEEFF"
@@ -438,14 +444,49 @@ def _idr_cases(o):
         (sn, "1789879939", n1, "1", "-", "1", "-"),                # cap.rtc=true
         (sn, "0", n2, "3", "-", "-", "-"),                       # L3：不签名（alg=none）
         (sn, "1789879939", n1, "1", "3000", "0", "-"),           # 低电量（告警输入端）
+        # —— ES256（level 0，c4-β-3）——
+        (sn, "0", n1, "0", "3900", "0", "c4b"),                  # ★ 真机形态：无 RTC + 如实报电量 + 固件名
+        (sn, "1789879939", n2, "0", "-", "1", "-"),              # 对照：声明有 RTC、不报电量
     ]
+
+
+def _det_es256(o, d, preimage):
+    """用**确定性 k（RFC 6979）**签 ES256 —— 两侧才能逐字节比。
+
+    参考实现默认走 `cryptography`（**随机 k**）⇒ 逐字节比不了；规范对 k 无规定
+    （`proto/ecdsa.h`：「k 的来源由调用方给」），所以这里**只换 k 的来源**，
+    hdr/payload/预像结构/编码仍全部由参考实现产出。
+    算法本身另有两条独立证据：RFC 6979 §A.2.5 官方向量 + OpenSSL 验签。
+    """
+    import hashlib as _hl
+    raw = preimage.encode("utf-8") if isinstance(preimage, str) else preimage
+    h1 = _hl.sha256(raw).digest()
+    _k, r, s = ecdsa_sign_py(d, h1, _p256_n(o))
+    return r.to_bytes(32, "big") + s.to_bytes(32, "big")
+
+
+def _idr_key_hex(o, sn, level):
+    """向量第 5 列（key-hex）的**单一来源**：level 0 = P-256 私钥 d；1/2 = HMAC；3 = `-`。
+
+    两处调用（生成向量 / 让 C 侧再现）**必须走同一个函数** —— 我第一版就是让验签循环
+    自己写 `derive_demo_hmac` ⇒ level 0 拿 HMAC 当私钥，C 侧自洽但服务端回
+    `signature_invalid`。这正是“同一个含义在两处各写一份”的典型症状。
+    """
+    if int(level) == 0:
+        return "%064x" % o.Device(sn=sn).privkey.private_numbers().private_value
+    if int(level) in (1, 2):
+        return o.derive_demo_hmac(sn, 1).hex()
+    return "-"
 
 
 def idr_row(o, proto, case):
     sn, ts, nonce, level, batt, caprtc, fw = case
-    key_hex = o.derive_demo_hmac(sn, 1).hex()
+    key_hex = _idr_key_hex(o, sn, level)
     dev = o.Device(sn=sn)
-    dev.hmac_key = bytes.fromhex(key_hex)
+    dev.hmac_key = bytes.fromhex(o.derive_demo_hmac(sn, 1).hex())
+    if int(level) == 0:
+        d = int(key_hex, 16)                       # 这一列 = P-256 私钥 d（32 B 大端）
+        dev.sign = (lambda alg, pre, _d=d: _det_es256(o, _d, pre))
     rep = dev.report(level=int(level), ts=int(ts), nonce=nonce, seen_routers=[],
                      battery_mv=None if batt == "-" else int(batt),
                      firmware=None if fw == "-" else fw,
@@ -1055,6 +1096,7 @@ def main():
           ("C sn-selftest（SN 解析向量）", ["sn-selftest", VEC_PARSE])]),
         ("JCS/b64url/msg/dl/idr", "jcs_cli",
          ["jcs.c", "b64url.c", "msg.c", "downlink.c", "sha256.c", "hmac.c",
+          "p256.c", "rfc6979.c", "ecdsa.c",            # ← id_report.c 的 ES256 路径要用
           "id_report.c", "jcs_cli.c"],
          [("C selfcheck（JCS/b64url 冒烟）", ["selfcheck"]),
           ("C jcs-selftest（JCS 向量）", ["jcs-selftest", VEC_JCS]),
@@ -1113,7 +1155,7 @@ def main():
             n_ok = 0
             for case in _idr_cases(o):
                 sn, ts, nonce, level, batt, caprtc, fw = case
-                key_hex = o.derive_demo_hmac(sn, 1).hex()
+                key_hex = _idr_key_hex(o, sn, level)      # ← 与生成向量同一函数（别各写一份）
                 p = _run([exes["jcs_cli"], "id-report", sn, ts, nonce, level,
                           key_hex, batt, caprtc, fw])
                 out = (p.stdout or "").strip()
@@ -1133,7 +1175,7 @@ def main():
                 ts_int = int(ts)
                 v = o.verify_report(rep, ks, now=(None if ts_int == 0 else ts_int),
                                     used_nonces=o.NonceCache())
-                if int(level) in (1, 2):
+                if int(level) in (0, 1, 2):
                     if not v.get("accepted"):
                         print("FAIL 服务端**不接受** C 产出的降级报文：level=%s error=%s"
                               % (level, v.get("error")))
@@ -1149,7 +1191,7 @@ def main():
                     print("   [info] L3(alg=none) 服务端判定：accepted=%s trust=%s coverage_only=%s"
                           % (v.get("accepted"), v.get("trust"), v.get("coverage_only")))
             if n_ok:
-                print("PASS 服务端验签 C 产出的降级报文（verify_report 接受 %d 条 level=1/2）" % n_ok)
+                print("PASS 服务端验签 C 产出的报文（verify_report 接受 %d 条 level=0/1/2）" % n_ok)
 
         # ---- ★ 拿 **OpenSSL 验签 C 产出的 r||s**（不是只比字节）----------------
         #   层级：字节一致只说明"两边一样"；验签才说明"这确实是一份合法签名"。

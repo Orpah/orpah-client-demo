@@ -79,6 +79,10 @@ SRCS = Core/main.c \
 #   收帧打印）⇒ 不再是被 gc 丢掉的死代码，`-lgcc` 的必要性也从"将来"变成"现在"。
 # ⚠ 引脚/端口口径仍是**待定**（`Core/board.h` 的 MODULE_* 宏）；定板后只改 board.h。
 PROTO_SRCS = sn.c jcs.c b64url.c msg.c downlink.c sha256.c hmac.c id_report.c hgic.c
+# ★ c4-β-3（2026-09-22）：`id_report.c` 的 level=0 路径要 P-256/ECDSA/RFC 6979。
+#   现在 main 还没调 `idr_build`，所以 `--gc-sections` 会把它们整个丢掉（尺寸不变）；
+#   等 c4-γ 真的上报时它们才会进镜像 —— 先把编译单元挂上，避免那时才发现链接缺符号。
+PROTO_SRCS += p256.c rfc6979.c ecdsa.c
 
 OBJS = $(addprefix $(BUILD)/, $(SRCS:.c=.o))
 OBJS += $(addprefix $(BUILD)/proto/, $(PROTO_SRCS:.c=.o))

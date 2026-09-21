@@ -1,13 +1,13 @@
 # proto/ — 协议内核（C 实现）+ 与 Python 的交叉测试
 
-**状态（2026-09-20，c2 + c4-α + c3 帧层 + c4-β 曲线层 + c4-β-2 签名）：SN / JCS / b64url / 报文信封 /
-下行解码 / SHA-256 / HMAC-SHA256 / 设备侧已签报文（HS256 + none）/ HGIC 帧层 /
+**状态（2026-09-22，c2 + c4-α + c3 帧层 + c4-β 曲线层 + c4-β-2 签名 + **c4-β-3 ES256 接进报文**）：SN / JCS / b64url / 报文信封 /
+下行解码 / SHA-256 / HMAC-SHA256 / 设备侧已签报文（**ES256 + HS256 + none**）/ HGIC 帧层 /
 **P-256 曲线（素域+群+标量乘+公钥派生）** / **ECDSA 签名（`r||s` + RFC 6979 确定性 `k`，
 对 RFC §A.2.5 官方向量逐字节一致）** 全部完成**，交叉测试 **14 组**；
-并且**服务端（上游 `verify_report`）验签通过** C 产出的降级报文。
-剩余：**把 level=0（ES256）接进 `idr_build()` 并让上游 `verify_report` 接受 C 产出的 level=0 报文**
-（= c4-β-3）；HGIC 的**上机**（c3-2b：UART2 ↔ 模组，引脚待定 + 要你烧录）；`payload.nonce` 的来源
-（规范写的是 **ATECC608B RNG**）⇒ 等 SE 接线（`idr_build()` 已由调用方传 nonce，**不塞假随机**）。
+并且**服务端（上游 `verify_report`）验签通过** C 产出的报文 —— 含 **level=0（ES256）** 共 6 条。
+剩余：HGIC 的**上机**（c3-2b：UART2 ↔ 模组，引脚待定 + 要你烧录）；**固件 main 还没调 `idr_build`**
+（c4-γ：把已签上报接进主循环 + `payload.nonce` 的来源 —— 规范写的是 **ATECC608B RNG**，
+⇒ 等 SE 接线；`idr_build()` 已由调用方传 nonce，**不塞假随机**）。
 
 ## 为什么要这一层
 
@@ -41,7 +41,7 @@ flowchart LR
 | `downlink.h` / `downlink.c` | **下行解码**：`dl_decode()`（同 `decode_msg`：必为对象 + `type` 已知）+ `dl_type/dl_str/dl_int/dl_truthy`（Python 真值语义） |
 | `sha256.h` / `sha256.c` | **SHA-256**（FIPS 180-4）：`sha256_init/update/final` + 一次性 `sha256()`。§5.1 的 `SHA-256(preimage)` 用；也是将来 RFC 6979 确定性 k 的前置 |
 | `hmac.h` / `hmac.c` | **HMAC-SHA256**（RFC 2104）：`hmac_sha256(key, keylen, msg, msglen, out)` = §5.1 的**降级 HS256**（**直接对 preimage 做 HMAC**，不再先哈希） |
-| `id_report.h` / `id_report.c` | **设备侧已签报文组装**：`idr_build()` 组 hdr+payload → 预像 → 签名（**level 1/2 = HS256**、**level 3 = 不签名**）→ 输出报文 JSON。`level=0`（ES256）返回 `IDR_E_ES256`：**明确报未实现，不假装签了** |
+| `id_report.h` / `id_report.c` | **设备侧已签报文组装**：`idr_build()` 组 hdr+payload → 预像 → 签名（**level 0 = ES256**（`ec_priv` 32 B 标量 + RFC 6979）、**level 1/2 = HS256**、**level 3 = 不签名**）→ 输出报文 JSON。私钥**由参数传入**（不取全局、不从报文取）—— 将来换 ATECC608B 只改调用方 |
 | `b64url.h` / `b64url.c` | base64url（无填充），对应 `orpah_id.b64url_encode` |
 | `sn_cli.c` / `jcs_cli.c` / `sha_cli.c` / `hgic_cli.c` | host 侧 CLI（对拍/调试用；**不编进固件**）。`jcs_cli` 管 JCS/b64url/报文/下行四组；`hgic_cli` 管 HGIC 三组 |
 | `run_cross_test.py` | 一键对拍：生成/校验向量 + 编译 C + 三方比对 |
@@ -53,7 +53,7 @@ flowchart LR
 | `test_vectors_downlink.txt` | `<json-hex><TAB>valid/type/sn/ts/tracked/status/code`（11 行：3 种下行 + 5 种畸形 + 1 个真值语义） |
 | `test_vectors_sha256.txt` | `<input-hex><TAB><digest-hex>`（16 行：空 / 块边界 55~129 / 1000B / **真实签名预像**） |
 | `test_vectors_hmac.txt` | `<key-hex><TAB><msg-hex><TAB><mac-hex>`（13 行：空键 / 键 32~128（含**超分组必须先哈希**）/ **真实降级路径**） |
-| `test_vectors_id_report.txt` | 8 个参数 + `<report-hex><TAB><envelope-hex>`（5 行：level 1/2/3、带与不带 cap+battery+firmware） |
+| `test_vectors_id_report.txt` | 8 个参数 + `<report-hex><TAB><envelope-hex>`（7 行：level 0/1/2/3、带与不带 cap+battery+firmware）。⚠ 第 5 列 `key-hex` 的含义**按 level 分**：0 = P-256 私钥 d，1/2 = HMAC 密钥，3 = `-` |
 | `hgic.h` / `hgic.c` | **HGIC 帧层**（模组主机口）：8 B 头组/解、`FRM2`/`CMD`/`CMD2`、cookie 计数器（15 位回绕）、控制面解码（应答/短应答/请求/事件）、**流式定帧 + 重同步**。**无 stdio/malloc/string.h ⇒ 可编进固件** |
 | `hgic_cli.c` | HGIC 的 host 侧 CLI（`frm2`/`cmd`/`hdr`/`feed`/`ctrl` 单次子命令 + `selfcheck` + 三个 `*-selftest`） |
 | `test_vectors_hgic.txt` | `<kind><TAB><a1..a6><TAB><frame-hex>`（14 行：hdr/frm2/cmd；含整帧 8 与 4096 两条边界、CMD↔CMD2 分界） |
@@ -212,6 +212,34 @@ Damm32（`orpah-over-halow/damm32.py`）是**Phase 2 的替代算法**，`verify
 报文编解码 + **JCS（RFC 8785）规范化** + `b64url` + **签名预像**。
 JCS 是要害（键序按 UTF-16 码元、数字最短表示，差一个字节整条链就验不过），
 同样按"**黄金向量 + 对拍**"做，**不与本目录的 SN 内核混在一起**（一次只动一件事）。
+
+## ES256 接进报文（c4-β-3，2026-09-22）
+
+`idr_build()` 的 level=0 路径 = **SHA-256(预像) → ECDSA(P-256) → `r||s`(64 B) → b64url → 写进 `sig`**，
+与 Python 参考的 `Device.report()` 逐字节一致（参考实现的 `es256_sign` 也是 raw `r||s` + b64url）。
+私钥从参数进（`ec_priv`，32 B 大端）—— 规范 §6 的真机是“密钥在 SE 内生成且不可导出、签名也在 SE 里”，
+所以这里**不把私钥写死在任何地方**，将来换 ATECC608B 只改调用方。
+
+### 为什么向量里的 level=0 要换成确定性 k
+
+参考实现 `Device.report()` 走 `cryptography` ⇒ **随机 k**，同一条报文两次签名不同 ⇒ **逐字节比不了**。
+规范对 k 无规定（`ecdsa.h`：“k 的来源由调用方给”），所以 `idr_row()` **只换 k 的来源**
+（`_det_es256()` 用本仓 Python RFC 6979），hdr/payload/预像结构/编码仍全部由参考实现产出。
+
+这样“逐字节一致”证明的是**两边实现一致**；而“这确实是一份合法签名”另有**三条独立证据**：
+① RFC 6979 §A.2.5 官方向量（`test_vectors_ecdsa_rfc6979.txt`，静态夹具）；
+② OpenSSL 验签 C 产出的 `r||s`；③ **上游 `verify_report` 接受 C 产出的 level=0 报文**。
+
+### ★ 一个“同一个含义在两处各写一份”的实拍
+
+我第一版把“第 5 列是哪种 key”分别写在两个地方：生成向量时认 level（0→私钥 d）、
+验签循环时却写死 `derive_demo_hmac()` ⇒ C 侧**自洽**（自己签自己验都能过，`id-report-selftest` 7/7）
+但服务端回 **`signature_invalid`**。改成 `_idr_key_hex()` 单一来源后 6 条 level=0/1/2 全过。
+**症状很典型：两层各自自洽、只剩接线处对不上。**
+
+判据（均实测）：`python proto\run_cross_test.py` → **exit 0**（14 组），
+`C id-report-selftest` **7/7**（含 2 条 ES256 逐字节一致），
+`verify_report` 接受 **6 条** level=0/1/2，固件 `make` exit 0。
 
 ## ECDSA / RFC 6979（c4-β-2）：k 为什么是确定性的，那张静态夹具凭什么可信
 

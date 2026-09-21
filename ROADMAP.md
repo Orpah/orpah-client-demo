@@ -209,9 +209,11 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
   一键判据 `python tools\hgic_loop_test.py`（裸帧）与 `python tools\demo_l2_hgic.py`（全链路），
   详见 `docs/txah-uart-macbus.md` §7.4/§八 与 `ROADMAP.md` §二。
   仅剩：**真机形态的有线口**（PC/OpenWrt 有线网卡直连 AP 的 RJ45）没验 —— 本机没有有线网卡，
-  跑的是家用 Wi-Fi 的 L2 域；另 `ID-REPORT`/验签那一路未进本夹具。
+  跑的是家用 Wi-Fi 的 L2 域。（`ID-REPORT`/验签那一路**已进夹具**，见本节上面的 ⑤⑥ 与 ⑦⑧。）
 - c 步：**c1（骨架）+ c3-2b（模组数据口）上机全绿（2026-09-21）**；c2（协议内核 C + 交叉测试）、
-  c3-1（HGIC 帧层）离线已完成；c4（选级 + 无 RTC + 自限频 + 已签上报）**未上机** —— 见 §五。
+  c3-1（HGIC 帧层）离线已完成；**c4 的内核已齐（2026-09-22）**：降级（HS256）+ **ES256
+  （曲线/ECDSA/RFC 6979 确定性 k）已接进 `idr_build()`**，服务端 `verify_report` 离线验签通过
+  （含 level=0）；**未上机**（固件 main 还没调 `idr_build`）—— 见 §五。
   ATECC608 未接线；ATECC608B 驱动、产线烧录、低功耗与取能标定全未做。
 - 客户端侧的 `seen_routers`（设备看到哪些路由器）在仿真器里仍是**演示写死值**，
   真机要等空口侧给出可用读数（且 `xport` 不在签名内，见 SPEC F-12）。
@@ -223,8 +225,7 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 | **c1** | 本仓 `firmware/` 骨架：Makefile / `ld` / startup / `Core{board.h,main.c}` / `Periph{gpio,uart}` | **✅ 完成（未上机）** |
 | c2 | 协议内核 C 实现 + 与 Python 的**交叉测试**（同一批黄金向量，纯 PC） | **✅ 完成（见下）** |
 | **c3** | HGIC 数据口（UART ↔ TX-AH：8 字节头 + `FRM2` + `CMD`/`EVENT`） | **✅ 完成（2026-09-21 真机全绿）** —— 帧层 + `proto/*.c` 编进固件 + `Periph/hgic_uart.*` 胶水；上机双向通（见 §五末 **c3-2b** 条） |
-| c4 | §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）+ 自限频 + 已签 ID 上报 | **进行中**：降级（HS256）已达服务端验签通过（c4-α）；**ES256 曲线层 + ECDSA 签名 + RFC 6979 已就位**
-（c4-β-1/2，对 RFC §A.2.5 官方向量**逐字节一致**）；剩把 level=0 接进 `idr_build()` + 上游验签 = c4-β-3 |
+| c4 | §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）+ 自限频 + 已签 ID 上报 | **内核已完成（2026-09-22）**：降级（HS256）→ 服务端验签通过（c4-α）；ES256 曲线/ECDSA/RFC 6979（c4-β-1/2）；**level=0 已接进 `idr_build()` 并过上游 `verify_report`**（c4-β-3：交叉测试 14 组 exit 0、`id-report-selftest` 7/7、服务端接受 6 条 level=0/1/2）。**剩 c4-γ：把 `idr_build()` 接进固件主循环（+ nonce 来源要等 SE）+ 上机** |
 | c5 | 低功耗 / 取能标定 | 推后到 d/e |
 
 **c1 实测判据（2026-09-20）**：`make clean && make` **exit=0** ⇒ `build/orpah-client.elf` 9644 B、

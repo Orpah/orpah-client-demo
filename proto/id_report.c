@@ -1,10 +1,12 @@
-/* id_report.c — 设备侧 orpah-id-report 组装（HS256 / none），逐步对齐 Python。 */
+/* id_report.c — 设备侧 orpah-id-report 组装（ES256 / HS256 / none），逐步对齐 Python。 */
 #include "id_report.h"
 
 #include "b64url.h"
+#include "ecdsa.h"
 #include "hmac.h"
 
 #define IDR_PREIMAGE_MAX 768
+#define IDR_SIG_B64_MAX  128        /* HS256: 32 B → 43 字；ES256: 64 B → 86 字；留足余量 */
 
 const char *idr_alg_of(int level)
 {
@@ -22,6 +24,7 @@ int idr_build(jcs_ctx_t *c,
               int cap_rtc, int battery_set, int battery_mv, const char *firmware,
               const jv_t *seen_routers,
               const unsigned char *hmac_key, size_t hmac_keylen,
+              const unsigned char *ec_priv, size_t ec_priv_len,
               char *out, size_t outcap, size_t *outlen)
 {
     jv_t *hdr, *payload, *rep;
@@ -32,8 +35,11 @@ int idr_build(jcs_ctx_t *c,
         return IDR_E_ARG;
     }
     if (idr_alg_of(level) == NULL) return IDR_E_ARG;
-    if (level == 0) return IDR_E_ES256;                 /* 明确报错，不假装签了 */
     if ((level == 1 || level == 2) && (hmac_key == NULL || hmac_keylen == 0)) {
+        return IDR_E_ARG;
+    }
+    /* level=0：要 32 B 大端私钥 d（严格等长 —— 短了/长了都当调用方写错了，不默认填充）*/
+    if (level == 0 && (ec_priv == NULL || ec_priv_len != P256_BYTES)) {
         return IDR_E_ARG;
     }
 
@@ -84,12 +90,23 @@ int idr_build(jcs_ctx_t *c,
     if (jcs_put(c, rep, "payload", payload) != 0) return IDR_E_JCS;
 
     if (level != 3) {
-        unsigned char mac[SHA256_DIGEST_LEN];
-        char sig_b64[64];
+        char sig_b64[IDR_SIG_B64_MAX];
         int m;
 
-        hmac_sha256(hmac_key, hmac_keylen, (const unsigned char *)pre, (size_t)pn, mac);
-        m = b64url_encode(mac, sizeof(mac), sig_b64, sizeof(sig_b64));
+        if (level == 0) {
+            /* ES256：SHA-256(预像) + RFC 6979 确定性 k ⇒ r||s（64 B）→ b64url。
+             * `ecdsa_sign_p256_msg` 内部就是 §5.1 那一步（哈希 + 签名）。
+             * ⚠ 返回非 0 的情形：k/d/r/s 为 0（概率 ~2^-256）或曲线层报错 ⇒ 如实报错。*/
+            unsigned char raw[ECDSA_BYTES];
+            if (ecdsa_sign_p256_msg(raw, ec_priv, pre, (size_t)pn) != 0) {
+                return IDR_E_ES256;
+            }
+            m = b64url_encode(raw, sizeof(raw), sig_b64, sizeof(sig_b64));
+        } else {
+            unsigned char mac[SHA256_DIGEST_LEN];
+            hmac_sha256(hmac_key, hmac_keylen, (const unsigned char *)pre, (size_t)pn, mac);
+            m = b64url_encode(mac, sizeof(mac), sig_b64, sizeof(sig_b64));
+        }
         if (m < 0) return IDR_E_CAP;
         sig_b64[m] = '\0';
         if (jcs_put_str(c, rep, "sig", sig_b64) != 0) return IDR_E_JCS;
