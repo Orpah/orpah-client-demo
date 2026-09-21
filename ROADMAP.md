@@ -237,7 +237,7 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 1. **工具链前缀是 `riscv-none-embed-`**（MRS2 内嵌路径，见 §三），**不是**参考 Makefile 默认的
    `riscv-none-elf-`；本机实测可用（`xPack GNU RISC-V Embedded GCC 8.2.0`）。
 2. **参考 Makefile 的 `.bin` 目标是坏的**：它写 `objcopy -O binary $@ $<`（把**输出**当输入）
-   ⇒ 本仓已改成 `$< $@`。（`halow-demo` 那边**没动** —— 不在本次范围，要同步修得你点头。）
+   ⇒ 本仓已改成 `$< $@`；`halow-demo` 那边**已于 2026-09-21 同步修好**（那边 `cb1b7a1`）。
 
 **c4-α（降级链 HS256）：✅ 完成（2026-09-20）** —— `proto/id_report.{h,c}`：
 
@@ -414,9 +414,12 @@ Mod97 是 `21`（我一开始凭记忆把 B 当成 Luhn32 期望值 ⇒ 自检�
 **轮询 `RXNE` vs 中断**分开"中断没进来"与"字节没到"；**直接读 PFIC `IPR`** 分开
 "请求没离开外设"与"PFIC→CPU 断了"；**对照实验只差一个变量**；厂商现成 bin 反汇编当交叉证据。
 
-⚠ **同源缺陷提醒（未动参考仓）**：`halow-demo/simulator/firmware/` 的 `ld/link.ld` 与
-`ch32v20x.h` 是**逐字搬过来**的 ⇒ 很可能有同样的两个问题（基址 / `IRQn_Type`）。
-**本次没改它**（不在范围内）—— 要同步修先与用户对齐。
+⚠ **同源缺陷已回灌（2026-09-21）**：`halow-demo/simulator/firmware/` 的 `ld/link.ld` 等
+**逐字搬过来**的文件本来有同样的四个问题 —— **已回灌修好并提交**（那边 `d981896`/`8da9c48`/`cb1b7a1`）。
+★ 用户 2026-09-21 判定：**两个仓各自独立、各留一份平台层**（不抽公共库、不做 submodule）⇒
+平台层这 **7 个文件**（`ld/link.ld`、`startup/startup_ch32v203.S`、`Core/ch32v20x.h`、
+`Periph/gpio.{c,h}`、`Periph/uart.{c,h}`）**改一侧必须同步另一侧**，并标清哪一侧上机验证过
+（本仓 = 已上机；参考仓 = 未上机）。
 
 **未做（如实）**：c4 的选级/无 RTC/自限频/已签上报**未上机**；`payload.nonce` 仍等 SE
 （不塞假随机）；ATECC608B 未接线；只在**这一块** nanoCH32V203 上验过。

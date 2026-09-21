@@ -65,8 +65,14 @@
 - **参考骨架 = `halow-demo/simulator/firmware/`**（Makefile / `ld/link.ld` / `startup/` / `Core/board.h`
   / `Periph/{gpio,uart,spi_slave}` / 状态机）：**复用其套路**（含 SPI1 从机 host 接口、UART2 虚拟空口、
   AT 引擎、迷你 printf），不要另起一套目录/驱动风格。
+- **★ 平台层是「两份独立副本」，改一侧必须同步另一侧**（用户 2026-09-21 判定：不抽公共库、
+  不做 submodule，两仓各自独立）。这 **7 个文件**：`ld/link.ld`、`startup/startup_ch32v203.S`、
+  `Core/ch32v20x.h`、`Periph/gpio.{c,h}`、`Periph/uart.{c,h}` —— 参考仓那套**从未上机**、
+  本仓这套**已上机验证**（见 `docs/c3-2b-bench-bringup.md` 的四个真凶）⇒
+  **在一侧发现的平台层 bug，改完要在另一侧也改掉**（2026-09-21 就是这么回灌的：
+  `halow-demo` 的 `d981896`/`8da9c48`/`cb1b7a1`），并各自标清「已上机 / 未上机」。
 - **烧录由用户执行**（WCH-Link/SWD：`openocd -f interface/wch-link.cfg -f target/ch32v20x.cfg
-  -c "program build/xxx.bin 0x08000000 verify reset exit"`；或 MounRiver 下载按钮）。
+  -c "program build/xxx.bin 0x00000000 verify reset exit"`；或 MounRiver 下载按钮 / WCHISPTool）。
   **本仓不许把"烧过了/上机验证过"写成既成事实** —— 没实测的一律标「未验证」。
 
 ## 2. 密钥与签名纪律（协议 §5/§6；错一次就全盘验不过）

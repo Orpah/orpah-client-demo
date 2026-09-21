@@ -134,10 +134,16 @@ WCHISPTool 流程：按住 `BOOT` → 按/放 `RST` → 松 `BOOT` → 选 `buil
 | `Makefile` | 照抄结构，改三处：① `RISCV_PREFIX` 默认指向 MRS2 内的 `riscv-none-embed-`；② 修掉一个 bug —— 参考版写的是 `objcopy -O binary $@ $<`（把**输出**当输入），所以它的 `.bin` 目标其实跑不通，本版改成 `$< $@`；③ 加 `-lgcc`（`jcs.c`/`sha256.c` 的 64 位除/模/右移要用 libgcc，不加则 `--gc-sections` 一关就链不过） |
 | `Periph/hgic_uart.*`、`proto/*` | **本仓新增**（参考仓没有）：HGIC 数据口胶水 + 协议内核 |
 
-> ⚠ **同源缺陷提醒（未动参考仓，仅记）**：上面 ①/②/③ 三个根因都在**逐字搬过来的文件**里，
-> 所以 `halow-demo/simulator/firmware/` **很可能有同样的问题**（`ld/link.ld` 的
-> `ORIGIN = 0x08000000`、`IRQn_Type` 没加 16）。**本次没改它**（不在范围内）——
-> 要同步修得先与用户对齐。
+> ⚠ **同源缺陷已回灌到参考仓（2026-09-21）**：上面 ①/②/③ 三个根因都在**逐字搬过去的文件**里，
+> 所以 `halow-demo/simulator/firmware/` 有同样的问题 —— **已回灌修好并提交**（那边 `d981896` /
+> `8da9c48` / `cb1b7a1`：链接基址 `0x0`、`IRQn_Type` +16、`mstatus 0x1888`、向量表在 0x8、
+> `uart_init` 补外设时钟、Makefile 的 objcopy 反参、Makefile 在 Win11 上能 `make`）。
+>
+> ★ **两个仓各自独立、各留一份平台层**（用户 2026-09-21 判定：不抽公共库、不做 submodule）——
+> 代价是**同一处坑不能在一边修完就算完**。平台层这 **7 个文件**要两侧同步：
+> `ld/link.ld`、`startup/startup_ch32v203.S`、`Core/ch32v20x.h`、`Periph/gpio.{c,h}`、`Periph/uart.{c,h}`；
+> 改任一侧时**顺手把另一侧也改掉**，并各自标清「哪一侧上机验证过」（本仓 = 已上机，
+> 记录见 `../docs/c3-2b-bench-bringup.md`；那一边 = **未上机**）。
 
 ## 下一步（别在这里自由发挥，按阶段来）
 
