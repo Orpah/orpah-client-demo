@@ -46,6 +46,23 @@ firmware/
 帧层本体在 `../proto/hgic.{h,c}`（纯逻辑、可在 PC 上交叉测试）；`Periph/hgic_uart.c`
 只做**硬件胶水**（中断/环缓冲/回调），两侧不改协议。
 
+所以固件里就三件事：控制台、1 ms 时基、模组数据口（虚线框 = 还没接上）：
+
+```mermaid
+flowchart LR
+  PC["PC 控制台<br/>CH347F P2/UART0"] <-->|"USART1<br/>控制台命令"| U1["Periph/uart.c<br/>中断收发 + 迷你 printf"]
+  MOD["TX-AH 模组"] <-->|"USART2 PA2/PA3<br/>HGIC 帧"| HG["Periph/hgic_uart.c<br/>中断只入环（硬件胶水）"]
+  HG --> PROTO["proto/hgic.c<br/>帧层（纯逻辑，PC 上可交叉测试）"]
+  TIM["TIM2<br/>1 ms 时基"] --> MAIN["Core/main.c 主循环<br/>心跳自检 / 控制台 / 模组口轮询 + 周期探测"]
+  MAIN --> HG
+  MAIN --> LED["心跳灯 D1 = PA15"]
+  TODO["c4 未写：选级 / 无 RTC / 自限频 / 已签上报<br/>（协议内核已编进镜像，但还没被主循环调用）"] -.-> PROTO
+```
+
+上机那套台架（图已逐网核对，与 `../docs/c3-2b-bench-bringup.md` 的接线表一致）：
+
+[![c 步台架：nanoCH32V203 + TX-AH EVB + CH347F（两个 PC 窗口）](../hardware/wiring/cstep-ch347f-txah-evb-nanoch32.svg)](../hardware/wiring/cstep-ch347f-txah-evb-nanoch32.svg)
+
 ## 构建
 
 **必须用 MounRiver Studio 自带的那份工具链**（`-DWCH_INTERRUPT_FAST` 依赖它的

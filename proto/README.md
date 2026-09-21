@@ -15,6 +15,17 @@
 两边只要有一处字节不一致，签名就验不过（`signature_invalid`）—— 所以判定**不靠人眼对文档**，
 靠**同一批黄金向量对拍**（`../AGENTS.md` §4 定的口径：退出码 0 且输出无 `FAIL`）。
 
+**判定链长这样**（实线 = 产物/数据流，虚线 = 判定）：
+
+```mermaid
+flowchart LR
+  PY["Python 参考实现（单一源）<br/>orpah-over-halow/orpah_id.py"] -->|"run_cross_test.py --refresh<br/>生成/校验 14 份向量"| V["test_vectors_*.txt<br/>（黄金向量，入库）"]
+  RFC["RFC 6979 §A.2.5 官方向量<br/>（静态夹具，不能自动生成）"] --> V
+  C["本仓 C 实现<br/>sn / jcs / sha256 / hmac / id_report / hgic"] --> CT["run_cross_test.py<br/>（编译 C + 跑同一批向量）"]
+  V --> CT
+  CT -.->|"判定：exit 0 且输出无 FAIL"| OK(["四层一致：C ↔ 向量文件 ↔ Python ↔ 服务端验签"])
+```
+
 ## 本仓不定义协议
 
 单一源永远在上游：`orpah-over-halow/orpah_id.py`（SN/校验位）与
