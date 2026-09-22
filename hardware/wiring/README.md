@@ -49,6 +49,10 @@ python tools\fzz_nets.py
   （= 我们那条已签报文真的进了模组）。**不需要 TH-RJ45、也不需要 RJ45 上行**——
   c4 的判据是「固件产出的帧被上游接受」，用控制台 `idhex` 把 hex 拿回 PC 跑
   `python tools\check_report_hex.py <hex>` 即可（见 `../../docs/c3-2b-bench-bringup.md`）。
+  · ✅ **2026-09-22：两个窗口都拿到了** —— 窗口① `[id] sent level=0 … len=395 build_ms=9135`、
+    窗口② `[mbus rx] 403 byte(s) 2b 1a 09 00 93 01 74 00 ff ff …`（403 = 8 B 头 + 395 B 帧）。
+    一条命令可同时判：`python tools\check_c4g1_bench.py --port COM23 --mod-port COM24`（见
+    `../../firmware/README.md` 的 c4-γ-1 条）。
 - ⚠ **跳线帽要拔掉**（板载 CH340E 与 `A12/A13` 断开）；CH347F 的 `3V3`/`VIO` **空着不接**
   （它与 JP1 同轨，接过去 = 两个 3.3 V 源并联）。
 - ⚠ **别给数据口（`A10/A11`）敲 AT** —— 那条口跑 8 B HGIC 头的二进制帧；AT/日志在 `A12/A13`（COM24）。
