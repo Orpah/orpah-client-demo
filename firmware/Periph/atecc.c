@@ -30,6 +30,7 @@
 
 static atecc_stats_t s_st;
 static int s_present;
+static int s_probed;                    /* 探过了没（`atecc_init()` 幂等，见下）*/
 static int s_crc_mode = -1;             /* -1 = 还没判出来 */
 
 /* ------------------------------------------------------------------ */
@@ -206,6 +207,12 @@ int atecc_init(void)
 {
     uint8_t r[ATECC_RANDOM_BYTES];
 
+    /* 幂等：main 为了在 banner 里打**实测**的 RNG 来源会先探一次，idc_init() 还会再叫一次
+     *   ⇒ 不能真探两次（每次都要唤醒+一条 Random）。这里直接复用上次的结论。*/
+    if (s_probed) {
+        return s_present ? 0 : ATECC_E_RESP;
+    }
+    s_probed = 1;
     i2c_init();
     s_present = 0;
     if (atecc_random(r) == 0) {

@@ -89,6 +89,17 @@
 
 ## 6. 上机判据（跑完把实测的填进这张表）
 
+一键跑法（PC 侧，**先把 WindTerm 等串口窗口关掉** —— Windows 串口独占）：
+
+```
+C:\Python313\python.exe tools\check_c4g2_bench.py                  # 全流程（SE + ID 上报 + 可选模组口）
+C:\Python313\python.exe tools\check_c4g2_bench.py --no-idsend      # 只判 SE
+C:\Python313\python.exe tools\check_c4g2_bench.py --from-file log.txt   # 离线解析一段日志
+```
+
+它会自己判下面 1–5 条（退出码 0 = 全过 / 2 = 有 FAIL / 1 = 环境问题），并把
+**`crc_mode` 与 `nonce_src`** 打在最后让你填回这张表。
+
 | # | 命令 | 期望 | 实测 |
 |---|---|---|---|
 | 1 | 控制台 `se` | `[se] wake: ACK` + `[se] Random(0x1B) 32 B ok` + `前 16 B = …` | **未做** |

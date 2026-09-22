@@ -24,6 +24,7 @@
 
 #include "hgic.h"          /* proto/ 的帧层：hgic_ctrl_parse / HGIC_CMD_* / HGIC_T_* */
 #include "hgic_uart.h"     /* 本仓的模组数据口驱动 */
+#include "atecc.h"         /* ★ c4-γ-2：安全元件（banner 要打**实测**的 RNG 来源）*/
 #include "id_core.h"       /* ★ c4-γ-1：已签 ID 上报任务（proto/id_build.c 的固件侧外壳）*/
 
 /* ------------------------------------------------------------------ */
@@ -253,11 +254,18 @@ static void banner(void)
     uart_printf(CONSOLE_UART, "[orpah-client] clock=%u Hz HSI, console=%u 8N1, module=%u 8N1\r\n",
                 (unsigned)SYSTEM_CLOCK_HZ, (unsigned)CONSOLE_BAUD, (unsigned)MODULE_BAUD);
     uart_printf(CONSOLE_UART, "[orpah-client] module port = HGIC over UART (proto/hgic.c frame layer)\r\n");
-    /* ★ 如实标清：本 demo 的"SE"是**软件 P-256 替身**（SE 驱动在 d 步，见 ROADMAP §五）——
-     *   所以这里 level=0 是**演示级**（密钥在 MCU 内、非 SE 保护），不当真机能力。*/
-    uart_printf(CONSOLE_UART, "[orpah-client] id-task: sn=%s period=%u ms  SE=NONE"
-                              " (demo software key; level=0 is demo-grade)\r\n",
+    /* ★ 如实（c4-γ-2 起）：这两件事**必须分开说** ——
+     *   ① `sign=` = **签名本体用的是什么**：本 demo 仍是**软件 P-256 替身**
+     *      （SE 签名 / Slot0 在 d 步，见 ROADMAP §五）⇒ level=0 是**演示级**；
+     *   ② `rng=` = **nonce 的来源**：接了 ATECC608B 就是它的 `Random(0x1B)`，
+     *      没接/不应答则**如实**回退软熵（非生产强度）。
+     *   ⚠ 不能写成一句“已启用 SE” —— 那是把①②混为一谈。*/
+    uart_printf(CONSOLE_UART, "[orpah-client] id-task: sn=%s period=%u ms  sign=software P-256"
+                              " (demo-grade; SE sign is d-step)\r\n",
                 IDC_SN_DEFAULT, (unsigned)IDC_INTERVAL_MS);
+    uart_printf(CONSOLE_UART, "[orpah-client] rng=%s\r\n",
+                atecc_present() ? "ATECC608B Random(0x1B)"
+                                : "soft-entropy (SE absent; non-production strength)");
     uart_printf(CONSOLE_UART, "[orpah-client] type 'help' for commands\r\n");
 }
 
@@ -345,6 +353,10 @@ int main(void)
 
     tick_init();
     marks(3u);                        /* 3 长闪 = 1 ms 时基起来了 */
+
+    /* ★ c4-γ-2：**先**探一次安全元件（幂等）—— banner 里要打的是**实测**结果，
+     *   不能写死；`idc_init()` 还会再叫一次，那时会直接复用这个结论。*/
+    (void)atecc_init();
 
     banner();
     do_ping();                        /* ★ 上电就探测：模组应答才算数据口通 */

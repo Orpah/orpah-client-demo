@@ -173,7 +173,18 @@ int idc_init(uint32_t boot_entropy)
         int se = atecc_init();
 
         if (se == 0) {
+            atecc_stats_t st;
+
             idb_set_nonce_fn(&s_b, atecc_nonce_hex, 0);
+            atecc_stats(&st);
+            uart_printf(CONSOLE_UART,
+                        "[id] nonce <- ATECC608B Random(0x1B) 32B (crc_mode=%s)\r\n",
+                        (st.crc_mode == 0u) ? "no-crc(响应 36 B)" :
+                        (st.crc_mode == 1u) ? "crc(响应 38 B)" : "unknown");
+        } else {
+            uart_printf(CONSOLE_UART,
+                        "[id] nonce <- soft entropy (SE 无应答 rc=%d；见 docs/atecc608b-se.md)\r\n",
+                        se);
         }
     }
     s_ready = 1;
