@@ -6,11 +6,14 @@
 > 这两件事必须**分开说**：`se` 命令与固件横幅里会同时打出 `se=stand-in(software P-256)`
 > 和 `nonce_src=se|soft`，读的时候别合并成一句“已启用 SE”。
 
-[![c 步台架：nanoCH32V203 + TX-AH EVB + CH347F，外加 ATECC608B](../hardware/wiring/cstep-ch347f-txah-evb-nanoch32.svg)](../hardware/wiring/cstep-ch347f-txah-evb-nanoch32.svg)
+[![c4-γ-2 台架：nanoCH32V203 + TX-AH EVB + CH347F，右下角面包板上是 ATECC608B（旁边两只 4.7 kΩ 上拉）](../hardware/wiring/cstep-ch347f-txah-evb-nanoch32-atecc608b.svg)](../hardware/wiring/cstep-ch347f-txah-evb-nanoch32-atecc608b.svg)
 
-一张图说明这段接线：`nano` 的 `PB6/PB7` 走 I²C 到 ATECC608B（**图上没有画这根线**，
-接线表见 `../hardware/wiring/README.md` 的 SE 一节），模组的口仍是 `PA2/PA3`，
-两个 UART 窗口还是 COM23 / COM24。
+一张图说明这段接线（`.fzz` 工程与同名的 `.svg` 都在 `../hardware/wiring/`）：`nano` 的 `PB6/PB7`
+走 I²C 到面包板上那块**绿转接板**（板上芯片印着 `CN`，就是 ATECC608B），旁边**两只 4.7 kΩ 上拉到 3V3**；
+模组的口仍是 `PA2/PA3`，两个 UART 窗口还是 COM23 / COM24。
+接线表见 `../hardware/wiring/README.md` 的「c4-γ-2 台架」一节；**逐根连线的网表复验**也在那里。
+⚠ 图里那块转接板只有 `CN` 一个丝印、**没有写型号字**（件本身没印、图里也没加文字标注）——
+所以看图时认「`CN` + 8 个金焊盘」那一块。
 
 ## 1. 引脚与电气
 
