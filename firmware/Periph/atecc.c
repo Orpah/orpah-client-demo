@@ -38,6 +38,10 @@ static int s_present;
 static int s_probed;                    /* 探过了没（`atecc_init()` 幂等，见下）*/
 static int s_crc_mode = -1;             /* -1 = 还没判出来 */
 
+/* 主循环的 1 ms 时基（`Core/main.c` 定义；同 `Core/id_core.c` 的用法）——
+ * 只给工装 `atecc_line_test()` 用，量半周期比忙等函数准。*/
+extern volatile uint32_t g_tick_ms;
+
 /* ------------------------------------------------------------------ */
 /* 唤醒                                                              */
 /* ------------------------------------------------------------------ */
@@ -341,5 +345,43 @@ int atecc_selftest(void)
     }
     idn_hex_upper(r, ATECC_NONCE_BYTES, hex);
     uart_printf(CONSOLE_UART, "[se] Random(0x1B) 32 B ok; 前 16 B = %s\r\n", hex);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* 工装：把 SCL/SDA 当 GPIO 开漏翻转（沿路逐点量通断）                     */
+/* ------------------------------------------------------------------ */
+int atecc_line_test(uint32_t seconds)
+{
+    uint32_t n, deadline, half = 250u;      /* 半周期 250 ms ⇒ ~2 Hz（200 ms/div 也好看）*/
+
+    if (seconds == 0u) { seconds = 10u; }
+    if (seconds > 30u) { seconds = 30u; }
+
+    /* 交出引脚：关外设 + 两条线都配成**开漏输出**。
+     * 开漏而不是推挽：高电平仍由外部 4.7 k 上拉给出 ⇒ 与真跑 I²C 时的电平同一套。*/
+    i2c_disable();
+    gpio_set_mode(SE_I2C_PORT, SE_SCL_PIN, GPIO_MODE_OUT_OD_2MHZ);
+    gpio_set_mode(SE_I2C_PORT, SE_SDA_PIN, GPIO_MODE_OUT_OD_2MHZ);
+
+    uart_printf(CONSOLE_UART, "\r\n[line] SCL(PB%u)/SDA(PB%u) 当 GPIO 开漏翻转 %u s（~2 Hz）：\r\n"
+                             "       现在把探头/表笔沿路逐点量 —— 哪一段不翻就是那一段断\r\n"
+                             "       （nano 排针 → 杜邦线 → 面包板孔 → 转接板孔 → 芯片脚）\r\n",
+                (unsigned)SE_SCL_PIN, (unsigned)SE_SDA_PIN, (unsigned)seconds);
+
+    for (n = 0u; n < seconds * 4u; n++) {
+        uint8_t lv = (n & 1u) ? 1u : 0u;
+
+        gpio_set_pin(SE_I2C_PORT, SE_SCL_PIN, lv);
+        gpio_set_pin(SE_I2C_PORT, SE_SDA_PIN, lv);
+        uart_printf(CONSOLE_UART, "[line] %u/%u  SCL=%u SDA=%u\r\n",
+                    (unsigned)(n + 1u), (unsigned)(seconds * 4u),
+                    (unsigned)lv, (unsigned)lv);
+        deadline = g_tick_ms + half;
+        while ((int32_t)(g_tick_ms - deadline) < 0) { }
+    }
+
+    i2c_init();                     /* 恢复：复用开漏 + 外设（单一源在 i2c.c）*/
+    uart_printf(CONSOLE_UART, "[line] done（已恢复 I2C 复用；接着敲 `se` 继续）\r\n");
     return 0;
 }

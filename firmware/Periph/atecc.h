@@ -68,6 +68,13 @@ int atecc_wake(void);
  * 返回 0 = OK。*/
 int atecc_selftest(void);
 
+/* ★ 工装（2026-09-23）：把 **SCL/SDA 当普通 GPIO 开漏翻转** `seconds` 秒（~2 Hz），
+ * 供"沿整条路逐点量"**定位断线 / 虚焊 / 孔位不对 / 探点不对** ——
+ * 不需要抓那 90 µs 的 I²C burst（那是现场最容易"复现不出来"的东西）。
+ * 高电平仍靠外部 4.7 k 上拉（**开漏**）⇒ 看到的电平与真跑 I²C 时同一套，才有可比性。
+ * 结束时调 `i2c_init()` 恢复复用开漏（单一源）。返回 0。*/
+int atecc_line_test(uint32_t seconds);
+
 void atecc_stats(atecc_stats_t *out);
 
 /* 给 `proto/id_build.c` 用的 nonce provider（`idb_nonce_fn` 的形状）：

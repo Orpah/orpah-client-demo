@@ -224,6 +224,7 @@ static void print_help(void)
     uart_printf(CONSOLE_UART, "  idhex        -> dump last frame as hex (paste into PC judge)\r\n");
     uart_printf(CONSOLE_UART, "  idmodes      -> 8.2 fault-injection modes -> level\r\n");
     uart_printf(CONSOLE_UART, "  idlevel <m>  -> set mode: auto|sign_fail|se_fail|no_key\r\n");
+    uart_printf(CONSOLE_UART, "  seline [1-9] -> bench: toggle SCL/SDA as GPIO open-drain (~2 Hz)\r\n");
 }
 
 static void run_cmd(const char *cmd)
@@ -240,6 +241,14 @@ static void run_cmd(const char *cmd)
         send_hex(cmd + 4);
     } else if (str_eq(cmd, "help")) {
         print_help();
+    } else if (cmd[0] == 's' && cmd[1] == 'e' && cmd[2] == 'l' && cmd[3] == 'i' &&
+               cmd[4] == 'n' && cmd[5] == 'e' && (cmd[6] == ' ' || cmd[6] == '\0')) {
+        /* 工装（2026-09-23）：`seline [1-9]` —— SCL/SDA 当 GPIO 开漏翻转几秒，
+         * 供沿路逐点量通断（见 `Periph/atecc.h` 的说明）。不带参数 = 10 s。*/
+        uint32_t sec = 10u;
+
+        if (cmd[7] >= '1' && cmd[7] <= '9') { sec = (uint32_t)(cmd[7] - '0'); }
+        (void)atecc_line_test(sec);
     } else if (idc_console(cmd, g_tick_ms)) {
         /* 已签 ID 任务的控制台命令（id / idsend / idhex / idmodes / idlevel）*/
     } else if (*cmd != '\0') {
