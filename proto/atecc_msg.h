@@ -26,18 +26,41 @@
 #include <stdint.h>
 
 #define ATECC_OP_RANDOM          0x1Bu
+#define ATECC_OP_INFO            0x30u   /* 工装：读器件版本（响应 4 B）*/
+#define ATECC_OP_READ            0x02u   /* 工装：读配置区某处（响应 4 B）*/
 #define ATECC_MODE_SEED_UPDATE   0x00u
 #define ATECC_MODE_NO_SEED_UPDATE 0x01u
+
+/* 配置区 word 0x15（LockValue/LockConfig/LockData…）的**字节地址** = 0x15 × 4 = 0x54。
+ * 依据：`Read` 的地址是**字节地址且必须是 4 的倍数**（0x15 不是 4 的倍数），
+ * 而 CryptoAuthLib `atcab_is_locked()` 读的就是这一处：**response[0] == 0x55 ⇒ 配置区未锁**。
+ * （我们读出来的是不是 `55 00 …`，本身就能反证这个地址推得对不对。）*/
+#define ATECC_ZONE_CONFIG        0x00u
+#define ATECC_CFG_ADDR_LOCK      0x54u
 
 #define ATECC_RANDOM_BYTES       32u
 #define ATECC_CMD_LEN_NOCRC      5u    /* count+opcode+param1+param2 */
 #define ATECC_CMD_LEN_CRC        7u
 #define ATECC_RESP_LEN_NOCRC     (4u + ATECC_RANDOM_BYTES)          /* 36 */
 #define ATECC_RESP_LEN_CRC       (4u + ATECC_RANDOM_BYTES + 2u)     /* 38 */
+#define ATECC_RESP4_LEN_NOCRC    (4u + 4u)                          /* 8  = Info/Read 不带 CRC */
+#define ATECC_RESP4_LEN_CRC      (4u + 4u + 2u)                     /* 10 = Info/Read 带 CRC */
 
 /* 组一条 Random 命令包（**不含** I²C 的字地址 0x03，那属于传输层）。
  * `with_crc` != 0 时包尾附小端 CRC。返回写入字节数（5 或 7），0 = 容量不够。*/
 size_t atecc_msg_random(uint8_t *out, size_t cap, uint8_t mode, int with_crc);
+
+/* ★ 工装（2026-09-23）：`Info`（读器件版本）/ `Read`（读区里 4 字节）的包构造。
+ * 形状与 `atecc_msg_random()` **同一套规则**（count + opcode + param1 + param2 + [CRC]）⇒
+ * 本文件是包形状的**单一源**，`atecc.c` 里不再自己拼字节。
+ * ⚠ 形状照 CryptoAuthLib（`ATCA_INFO`/`ATCA_READ`），但**尚未做 PC 对拍**（工装级诊断；
+ *   d 步做正式命令层时会连同向量一起补）。返回包长（5/7），0 = 容量不够。*/
+size_t atecc_msg_info(uint8_t *out, size_t cap, uint8_t mode, int with_crc);
+size_t atecc_msg_read(uint8_t *out, size_t cap, uint8_t zone, uint16_t addr, int with_crc);
+
+/* 取出"4 字节数据"类响应（Info/Read）：`resp` = 完整响应（含 4 B count）。
+ * `n` 必须 ∈ {8, 10}（10 时**真验** CRC）。返回 0 = OK。*/
+int atecc_msg_resp_get4(const uint8_t *resp, size_t n, uint8_t out4[4]);
 
 /* 响应前 4 字节 → count（**大端**）。*/
 uint32_t atecc_msg_count(const uint8_t c4[4]);

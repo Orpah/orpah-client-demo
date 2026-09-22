@@ -235,7 +235,8 @@ static void print_help(void)
     uart_printf(CONSOLE_UART, "  idmodes      -> 8.2 fault-injection modes -> level\r\n");
     uart_printf(CONSOLE_UART, "  idlevel <m>  -> set mode: auto|sign_fail|se_fail|no_key\r\n");
     uart_printf(CONSOLE_UART, "  seline [1-9] -> bench: toggle SCL/SDA as GPIO open-drain (~2 Hz)\r\n");
-    uart_printf(CONSOLE_UART, "  sewake       -> bench: scan all 7-bit addrs (before/after pulse), then Random\r\n");
+    uart_printf(CONSOLE_UART, "  sewake       -> bench: scan addr 0x01-0x7F (before/after pulse), then\r\n");
+    uart_printf(CONSOLE_UART, "                  Info(0x30) + Read cfg lock + Random -> one verdict line\r\n");
     uart_printf(CONSOLE_UART, "  seclk <khz>  -> bench: set I2C clock (wake token must be <=100 kHz)\r\n");
     uart_printf(CONSOLE_UART, "  seaddr <h>   -> bench: set device 7-bit addr in hex (e.g. 35)\r\n");
 }

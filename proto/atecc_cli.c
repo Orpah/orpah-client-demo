@@ -14,6 +14,9 @@
  *   cmd  <mode>           <with_crc 0/1> <->            <包hex>
  *   resp <完整响应hex>    <->            <->            OK:<32B hex> | ERR:<码>
  *     （`ERR:` 的码与 C 侧 `ATECC_MSG_E_*` 一致：-1 参数 / -2 长度或 count 不符 / -3 CRC 不符）
+ *   info <mode>           <with_crc 0/1> <->            <包hex>          （工装，2026-09-23）
+ *   read <zone> <addr(hex)> <with_crc 0/1>               <包hex>          （工装，2026-09-23）
+ *   resp4 <完整响应hex>   <->            <->            OK:<4B hex> | ERR:<码>
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,6 +38,9 @@ static void usage(void)
             "usage: atecc_cli <cmd> [args]\n"
             "  random <mode> <with_crc 0|1>        -> 命令包-hex\n"
             "  resp <响应-hex>                     -> OK:<32B hex> | ERR:<码>\n"
+            "  info <mode> <with_crc 0|1>          -> 命令包-hex（工装）\n"
+            "  read <zone> <addr-hex> <with_crc>   -> 命令包-hex（工装）\n"
+            "  resp4 <响应-hex>                    -> OK:<4B hex> | ERR:<码>（工装）\n"
             "  selfcheck\n"
             "  crc-selftest <vector-file>\n"
             "  msg-selftest <vector-file>\n");
@@ -126,6 +132,22 @@ static void resp_line(const uint8_t *resp, size_t n, char *out, size_t cap)
     }
 }
 
+/* 一行 `resp4`：完整响应 → OK:<4B hex> | ERR:<码> */
+static void resp4_line(const uint8_t *resp, size_t n, char *out, size_t cap)
+{
+    uint8_t d[4];
+    int rc = atecc_msg_resp_get4(resp, n, d);
+
+    if (rc == 0) {
+        char hex[4 * 2 + 1];
+
+        bin_to_hex(d, 4u, hex);
+        snprintf(out, cap, "OK:%s", hex);
+    } else {
+        snprintf(out, cap, "ERR:%d", rc);
+    }
+}
+
 static int cmd_random(int mode, int with_crc)
 {
     uint8_t pkt[ATECC_CMD_LEN_CRC];
@@ -168,6 +190,26 @@ static int selftest(const char *path)
 
             if (n == 0u) { snprintf(g_got, sizeof(g_got), "(组包失败)"); }
             else { bin_to_hex(pkt, n, g_got); }
+        } else if (strcmp(cols[0], "info") == 0) {
+            uint8_t pkt[ATECC_CMD_LEN_CRC];
+            size_t n = atecc_msg_info(pkt, sizeof(pkt), (uint8_t)atoi(cols[1]),
+                                      atoi(cols[2]) != 0);
+
+            if (n == 0u) { snprintf(g_got, sizeof(g_got), "(组包失败)"); }
+            else { bin_to_hex(pkt, n, g_got); }
+        } else if (strcmp(cols[0], "read") == 0) {
+            uint8_t pkt[ATECC_CMD_LEN_CRC];
+            size_t n = atecc_msg_read(pkt, sizeof(pkt), (uint8_t)atoi(cols[1]),
+                                      (uint16_t)strtoul(cols[2], NULL, 16),
+                                      atoi(cols[3]) != 0);
+
+            if (n == 0u) { snprintf(g_got, sizeof(g_got), "(组包失败)"); }
+            else { bin_to_hex(pkt, n, g_got); }
+        } else if (strcmp(cols[0], "resp4") == 0) {
+            int n = hex_to_bin(cols[1], g_bin, sizeof(g_bin));
+
+            if (n < 0) { snprintf(g_got, sizeof(g_got), "(非法 hex)"); }
+            else { resp4_line(g_bin, (size_t)n, g_got, sizeof(g_got)); }
         } else if (strcmp(cols[0], "resp") == 0) {
             int n = hex_to_bin(cols[1], g_bin, sizeof(g_bin));
 
@@ -264,11 +306,62 @@ static int selfcheck(void)
     ck("count 与实际长度不一致 -> -2",
        atecc_msg_resp_random(resp, ATECC_RESP_LEN_NOCRC, d) == ATECC_MSG_E_LEN);
 
+    /* ⑧ 工装 Info / Read 包（2026-09-23）：count / opcode / 参数字节必须与 CryptoAuthLib 同形 */
+    n = atecc_msg_info(pkt, sizeof(pkt), 0x00u, 0);
+    ck("Info 无 CRC：长 5 / count 5 / op 0x30 / 参数全 0",
+       n == ATECC_CMD_LEN_NOCRC && pkt[0] == 5u && pkt[1] == ATECC_OP_INFO &&
+       pkt[2] == 0x00u && pkt[3] == 0x00u && pkt[4] == 0x00u);
+    n = atecc_msg_info(pkt, sizeof(pkt), 0x00u, 1);
+    ck("Info 带 CRC：长 7 / count 7 / 包尾 = CRC16(前 5 B, 小端)",
+       n == ATECC_CMD_LEN_CRC && pkt[0] == 7u &&
+       pkt[5] == (uint8_t)(crc16_bypass(pkt, 5u) & 0xFFu) &&
+       pkt[6] == (uint8_t)(crc16_bypass(pkt, 5u) >> 8));
+    n = atecc_msg_read(pkt, sizeof(pkt), ATECC_ZONE_CONFIG, ATECC_CFG_ADDR_LOCK, 0);
+    ck("Read 配置区 @0x54 无 CRC：op 0x02 / param1=zone 0x00 / 地址大端 00 54",
+       n == ATECC_CMD_LEN_NOCRC && pkt[1] == ATECC_OP_READ && pkt[2] == ATECC_ZONE_CONFIG &&
+       pkt[3] == 0x00u && pkt[4] == 0x54u);
+    n = atecc_msg_read(pkt, sizeof(pkt), ATECC_ZONE_CONFIG, 0x0154u, 1);
+    ck("Read 地址 0x0154 带 CRC：地址字节 = 01 54（大端）",
+       n == ATECC_CMD_LEN_CRC && pkt[3] == 0x01u && pkt[4] == 0x54u);
+    ck("容量不够（cap=5 却要带 CRC）-> 0",
+       atecc_msg_info(pkt, 5u, 0x00u, 1) == 0u);
+
+    /* ⑨ 工装 resp4：4 字节响应解析（长度 / count / CRC 三道）*/
+    {
+        uint8_t d4[4];
+
+        for (i = 0; i < sizeof(resp); i++) { resp[i] = 0u; }
+        resp[3] = ATECC_RESP4_LEN_NOCRC;
+        resp[4] = 0x00u; resp[5] = 0x00u; resp[6] = 0x60u; resp[7] = 0x03u;
+        ck("resp4 8 B（count=8）-> 00 00 60 03",
+           atecc_msg_resp_get4(resp, ATECC_RESP4_LEN_NOCRC, d4) == 0 &&
+           d4[0] == 0x00u && d4[1] == 0x00u && d4[2] == 0x60u && d4[3] == 0x03u);
+        resp[3] = ATECC_RESP4_LEN_NOCRC + 1u;
+        ck("resp4 count 不符 -> -2",
+           atecc_msg_resp_get4(resp, ATECC_RESP4_LEN_NOCRC, d4) == ATECC_MSG_E_LEN);
+        ck("resp4 长度 9 -> -2",
+           atecc_msg_resp_get4(resp, 9u, d4) == ATECC_MSG_E_LEN);
+        resp[3] = ATECC_RESP4_LEN_CRC;
+        resp[4] = 0x55u;
+        {
+            uint8_t crc[2];
+
+            crc16_bypass_le(resp, ATECC_RESP4_LEN_NOCRC, crc);
+            resp[ATECC_RESP4_LEN_NOCRC] = crc[0];
+            resp[ATECC_RESP4_LEN_NOCRC + 1u] = crc[1];
+            ck("resp4 10 B（带 CRC）且首字节 = 0x55（未锁）",
+               atecc_msg_resp_get4(resp, ATECC_RESP4_LEN_CRC, d4) == 0 && d4[0] == 0x55u);
+            resp[ATECC_RESP4_LEN_NOCRC] ^= 0x01u;
+            ck("resp4 改一位 CRC -> -3",
+               atecc_msg_resp_get4(resp, ATECC_RESP4_LEN_CRC, d4) == ATECC_MSG_E_CRC);
+        }
+    }
+
     if (sc_bad != 0) {
         printf("FAIL ATECC608B 报文层自检（%d 项不符）\n", sc_bad);
         return 2;
     }
-    printf("PASS ATECC608B 报文层自检（CRC16/BUYPASS + Random 包 + 响应解析 7 类）\n");
+    printf("PASS ATECC608B 报文层自检（CRC16/BUYPASS + Random/Info/Read 包 + 响应解析 9 类）\n");
     return 0;
 }
 
@@ -283,6 +376,34 @@ int main(int argc, char **argv)
 
         if (n < 0) { fprintf(stderr, "bad hex\n"); return 1; }
         resp_line(g_bin, (size_t)n, g_got, sizeof(g_got));
+        printf("%s\n", g_got);
+        return 0;
+    }
+    if (strcmp(argv[1], "info") == 0 && argc >= 4) {
+        uint8_t pkt[ATECC_CMD_LEN_CRC];
+        size_t n = atecc_msg_info(pkt, sizeof(pkt), (uint8_t)atoi(argv[2]),
+                                  atoi(argv[3]) != 0);
+
+        if (n == 0u) { fprintf(stderr, "build failed\n"); return 1; }
+        bin_to_hex(pkt, n, g_got);
+        printf("%s\n", g_got);
+        return 0;
+    }
+    if (strcmp(argv[1], "read") == 0 && argc >= 5) {
+        uint8_t pkt[ATECC_CMD_LEN_CRC];
+        size_t n = atecc_msg_read(pkt, sizeof(pkt), (uint8_t)atoi(argv[2]),
+                                  (uint16_t)strtoul(argv[3], NULL, 16), atoi(argv[4]) != 0);
+
+        if (n == 0u) { fprintf(stderr, "build failed\n"); return 1; }
+        bin_to_hex(pkt, n, g_got);
+        printf("%s\n", g_got);
+        return 0;
+    }
+    if (strcmp(argv[1], "resp4") == 0 && argc >= 3) {
+        int n = hex_to_bin(argv[2], g_bin, sizeof(g_bin));
+
+        if (n < 0) { fprintf(stderr, "bad hex\n"); return 1; }
+        resp4_line(g_bin, (size_t)n, g_got, sizeof(g_got));
         printf("%s\n", g_got);
         return 0;
     }
