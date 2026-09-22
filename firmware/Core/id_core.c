@@ -7,6 +7,11 @@
 #include "uart.h"
 #include "board.h"
 
+/* 主循环的 1 ms 时基（`Core/main.c` 定义）。⚠ 只用来**量** build 耗时：
+ * 不读它的话（比如拿 `idc_*` 的入参 `now_ms` 去减）差恒为 0 —— 实测踩过：
+ * 输出里 `build_ms=0` 看着"很快"，而真机上 ES256 是**秒级**（假数字比没数字更坏）。*/
+extern volatile uint32_t g_tick_ms;
+
 /* ------------------------------------------------------------------ */
 /* 静态状态（RAM 紧：一律 static，别放栈上）                              */
 /* ------------------------------------------------------------------ */
@@ -16,6 +21,7 @@ static char      s_rep[IDC_REPORT_CAP];
 static char      s_env[IDC_ENV_CAP];
 static char      s_frame[IDC_FRAME_CAP];
 
+static uint32_t  s_boot_entropy;     /* 上电熵（`id` 里打出来，便于看撞没撞）*/
 static char      s_mode[12];        /* §8.2 故障注入模式（auto/sign_fail/se_fail/no_key）*/
 static uint32_t  s_next_due;        /* 下一个发送时刻（ms 时基）*/
 static uint32_t  s_last_sent;       /* 上次真正发出的时刻*/
@@ -85,7 +91,9 @@ static int idc_build_and_send(uint32_t now_ms, const char *why)
 
     t0 = now_ms;
     rc = idb_build(&s_b, s_mode, &flen, &level, &reason);
-    dt = now_ms - t0;                 /* 1 ms 时基；签名是慢动作，如实打出来 */
+    /* ← 重读时基：`now_ms` 是入参、全程不变，拿它减自己恒得 0（实测踩过这个假测量）。
+     * `dt == 0` 就是"不足 1 ms"（比如 level=3 不签名），**不要兜底成 1**。*/
+    dt = g_tick_ms - t0;
     if (rc != 0) {
         s_build_fail++;
         uart_printf(CONSOLE_UART, "\r\n[id] build FAILED err=%d idr_rc=%d mode=%s\r\n",
@@ -130,6 +138,7 @@ int idc_init(uint32_t boot_entropy)
 {
     int rc;
 
+    s_boot_entropy = boot_entropy;
     rc = idb_init(&s_b, &s_jc, s_rep, sizeof(s_rep), s_env, sizeof(s_env),
                   s_frame, sizeof(s_frame), IDC_SN_DEFAULT, IDC_GEN_DEFAULT,
                   IDC_FW_VERSION, 0, boot_entropy);
@@ -179,6 +188,10 @@ static void cmd_status(void)
                               " fell_back=%u\r\n",
                 (unsigned)s_b.built, (unsigned)s_sent, (unsigned)s_held,
                 (unsigned)s_build_fail, (unsigned)s_tx_fail, (unsigned)s_b.fell_back);
+    /* ⚠ 如实：软熵后端只保证"同一 boot 内不重复"。**跨 boot 若上电熵撞了，整段 nonce 会重**
+     *   ⇒ 服务端按重放丢弃（= 漏报）。把这个值打出来，好让人一眼看出撞了没。*/
+    uart_printf(CONSOLE_UART, "[id] boot_entropy=0x%08x (soft; 跨 boot 撞了整段 nonce 会重)\r\n",
+                (unsigned)s_boot_entropy);
     uart_printf(CONSOLE_UART, "[id] ts=0 cap.rtc=false (no RTC); battery_mv not written\r\n");
 }
 

@@ -44,8 +44,8 @@ RE_HEXLINE = re.compile(r"^[0-9a-fA-F]{2,64}$")
 
 
 def parse_console_log(text):
-    """从控制台文本里抽 (banner, sent 行信息, hex)。串口与 --from-file 共用（便于离线复现）。"""
-    out = {"banner": False, "sent": None, "hex": "", "no_frame": False}
+    """从控制台文本里抽 (banner, sent 行信息, held, hex)。串口与 --from-file 共用。"""
+    out = {"banner": False, "sent": None, "held": False, "hex": "", "no_frame": False}
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     for ln in lines:
         s = ln.strip()
@@ -56,6 +56,8 @@ def parse_console_log(text):
             out["sent"] = {"level": int(m.group(1)), "alg": m.group(2), "why": m.group(3),
                            "nonce": m.group(4), "len": int(m.group(5)),
                            "build_ms": int(m.group(6))}
+        if "held (self-limit)" in s:
+            out["held"] = True
         if "no frame yet" in s:
             out["no_frame"] = True
         if RE_HEXLINE.match(s):
@@ -112,18 +114,25 @@ def main():
             return 1
         print("已打开 %s @ %d 8N1（固件控制台）" % (args.port, args.baud))
         try:
-            # ① 等横幅
-            t = read_until(ser, lambda b: "orpah-client" in b, args.timeout)
+            # ① 探活：**发命令看回答**（不靠横幅 —— 板子已跑一会儿的话横幅早过去了）
+            ser.reset_input_buffer()
+            ser.write(b"AT\r\n")
+            t = read_until(ser, lambda b: "OK (rx=" in b, 5.0)
+            if "OK (rx=" not in t:
+                ser.write(b"AT\r\n")                      # 再试一次（掉一个字节也救回来）
+                t += read_until(ser, lambda b: "OK (rx=" in b, 5.0)
             if args.keep_open:
                 time.sleep(args.timeout)
                 print(ser.read(65536).decode("utf-8", "replace"))
                 return 0
-            if "orpah-client" not in t:
-                print("FAIL 没有看到横幅（timeout %.0fs）——固件跑起来了吗？（刷完要按一次 RST）"
-                      % args.timeout)
+            if "OK (rx=" not in t:
+                print("FAIL 固件**没回 AT**（timeout 5s×2）—— 板子真的在跑吗？按一次 RST 再看；"
+                      "或 `--port` 选错口了")
                 print("--- 实际读到 ---\n" + t[-800:])
                 return 2
-            print("PASS 看到固件横幅")
+            print("PASS 固件活着（`AT` → `OK`）")
+            if "orpah-client" in t:
+                print("（顺便收到横幅片段）")
             # ② idsend（默认）
             if not args.no_idsend:
                 ser.write(b"idsend\r\n")
@@ -146,8 +155,10 @@ def main():
               % (sent["level"], sent["alg"], sent["why"], sent["nonce"], sent["len"],
                  sent["build_ms"]))
         print("   ⚠ 这是**固件自己打印的**，只当线索；判据用下面那条真实字节")
+    elif got["held"]:
+        print("info 本次 `idsend` 被自限频**延后**（<600 ms），下面用上一帧判 —— 延后不是丢弃")
     else:
-        print("FAIL 没看到 `[id] sent …` 行（60 s 周期还没到，或 idsend 失败 —— 用 `id`/`stat` 查）")
+        print("FAIL 没看到 `[id] sent …` 行（60 s 周期还没到，或 idsend 没成功 —— 用 `id`/`stat` 查）")
 
     if got["no_frame"]:
         print("FAIL 固件说 `no frame yet`（还没发过任何帧）—— 先 `idsend`")
