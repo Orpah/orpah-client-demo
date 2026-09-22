@@ -78,6 +78,8 @@ VEC_ID_KEYS = os.path.join(HERE, "test_vectors_id_keys.txt")
 VEC_ID_LEVEL = os.path.join(HERE, "test_vectors_id_level.txt")
 VEC_ID_NONCE = os.path.join(HERE, "test_vectors_id_nonce.txt")
 VEC_ID_FRAME = os.path.join(HERE, "test_vectors_id_frame.txt")
+VEC_CRC16 = os.path.join(HERE, "test_vectors_crc16.txt")
+VEC_ATECC = os.path.join(HERE, "test_vectors_atecc.txt")
 
 HEADER_SN = (
     "# proto/test_vectors_sn.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
@@ -172,6 +174,24 @@ HEADER_ID_FRAME = (
     "#     <TAB><frame-hex><TAB><firmware|->\n"
     "#   mode = §8.2 故障注入（auto/sign_fail/se_fail/no_key）；nonce 由上面那张表的公式给\n"
     "# 覆盖：L0/L1/L2/L3 四种级别 + 带与不带 firmware 字段\n"
+)
+HEADER_CRC16 = (
+    "# proto/test_vectors_crc16.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源（单一源）：Microchip CryptoAuthLib `lib/calib/calib_command.c` 的 atCRC()\n"
+    "#   poly 0x8005 / 初值 0 / **MSB-first**（`crc_bit = crc_register >> 15; crc_register <<= 1`）\n"
+    "#   ⇒ CRC 目录里就是 CRC-16/BUYPASS：check(\"123456789\") = 0xFEE8（**外部校验值**）\n"
+    "#   C 实现 = proto/crc16.c（固件与 PC 侧同一份源码）；Python 参考有两份写法互相印证\n"
+    "# 列：<kind><TAB><输入-hex|-><TAB><-><TAB><CRC 4 位大写>\n"
+)
+HEADER_ATECC = (
+    "# proto/test_vectors_atecc.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源（单一源）：CryptoAuthLib `lib/calib/calib_command.h`（ATCA_RANDOM=0x1B、模式、包长）\n"
+    "#   + `lib/calib/calib_random.c`（响应的 count 检查）—— 我们那份摘要手册无命令集（需 NDA）\n"
+    "# 列：<kind><TAB><a1><TAB><a2><TAB><a3><TAB><out>\n"
+    "#   cmd  : a1=mode a2=with_crc(0/1) a3=-        out = 命令包-hex（count 在头、CRC 小端在尾）\n"
+    "#   resp : a1=完整响应-hex a2=a3=-              out = OK:<32B hex> | ERR:<码>\n"
+    "#     （ERR 码同 C 侧 ATECC_MSG_E_*：-2 = 长度/ count 不符、-3 = CRC 不符）\n"
+    "# 覆盖：两种模式 × 带/不带 CRC、响应 36/38 B、CRC 改一位、长度截短、count 与长度矛盾\n"
 )
 HEADER_HGIC = (
     "# proto/test_vectors_hgic.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
@@ -629,6 +649,213 @@ def gen_id_frame_rows(o, proto):
         frame = proto.build_eth_frame(proto.encode_msg(env), src_mac=SIM_SRC_MAC)
         rows.append(("frame", sn, str(ID_FLOW_GEN), mode, str(ent), str(ctr),
                      str(lvl), why, frame.hex(), fw))
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# ATECC608B 报文层（c4-γ-2）：CRC-16/BUYPASS + Random 命令包/响应解析
+#   单一源 = Microchip CryptoAuthLib（出处见 HEADER_CRC16 / HEADER_ATECC）。
+#   ⚠ CRC 这里故意写**两种独立写法**并互相印证，再对**目录校验值** 0xFEE8 ——
+#     只抄一种写法时，方向（反射/不反射）抄错了自己看不出来。
+# ---------------------------------------------------------------------------
+CRC16_BYPASS_CHECK = 0xFEE8
+ATECC_OP_RANDOM = 0x1B
+ATECC_MODE_SEED_UPDATE = 0x00
+ATECC_MODE_NO_SEED_UPDATE = 0x01
+ATECC_RANDOM_BYTES = 32
+ATECC_CMD_LEN_NOCRC = 5
+ATECC_CMD_LEN_CRC = 7
+ATECC_RESP_LEN_NOCRC = 36
+ATECC_RESP_LEN_CRC = 38
+ATECC_MSG_E_ARG = -1
+ATECC_MSG_E_LEN = -2
+ATECC_MSG_E_CRC = -3
+
+
+def py_crc16_bits(data):
+    """按位循环：左移取最高位（照 atCRC() 的字面写法）。"""
+    crc = 0
+    for b in data:
+        for i in range(7, -1, -1):
+            data_bit = (b >> i) & 1
+            crc_bit = (crc >> 15) & 1
+            crc = (crc << 1) & 0xFFFF
+            if data_bit != crc_bit:
+                crc ^= 0x8005
+    return crc
+
+
+def py_crc16_std(data):
+    """教科书式 MSB-first 形式（先把字节异或进高 8 位，再逐位左移/条件异或）。"""
+    crc = 0
+    for b in data:
+        crc ^= (b << 8)
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x8005) & 0xFFFF if (crc & 0x8000) else ((crc << 1) & 0xFFFF)
+    return crc
+
+
+def py_crc16(data):
+    a = py_crc16_bits(data)
+    b = py_crc16_std(data)
+    assert a == b, "两种 CRC 写法不一致：%04X vs %04X" % (a, b)
+    return a
+
+
+def py_atecc_cmd_random(mode, with_crc):
+    pkt = bytearray([ATECC_CMD_LEN_CRC if with_crc else ATECC_CMD_LEN_NOCRC,
+                     ATECC_OP_RANDOM, mode, 0x00, 0x00])
+    if with_crc:
+        c = py_crc16(bytes(pkt))
+        pkt += bytes([c & 0xFF, (c >> 8) & 0xFF])      # 小端
+    return bytes(pkt)
+
+
+def py_atecc_resp_random(resp):
+    """返回 32 B（bytes）或错误码（int）。"""
+    if len(resp) not in (ATECC_RESP_LEN_NOCRC, ATECC_RESP_LEN_CRC):
+        return ATECC_MSG_E_LEN
+    if int.from_bytes(resp[0:4], "big") != len(resp):
+        return ATECC_MSG_E_LEN
+    if len(resp) == ATECC_RESP_LEN_CRC:
+        c = py_crc16(resp[:ATECC_RESP_LEN_NOCRC])
+        if resp[ATECC_RESP_LEN_NOCRC] != (c & 0xFF) or resp[ATECC_RESP_LEN_NOCRC + 1] != ((c >> 8) & 0xFF):
+            return ATECC_MSG_E_CRC
+    return resp[4:36]
+
+
+def gen_crc16_rows(o):
+    rows = []
+    cases = [b"", b"\x00", b"\xff", bytes(range(16)), b"123456789",
+             py_atecc_cmd_random(ATECC_MODE_SEED_UPDATE, 0),
+             py_atecc_cmd_random(ATECC_MODE_SEED_UPDATE, 1)]
+    for c in cases:
+        rows.append(("crc", c.hex() if c else "-", "-", "%04X" % py_crc16(c)))
+    return rows
+
+
+def gen_atecc_rows(o):
+    rows = []
+    for mode in (ATECC_MODE_SEED_UPDATE, ATECC_MODE_NO_SEED_UPDATE):
+        for wc in (0, 1):
+            rows.append(("cmd", str(mode), str(wc), "-",
+                         py_atecc_cmd_random(mode, wc).hex()))
+    data = bytes(range(32))
+    ok36 = bytes([0, 0, 0, ATECC_RESP_LEN_NOCRC]) + data
+    c38 = py_crc16(ok36)
+    ok38 = ok36 + bytes([c38 & 0xFF, (c38 >> 8) & 0xFF])
+    bad38 = bytearray(ok38)
+    bad38[ATECC_RESP_LEN_NOCRC] ^= 0x01
+    cnt37 = bytearray(ok36)
+    cnt37[3] = ATECC_RESP_LEN_NOCRC + 1
+    for resp in (ok36, ok38, bytes(bad38), ok36[:-1], bytes(cnt37)):
+        r = py_atecc_resp_random(resp)
+        out = ("OK:" + r.hex()) if isinstance(r, (bytes, bytearray)) else ("ERR:%d" % r)
+        rows.append(("resp", resp.hex(), "-", "-", out))
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# ATECC608B 报文层（c4-γ-2）：CRC-16/BUYPASS + Random 命令包/响应解析
+#   单一源 = Microchip CryptoAuthLib（出处见 HEADER_CRC16 / HEADER_ATECC）。
+#   ⚠ CRC 这里故意写**两种独立写法**并互相印证，再对**目录校验值** 0xFEE8 ——
+#     只抄一种写法时，方向（反射/不反射）抄错了自己看不出来。
+# ---------------------------------------------------------------------------
+CRC16_BYPASS_CHECK = 0xFEE8
+ATECC_OP_RANDOM = 0x1B
+ATECC_MODE_SEED_UPDATE = 0x00
+ATECC_MODE_NO_SEED_UPDATE = 0x01
+ATECC_RANDOM_BYTES = 32
+ATECC_CMD_LEN_NOCRC = 5
+ATECC_CMD_LEN_CRC = 7
+ATECC_RESP_LEN_NOCRC = 36
+ATECC_RESP_LEN_CRC = 38
+ATECC_MSG_E_ARG = -1
+ATECC_MSG_E_LEN = -2
+ATECC_MSG_E_CRC = -3
+
+
+def py_crc16_bits(data):
+    """按位循环：左移取最高位（照 atCRC() 的字面写法）。"""
+    crc = 0
+    for b in data:
+        for i in range(7, -1, -1):
+            data_bit = (b >> i) & 1
+            crc_bit = (crc >> 15) & 1
+            crc = (crc << 1) & 0xFFFF
+            if data_bit != crc_bit:
+                crc ^= 0x8005
+    return crc
+
+
+def py_crc16_std(data):
+    """教科书式 MSB-first 形式（先把字节异或进高 8 位，再逐位左移/条件异或）。"""
+    crc = 0
+    for b in data:
+        crc ^= (b << 8)
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x8005) & 0xFFFF if (crc & 0x8000) else ((crc << 1) & 0xFFFF)
+    return crc
+
+
+def py_crc16(data):
+    a = py_crc16_bits(data)
+    b = py_crc16_std(data)
+    assert a == b, "两种 CRC 写法不一致：%04X vs %04X" % (a, b)
+    return a
+
+
+def py_atecc_cmd_random(mode, with_crc):
+    pkt = bytearray([ATECC_CMD_LEN_CRC if with_crc else ATECC_CMD_LEN_NOCRC,
+                     ATECC_OP_RANDOM, mode, 0x00, 0x00])
+    if with_crc:
+        c = py_crc16(bytes(pkt))
+        pkt += bytes([c & 0xFF, (c >> 8) & 0xFF])      # 小端
+    return bytes(pkt)
+
+
+def py_atecc_resp_random(resp):
+    """返回 32 B（bytes）或错误码（int）。"""
+    if len(resp) not in (ATECC_RESP_LEN_NOCRC, ATECC_RESP_LEN_CRC):
+        return ATECC_MSG_E_LEN
+    if int.from_bytes(resp[0:4], "big") != len(resp):
+        return ATECC_MSG_E_LEN
+    if len(resp) == ATECC_RESP_LEN_CRC:
+        c = py_crc16(resp[:ATECC_RESP_LEN_NOCRC])
+        if resp[ATECC_RESP_LEN_NOCRC] != (c & 0xFF) or \
+           resp[ATECC_RESP_LEN_NOCRC + 1] != ((c >> 8) & 0xFF):
+            return ATECC_MSG_E_CRC
+    return resp[4:36]
+
+
+def gen_crc16_rows(o):
+    rows = []
+    cases = [b"", b"\x00", b"\xff", bytes(range(16)), b"123456789",
+             py_atecc_cmd_random(ATECC_MODE_SEED_UPDATE, 0),
+             py_atecc_cmd_random(ATECC_MODE_SEED_UPDATE, 1)]
+    for c in cases:
+        rows.append(("crc", c.hex() if c else "-", "-", "%04X" % py_crc16(c)))
+    return rows
+
+
+def gen_atecc_rows(o):
+    rows = []
+    for mode in (ATECC_MODE_SEED_UPDATE, ATECC_MODE_NO_SEED_UPDATE):
+        for wc in (0, 1):
+            rows.append(("cmd", str(mode), str(wc), "-",
+                         py_atecc_cmd_random(mode, wc).hex()))
+    data = bytes(range(32))
+    ok36 = bytes([0, 0, 0, ATECC_RESP_LEN_NOCRC]) + data
+    c38 = py_crc16(ok36)
+    ok38 = ok36 + bytes([c38 & 0xFF, (c38 >> 8) & 0xFF])
+    bad38 = bytearray(ok38)
+    bad38[ATECC_RESP_LEN_NOCRC] ^= 0x01
+    cnt37 = bytearray(ok36)
+    cnt37[3] = ATECC_RESP_LEN_NOCRC + 1
+    for resp in (ok36, ok38, bytes(bad38), ok36[:-1], bytes(cnt37)):
+        r = py_atecc_resp_random(resp)
+        out = ("OK:" + r.hex()) if isinstance(r, (bytes, bytearray)) else ("ERR:%d" % r)
+        rows.append(("resp", resp.hex(), "-", "-", out))
     return rows
 
 
@@ -1133,6 +1360,14 @@ def main():
             print("!! ECDSA 向量生成失败（需 cryptography）：%r" % (e,))
         print("   （%s 是**静态夹具**（RFC §A.2.5 官方向量），--refresh **不会**改写它；"
               "它由 ②e 的三条独立验证守着）" % os.path.basename(VEC_ECDSA_RFC))
+        # ★ c4-γ-2：ATECC608B 报文层两份 —— **不依赖上游**（单一源 = CryptoAuthLib 的常量/算法）
+        rows_crc = gen_crc16_rows(None)
+        rows_atecc = gen_atecc_rows(None)
+        write_rows(VEC_CRC16, HEADER_CRC16, rows_crc)
+        write_rows(VEC_ATECC, HEADER_ATECC, rows_atecc)
+        print("--refresh 已重写 ATECC 两份：%s(%d) / %s(%d)"
+              % (os.path.basename(VEC_CRC16), len(rows_crc),
+                 os.path.basename(VEC_ATECC), len(rows_atecc)))
         if o is None or proto is None:
             print("!! --refresh 需要上游 Python 参考实现（orpah_id + orpah_proto）；已退出")
             return 2
@@ -1222,6 +1457,15 @@ def main():
     else:
         print("跳过 ②b：拿不到 tools/txah_hgic.py（HGIC 的单一源）")
 
+    # ---- ②b2 快照：ATECC608B 报文层（单一源 = CryptoAuthLib；**不依赖上游**）----
+    for sname, spath, gen in (("test_vectors_crc16.txt", VEC_CRC16, gen_crc16_rows),
+                              ("test_vectors_atecc.txt", VEC_ATECC, gen_atecc_rows)):
+        if not os.path.isfile(spath):
+            print("FAIL 缺向量文件 %s（先跑 --refresh）" % sname)
+            fails.append("缺 " + sname)
+            continue
+        cmp_snapshot(sname, gen(None), read_rows(spath), fails)
+
     # ---- ②c 快照：P-256（需要上游 derive_demo_privkey + cryptography） ----
     if o is not None:
         try:
@@ -1287,6 +1531,10 @@ def main():
           ("C level-selftest（选级向量）", ["level-selftest", VEC_ID_LEVEL]),
           ("C nonce-selftest（nonce 向量）", ["nonce-selftest", VEC_ID_NONCE]),
           ("C frame-selftest（整帧向量）", ["frame-selftest", VEC_ID_FRAME])]),
+        ("ATECC608B 报文层", "atecc_cli", ["atecc_msg.c", "crc16.c", "atecc_cli.c"],
+         [("C selfcheck（CRC 外部校验值 + Random 包 + 响应解析）", ["selfcheck"]),
+          ("C crc-selftest（CRC16 向量）", ["crc-selftest", VEC_CRC16]),
+          ("C msg-selftest（Random 包/响应向量）", ["msg-selftest", VEC_ATECC])]),
     ]
     exes = {}
     with tempfile.TemporaryDirectory() as td:
@@ -1443,7 +1691,8 @@ def main():
     print("PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 / JCS / b64url / 报文信封 / "
           "下行解码 / SHA-256 / HMAC / 已签报文 / HGIC 帧构造 / HGIC 流解析 / HGIC 控制面 / "
           "P-256 公钥派生 / ECDSA 签名（RFC 6979，含 RFC §A.2.5 官方向量）/ "
-          "ID 流水线（§8.2 选级 + 演示密钥 + nonce + 整帧）十五组）")
+          "ID 流水线（§8.2 选级 + 演示密钥 + nonce + 整帧）/ ATECC608B 报文层"
+          "（CRC-16/BUYPASS + Random 包）十六组）")
     return 0
 
 

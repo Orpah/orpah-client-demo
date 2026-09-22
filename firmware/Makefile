@@ -71,6 +71,8 @@ SRCS = Core/main.c \
        Core/id_core.c \
        Periph/gpio.c \
        Periph/uart.c \
+       Periph/i2c.c \
+       Periph/atecc.c \
        Periph/hgic_uart.c
 
 # 协议内核（`../proto/`）：**与 PC 侧交叉测试的是同一份源码**（AGENTS §4 的口径）。
@@ -84,6 +86,9 @@ PROTO_SRCS = sn.c jcs.c b64url.c msg.c downlink.c sha256.c hmac.c id_report.c hg
 # ★ c4-γ-1（2026-09-22）：设备侧**流水线**（选级/演示密钥/nonce）已接进主循环（`Core/id_core.c`）
 #   ⇒ 这五个文件现在是**真被调用**的（不再是 gc 丢掉的死代码）。
 PROTO_SRCS += id_build.c id_level.c id_keys.c id_nonce.c p256.c rfc6979.c ecdsa.c
+# ★ c4-γ-2（2026-09-22）：ATECC608B 的**纯编解码**（不含硬件）也放 proto/ ⇒
+#   它跟着 PC 侧交叉测试一起对拍（黄金向量见 proto/test_vectors_atecc.txt）。
+PROTO_SRCS += atecc_msg.c crc16.c
 OBJS = $(addprefix $(BUILD)/, $(SRCS:.c=.o))
 OBJS += $(addprefix $(BUILD)/proto/, $(PROTO_SRCS:.c=.o))
 OBJS += $(BUILD)/startup.o

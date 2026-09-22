@@ -45,6 +45,10 @@
 #define IDB_REC_ENV_CAP    864u
 #define IDB_REC_FRAME_CAP  896u
 
+/* nonce provider 的形状：成功写 32 个大写 hex + NUL 并返回 0；否则返回非 0。
+ * （长度固定 `IDN_NONCE_LEN` = 16 字节 —— 与软熵后端**同长度** ⇒ 报文形状不变。）*/
+typedef int (*idb_nonce_fn)(char out[IDN_NONCE_LEN + 1], void *ctx);
+
 typedef struct {
     /* 身份（构造时拷贝）*/
     char        sn[IDN_SN_MAX + 1];
@@ -52,7 +56,7 @@ typedef struct {
     const char *firmware;            /* 可 NULL = 不写 firmware 字段 */
     uint8_t     mac[IDB_MAC_LEN];    /* 源 MAC（用 idb_mac_default 给缺省）*/
 
-    /* nonce 后端状态（d 步换 SE 时替换这个成员的类型 + idb_next_nonce 的实现）*/
+    /* nonce 后端状态（软熵；仅当 `nonce_fn == NULL` 时用）*/
     idn_soft_t  nonce;
 
     /* 密钥材料缓存（首次用到才派生；见 id_keys.h）*/
@@ -64,6 +68,14 @@ typedef struct {
     /* ★ 测试钩子（**固件不用**，默认 0）：非 0 = **模拟 §8.2 Step2 的 atcab_sign 失败**
      *   （SE 未接线，没法真失败）→ 用来在 PC 上跑通"签名失败 → 降级 L1"那条分支。*/
     int         test_sign_fail;
+
+    /* ★ nonce 来源（可注入）：非 NULL 时优先用它取 nonce（写 32 个大写 hex + NUL）。
+     *   · NULL = 用**软熵后端**（`id_nonce.h`）—— PC 侧交叉测试就是这个（结果可复现）；
+     *   · 固件 c4-γ-2 起注入 `Periph/atecc.c` 的 `atecc_nonce_hex()`（SE 的 `Random(0x1B)`）。
+     *   为什么做成注入而不是在 `id_build.c` 里分支：本文件与 PC 侧**同一份源码**，
+     *   而 `id_build.c` 不允许依赖硬件（它得能在 MSVC 上单独编过）。*/
+    idb_nonce_fn nonce_fn;
+    void        *nonce_ctx;
 
     /* 调用方给的 arena 与缓冲 */
     jcs_ctx_t  *jc;
@@ -80,6 +92,7 @@ typedef struct {
     int      last_idr_rc;
     int      last_err;
     char     last_nonce[IDN_NONCE_LEN + 1];
+    const char *last_nonce_src;      /* "se"（注入的 provider）/ "soft"（软熵）*/
     uint32_t last_frame_len;
     /* ⚠ `idr_build()` / `jcs_encode_raw()` 的输出**不带结尾 NUL**（同 jcs 家族）
      *   ⇒ 这两个长度是**读它们的唯一正确办法**（用 strlen 会读到上一行的残留）。*/
@@ -89,6 +102,9 @@ typedef struct {
 
 /* 上游 client 的缺省源 MAC（`client.py`: 4A:06:59:00:00:01）——演示用，真机应给模块自己的 MAC。*/
 void idb_mac_default(uint8_t out[IDB_MAC_LEN]);
+
+/* 注入 nonce 来源（NULL = 回到软熵后端）。在 `idb_init()` 之后调。*/
+void idb_set_nonce_fn(idb_t *b, idb_nonce_fn fn, void *ctx);
 
 /* 初始化。失败返回负码（IDB_E_ARG）。*/
 int idb_init(idb_t *b, jcs_ctx_t *jc,

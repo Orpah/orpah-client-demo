@@ -44,6 +44,7 @@ python tools\fzz_nets.py
 | | `PA3`(USART2_RX) ← | `A11`（**模组 TX**） | — | 方向固定，别接反 |
 | **窗口①控制台** | `PA9`/`PA10`(USART1) | — | CH347F **P2/UART0 = COM23** | 固件横幅、命令（`help`/`stat`/`id`…）、`[id] sent …` |
 | **窗口②模组口** | — | `A12`(RX)/`A13`(TX) | CH347F **P3/UART1 = COM24** | 模组的 AT 与日志（`[mbus rx]/[mbus tx]`） |
+| **安全元件**（可选，c4-γ-2 起） | `PB6`(SCL) / `PB7`(SDA) | ATECC608B `pin6`(SCL) / `pin5`(SDA) | — | I²C1 默认引脚；**外接 4.7 kΩ×2 上拉到 3V3**；SE 的 `pin8`=3V3、`pin4`=GND |
 
 - ★ **c4-γ-1 上机只需要这套**：窗口① 看 `[id] sent level=… build_ms=…`，窗口② 看 `[mbus rx] …`
   （= 我们那条已签报文真的进了模组）。**不需要 TH-RJ45、也不需要 RJ45 上行**——
@@ -58,6 +59,9 @@ python tools\fzz_nets.py
 - ⚠ **别给数据口（`A10/A11`）敲 AT** —— 那条口跑 8 B HGIC 头的二进制帧；AT/日志在 `A12/A13`（COM24）。
 - ⚠ 模组 UART 方向（实测 + 厂商 `pin_function.c` 双证据）：**`A10` = 模组 RX、`A11` = 模组 TX**；
   `A12` = 模组 RX、`A13` = 模组 TX（见 `../../docs/txah-uart-macbus.md` §5.1）。
+- ★ **ATECC608B（安全元件）的接线与命令来源见 `../../docs/atecc608b-se.md`** ——
+  `PB6/PB7` → I²C，**必须有 4.7 kΩ 上拉**（没有就不能可靠工作）；SOIC-8 转 DIP 后
+  `pin5=SDA / pin6=SCL / pin4=GND / pin8=3V3`。**不需要** CH347F 参与（那是给 PC 看的窗口）。
 
 ## 接线（从 `.fzz` 里抽出来的真实连线，2026-09-16 修订）—— 单模块那张
 

@@ -196,10 +196,26 @@ WCHISPTool 流程：按住 `BOOT` → 按/放 `RST` → 松 `BOOT` → 选 `buil
     （见 `../hardware/wiring/README.md`），本条只证明**帧到达模组**这一件事。
   · 如实：本 demo 的 `se_ok` 是**软件 P-256 替身**（SE 在 d 步）⇒ `level=0` 是演示级；
     `payload.nonce` 用的是**软熵后端**（非生产强度，见 `../proto/id_nonce.h`）。
-  · **c4-γ-2（待做）**：ATECC608B 接上后把 nonce 后端换成它的 `Random(0x1B)`（交换点一处）。
+  · **c4-γ-2（2026-09-22，已写代码；★上机未做）**：nonce 后端换成 **ATECC608B 的 `Random(0x1B)`**。
+    新增 `Periph/i2c.c`（硬件 I2C1 = `PB6/PB7`、100 kHz、**每个等待都有超时**）+
+    `Periph/atecc.c`（唤醒脉冲 + 事务 + 自检 + `atecc_nonce_hex()`）+
+    `proto/crc16.c`（CRC-16/BUYPASS）与 `proto/atecc_msg.c`（命令包/响应解析，**纯函数**）；
+    `proto/id_build.c` 加了 **nonce provider 注入点**（`idb_set_nonce_fn`）—— 不注入就是软熵
+    （PC 侧交叉测试走这条 ⇒ 结果可复现）。
+    · 判据（PC）：`python ../proto\run_cross_test.py` → exit 0，**16 组**；其中新增的
+      `crc-selftest`（7 行）/ `msg-selftest`（9 行）与 Python 参考**零偏差**，
+      且 `atecc_cli selfcheck` 钉住了**外部校验值** CRC-16/BUYPASS("123456789") = `0xFEE8`。
+    · 上机判据：控制台 **`se`**（唤醒 ACK + 一条 `Random` + 打印 CRC 模式/前 16 B），
+      再看 `id` 的 `nonce_src=se|soft`；接线/命令来源/待确认的两个假设见
+      `../docs/atecc608b-se.md`。
+    · 如实（**别包装**）：① 签名**仍是软件替身**，`se_ok` 仍为 1 只表示“能做 ES256”；
+      ② 线上要不要挂 CRC、响应 count 到底 36 还是 38 —— **两条都是待上机确认的假设**，
+      不猜：代码把两种都试一遍并**记住哪种通**，失败时把原始字节打出来；
+      ③ 唤醒脉冲宽度靠忙等（近似），**没上示波器**；④ I²C 时钟假设 APB1 = 8 MHz。
 - **c3 剩**：`send <hex>` 已在控制台可用（把 hex 解成以太帧走数据口）；
   模组收上来的帧现在只打摘要，**还没交给协议栈**（c4 才接）。
 - **d 步**：ATECC608B 驱动（Slot 0 私钥不可导出）+ 产线烧录流程。
 
 两个**待用户拍板**的项（见 `../ROADMAP.md` §五）：软件 P-256 的来源（已拍板：自己写）、
-以及两处随机（`payload.nonce`；ECDSA 的 k 已定 RFC 6979）。
+以及两处随机（`payload.nonce`；ECDSA 的 k 已定 RFC 6979）—— **`payload.nonce` 已拍板**：
+接 SE 后用 ATECC608B 的 `Random(0x1B)`，没接时**如实**回退软熵（c4-γ-2）。

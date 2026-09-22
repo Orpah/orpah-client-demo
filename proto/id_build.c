@@ -96,6 +96,9 @@ int idb_init(idb_t *b, jcs_ctx_t *jc,
         }
     }
     b->test_sign_fail = 0;
+    b->nonce_fn = 0;
+    b->nonce_ctx = 0;
+    b->last_nonce_src = "soft";
 
     if (idn_soft_init(&b->nonce, b->sn, boot_entropy) != 0) {
         return IDB_E_ARG;
@@ -103,8 +106,7 @@ int idb_init(idb_t *b, jcs_ctx_t *jc,
     return 0;
 }
 
-/* 以太帧 = dst(广播) + src + type(0x88B5 大端) + payload（照 orpah_proto.build_eth_frame）。*/
-static size_t _wrap_eth(idb_t *b, const char *payload, size_t plen)
+/* 以太帧 = dst(广播) + src + type(0x88B5 大端) + payload（照 orpah_proto.build_eth_frame）。*/static size_t _wrap_eth(idb_t *b, const char *payload, size_t plen)
 {
     static const uint8_t bcast[IDB_MAC_LEN] = { 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu };
     size_t i;
@@ -182,9 +184,18 @@ static int _build_report(idb_t *b, int level, size_t *replen)
     return rc;
 }
 
-int idb_build(idb_t *b, const char *mode, size_t *framelen,
-              int *level_out, const char **reason_out)
+void idb_set_nonce_fn(idb_t *b, idb_nonce_fn fn, void *ctx)
 {
+    if (b == 0) {
+        return;
+    }
+    b->nonce_fn = fn;
+    b->nonce_ctx = ctx;
+    b->last_nonce_src = (fn != 0) ? "se" : "soft";
+}
+
+int idb_build(idb_t *b, const char *mode, size_t *framelen,
+              int *level_out, const char **reason_out){
     int se_ok = 1, sign_ok = 1, hmac_ok = 1;
     const char *reason = 0;
     int level;
@@ -203,11 +214,23 @@ int idb_build(idb_t *b, const char *mode, size_t *framelen,
     }
     level = idl_pick(se_ok, sign_ok, hmac_ok, &reason);
 
-    /* nonce：**每次组装都取一条新的**（同一 boot 内严格递增；后端可换，见 id_nonce.h）*/
-    if (idn_soft_next(&b->nonce, b->last_nonce) != 0) {
-        b->failed++;
-        b->last_err = IDB_E_ARG;
-        return IDB_E_ARG;
+    /* nonce：**每次组装都取一条新的**。
+     * 来源优先用**注入的 provider**（固件 = ATECC608B 的 `Random(0x1B)`，c4-γ-2）；
+     * 没注入就用软熵后端（PC 侧交叉测试走这条 ⇒ 结果可复现）。*/
+    if (b->nonce_fn != 0) {
+        if (b->nonce_fn(b->last_nonce, b->nonce_ctx) != 0) {
+            b->failed++;
+            b->last_err = IDB_E_ARG;
+            return IDB_E_ARG;
+        }
+        b->last_nonce_src = "se";
+    } else {
+        if (idn_soft_next(&b->nonce, b->last_nonce) != 0) {
+            b->failed++;
+            b->last_err = IDB_E_ARG;
+            return IDB_E_ARG;
+        }
+        b->last_nonce_src = "soft";
     }
 
     if (_ensure_keys(b, level) != 0) {

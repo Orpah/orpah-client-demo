@@ -161,6 +161,17 @@ orpah-client-demo/
   NUL** ⇒ 只能按返回长度读，`strlen()` 会读到上一行残留。
   ⚠ **未上机**；`se_ok` 是**软件 P-256 替身**（level=0 属演示级）、nonce 是**软熵后端**（非生产强度），
   两者都如实打在启动横幅/控制台 `id` 上。
+- **2026-09-22（c4-γ-1 台架 + c4-γ-2 代码）**：γ-1 **上机两条判据都过** —— 上游 `verify_report` 接受
+  （level=0/trust=high，`build_ms≈9.1 s`）+ **模组侧确认** COM24 `[mbus rx] 403 byte(s)`（8 B HGIC 头
+  + 395 B 帧）。顺带实测把一条旧口径纠正了：**模组的 cookie 顺序检查是「按数据通道」**（只比上一条
+  `FRM2`，命令帧不参与）⇒ 固件把 CMD 与 FRM2 的计数器**拆开**（`Periph/hgic_uart.c` 文件头 ★3）。
+  **c4-γ-2（代码已就位、PC 判据已过、★上机未做）**：`payload.nonce` 换成 **ATECC608B `Random(0x1B)`** ——
+  新增 `Periph/i2c.c`（硬件 I2C1 @ `PB6/PB7`）、`Periph/atecc.c`（唤醒脉冲/事务/自检/nonce provider）、
+  `proto/crc16.c` + `proto/atecc_msg.c`（**纯函数层**，可 PC 对拍）、`id_build` 的 **nonce provider 注入点**
+  （不注入 = 软熵 ⇒ PC 侧仍可复现）；交叉测试 **16 组** exit 0。
+  ★ **纪律提醒**：命令集事实取自**公开的 CryptoAuthLib**（我们那份 `ATECC608B.pdf` 是 **NDA 摘要版**、
+  没有命令集）—— 每条都得**标出处**（见 `docs/atecc608b-se.md` 第 3 节）；且**签名仍是软件替身**，
+  别把「nonce 来自 SE」写成「已启用 SE」。
 - **2026-09-21（更新）**：上面那条已过时 —— `firmware/` 已在真机上跑通（c3-2b）：控制台 + 1 ms 时基
   + 心跳灯（板载 `D1`=PA15）+ **模组数据口**（USART2 ↔ TX-AH，HGIC 双向通）；
   协议内核 `proto/` 与 Python 参考零偏差（`python proto\run_cross_test.py` → exit 0）。

@@ -1,6 +1,7 @@
 /* id_core.c — 已签 ID 上报任务（固件侧策略；流水线本体在 proto/id_build.c）。*/
 #include "id_core.h"
 
+#include "atecc.h"
 #include "id_build.h"
 #include "id_level.h"
 #include "hgic_uart.h"
@@ -71,8 +72,10 @@ static int str_prefix(const char *s, const char *pre)
     return 1;
 }
 
-/* §8.2 的输入：本 demo 没有 SE ⇒ `se_ok` 由**软件 P-256 替身**顶着（见 id_core.h 的"如实"）。
- * d 步接上 ATECC608B 后：这里改成真的探测（I2C wake + Random 自检）即可，**其余一行不用动**。*/
+/* §8.2 的输入：`se_ok` = “**能不能做 ES256 签名**”。
+ * ⚠ 如实（c4-γ-2）：本 demo 的签名**仍是软件 P-256 替身**（真 SE 签名是 d 步）⇒
+ *   `se_ok` 仍为 1，`level=0` 依旧标注为**演示级**。
+ *   c4-γ-2 只是把 **nonce** 换成了 ATECC608B 的 `Random(0x1B)`（见 `_next_nonce_src()`）。*/
 static int _se_ok(void)
 {
     return 1;
@@ -164,6 +167,15 @@ int idc_init(uint32_t boot_entropy)
     s_next_due = IDC_INTERVAL_MS;      /* 上电后先走完一个周期再发第一条（给人看横幅的时间）*/
     s_last_sent = 0u;
     s_have_sent = 0u;
+    /* ★ c4-γ-2：nonce 优先用 ATECC608B 的 RNG（规范 §5.4 要求的就是它）；
+     *   没接/没应答则**如实回退**到软熵后端，并在 `id`/`se` 里打出用的是哪个。*/
+    {
+        int se = atecc_init();
+
+        if (se == 0) {
+            idb_set_nonce_fn(&s_b, atecc_nonce_hex, 0);
+        }
+    }
     s_ready = 1;
     (void)_se_ok();
     return 0;
@@ -178,6 +190,10 @@ static void cmd_status(void)
                 s_b.sn, s_b.gen, (s_b.firmware != 0) ? s_b.firmware : "-");
     uart_printf(CONSOLE_UART, "[id] se=%s (demo: software key; real SE in d-step)\r\n",
                 _se_ok() ? "stand-in(software P-256)" : "unavailable");
+    /* ★ nonce 来源（c4-γ-2）：规范 §5.4 要求 ATECC608B 的 RNG；没接则如实标 soft。
+     * ⚠ 签名**仍是软件替身** —— 这两件事必须分开说，别合并成一句“已启用 SE”。*/
+    uart_printf(CONSOLE_UART, "[id] nonce_src=%s\r\n",
+                (s_b.last_nonce_src != 0) ? s_b.last_nonce_src : "-");
     uart_printf(CONSOLE_UART, "[id] mode=%s  interval=%u ms  min_gap=%u ms\r\n",
                 s_mode, (unsigned)IDC_INTERVAL_MS, (unsigned)IDC_MIN_GAP_MS);
     uart_printf(CONSOLE_UART, "[id] last_level=%d why=%s nonce=%s frame_len=%u\r\n",
@@ -242,6 +258,11 @@ int idc_console(const char *cmd, uint32_t now_ms)
     }
     if (str_eq(cmd, "idmodes")) {
         cmd_modes();
+        return 1;
+    }
+    if (str_eq(cmd, "se")) {
+        /* c4-γ-2 现场判据：唤醒 + 一条 `Random(0x1B)`（把 count/CRC 模式/随机数打出来）*/
+        atecc_selftest();
         return 1;
     }
     if (str_prefix(cmd, "idlevel")) {

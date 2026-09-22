@@ -64,9 +64,22 @@
 #define LED_HEART_CLK        RCC_APB2Periph_GPIOA
 
 /* ------------------------------------------------------------------ */
-/* 中断属性：必须与 -DWCH_INTERRUPT_FAST + 启动文件里的硬件栈配合          */
+/* 安全元件 ATECC608B（**I2C1**，c4-γ-2 起）                             */
+/*   ★ 2026-09-22 接线口径（用户确认）：                                  */
+/*     PB6 = SCL、PB7 = SDA —— I2C1 的**默认引脚**（AF 开漏），           */
+/*     外接 **4.7 kΩ ×2 上拉到 3V3**（ATECC 的 I2C 必须有上拉）。          */
+/*   ATECC608B SOIC-8 引脚：pin4 = GND、pin5 = SDA、pin6 = SCL、pin8 = VCC */
+/*         （VCC 2.0~5.5 V，IO 1.8~5.5 V ⇒ 3.3 V 直接接，见摘要手册 §2.1）*/
+/*   ⚠ 速率常量 `SE_I2C_HZ` 只被 `Periph/i2c.c` 用来算 CCR；改了要重算。   */
 /* ------------------------------------------------------------------ */
-#if defined(__riscv) && defined(WCH_INTERRUPT_FAST)
+#define SE_I2C_PORT          GPIOB
+#define SE_SCL_PIN           6
+#define SE_SDA_PIN           7
+#define SE_I2C_HZ            100000UL
+
+/* ------------------------------------------------------------------ */
+/* 中断属性：必须与 -DWCH_INTERRUPT_FAST + 启动文件里的硬件栈配合          */
+/* ------------------------------------------------------------------ */#if defined(__riscv) && defined(WCH_INTERRUPT_FAST)
 #define APP_IRQ __attribute__((interrupt("WCH-Interrupt-fast")))
 #elif defined(__riscv)
 #define APP_IRQ __attribute__((interrupt))

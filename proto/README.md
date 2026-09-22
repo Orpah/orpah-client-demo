@@ -67,9 +67,15 @@ flowchart LR
 | `ecdsa_cli.c` | ECDSA/RFC 6979 的 host 侧 CLI（`h1` / `k` / `k-msg` / `sign` / `sign-msg` / `sign-k` + `selfcheck` + `k-selftest` / `sign-selftest`） |
 | `test_vectors_ecdsa.txt` | `<label><TAB><d><TAB><h1><TAB><k><TAB><r><TAB><s>`（25 行：演示私钥×3 消息、`h1` 边界（**含 `>= n` 那一条**）、私钥 1/2/n-1 + 定种子随机） |
 | `test_vectors_ecdsa_rfc6979.txt` | ★ **静态夹具**（**不由 `--refresh` 生成**）：RFC 6979 §A.2.5 的 P-256/SHA-256 两组（`sample` / `test`）。凭什么信它见下面 c4-β-2 那节 |
+| `crc16.h` / `crc16.c` | **CRC-16/BUYPASS**（`poly 0x8005 / 初值 0 / MSB-first / 无结尾异或`）= **ATECC 用的那个 CRC**。出处 = CryptoAuthLib `lib/calib/calib_command.c` 的 `atCRC()`；**外部锚点** = CRC 目录的校验值 `"123456789" → 0xFEE8`。纯函数、无 stdio/malloc |
+| `atecc_msg.h` / `atecc_msg.c` | **ATECC608B 命令层**（不含硬件）：`Random(0x1B)` 命令包（count/opcode/param1/param2[/CRC 小端]）+ 响应解析（36/38 B、count 一致性、CRC 验证）。纯函数、无 stdio/malloc |
+| `atecc_cli.c` | ATECC 命令层的 host 侧 CLI（`random` / `resp` 单次命令 + `selfcheck` + `crc-selftest` / `msg-selftest`） |
+| `test_vectors_crc16.txt` | `<kind><TAB><输入-hex|-><TAB><-><TAB><CRC 4 位大写>`（7 行：空输入 / 单字节 / `"123456789"` 外部校验值 / 两条命令包） |
+| `test_vectors_atecc.txt` | `<kind><TAB><a1><TAB><a2><TAB><a3><TAB><out>`（9 行：4 条命令包 + 5 条响应解析，含 CRC 改一位 / 截短 / count 与长度矛盾） |
 
-> **十四份**向量文件**由 Python 参考实现生成（勿手改）**，统一用 `--refresh` 重生
-> （HGIC 三份的参考在**本仓** `tools/txah_hgic.py`，其余十一份在上游 `orpah-over-halow`）。
+> **十六份**向量文件**由 Python 参考实现生成（勿手改）**，统一用 `--refresh` 重生
+> （HGIC 三份的参考在**本仓** `tools/txah_hgic.py`，ATECC 两份在**本文件同目录的 Python 参考**
+> （= CryptoAuthLib 的常量与算法），其余十一份在上游 `orpah-over-halow`）。
 > 另有 **1 份静态夹具** `test_vectors_ecdsa_rfc6979.txt`（RFC 官方向量）——
 > **`--refresh` 不会改写它**，它由三条独立验证守着（见下节）。
 

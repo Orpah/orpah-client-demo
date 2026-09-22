@@ -1,0 +1,13 @@
+# proto/test_vectors_crc16.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**
+# 来源（单一源）：Microchip CryptoAuthLib `lib/calib/calib_command.c` 的 atCRC()
+#   poly 0x8005 / 初值 0 / **MSB-first**（`crc_bit = crc_register >> 15; crc_register <<= 1`）
+#   ⇒ CRC 目录里就是 CRC-16/BUYPASS：check("123456789") = 0xFEE8（**外部校验值**）
+#   C 实现 = proto/crc16.c（固件与 PC 侧同一份源码）；Python 参考有两份写法互相印证
+# 列：<kind><TAB><输入-hex|-><TAB><-><TAB><CRC 4 位大写>
+crc	-	-	0000
+crc	00	-	0000
+crc	ff	-	0202
+crc	000102030405060708090a0b0c0d0e0f	-	7F43
+crc	313233343536373839	-	FEE8
+crc	051b000000	-	5D9D
+crc	071b0000006edd	-	A9A0

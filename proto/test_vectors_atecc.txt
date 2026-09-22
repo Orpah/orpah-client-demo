@@ -1,0 +1,17 @@
+# proto/test_vectors_atecc.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**
+# 来源（单一源）：CryptoAuthLib `lib/calib/calib_command.h`（ATCA_RANDOM=0x1B、模式、包长）
+#   + `lib/calib/calib_random.c`（响应的 count 检查）—— 我们那份摘要手册无命令集（需 NDA）
+# 列：<kind><TAB><a1><TAB><a2><TAB><a3><TAB><out>
+#   cmd  : a1=mode a2=with_crc(0/1) a3=-        out = 命令包-hex（count 在头、CRC 小端在尾）
+#   resp : a1=完整响应-hex a2=a3=-              out = OK:<32B hex> | ERR:<码>
+#     （ERR 码同 C 侧 ATECC_MSG_E_*：-2 = 长度/ count 不符、-3 = CRC 不符）
+# 覆盖：两种模式 × 带/不带 CRC、响应 36/38 B、CRC 改一位、长度截短、count 与长度矛盾
+cmd	0	0	-	051b000000
+cmd	0	1	-	071b0000006edd
+cmd	1	0	-	051b010000
+cmd	1	1	-	071b010000795d
+resp	00000024000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f	-	-	OK:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+resp	00000024000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f84a9	-	-	ERR:-2
+resp	00000024000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f85a9	-	-	ERR:-2
+resp	00000024000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e	-	-	ERR:-2
+resp	00000025000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f	-	-	ERR:-2
