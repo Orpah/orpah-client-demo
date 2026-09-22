@@ -175,8 +175,14 @@ WCHISPTool 流程：按住 `BOOT` → 按/放 `RST` → 松 `BOOT` → 选 `buil
   · 实测尺寸：`text 25916 / data 10 / bss 20208`；`_ebss`→栈顶 = **4420 B** 可用栈（
     `size` 报的 bss 把 NOLOAD 的 heap 标记也算进去了）；签名路径静态栈用量最深处 ≈ **2.4 KB**
     （`-fstack-usage` 实测：`idr_build` 1024 + `p256_point_mul` 576 + `ecdsa_sign_p256` 432 …）。
-  · ⚠ **未上机**：刷进去之后看控制台 `[id] sent …`（含 `build_ms=`，8 MHz 上签名是秒级）与
-    模组 AT 口的 `[mbus tx] …`；`idhex` 的 hex 贴到 `tools\check_report_hex.py` 应 PASS。
+  · ★ **已上机（2026-09-22，内容判据过了）**：`C:\Python313\python.exe ..\tools\check_c4g1_bench.py`
+    → 固件活着（`AT`→`OK`）+ 帧 395 B + **上游 `verify_report` 接受（level=0 / trust=high / cap.rtc=false）**。
+  · ★ **实测耗时：一条 = `build_ms=9107`（≈9.1 s）**（8 MHz 上 ES256：费马求逆 + ladder；含取钥/nonce/
+    信封/套帧）。设计常态 60 s ⇒ 占空 ~15%，可接受。
+    ⚠ **如实**：这 9.1 s 里主循环是**阻塞**的（控制台要等它跑完才回话；模组下行字节只靠 1 KB 环缓冲，
+    可能 `ring_drop`——那是**可见计数**）。台架上没下行流量时无影响；真要解掉得把签名拆成分步状态机（未做）。
+  · ⚠ **待模组侧确认**：本轮台架模组整块安静（COM23 每 3 s 探测无应答、COM24/COM8 读 8s 零字节）⇒
+    “帧有没有真的进模组”待模组恢复后再看（COM24 上的 `[mbus rx] <8+len> byte(s)`）。
   · 如实：本 demo 的 `se_ok` 是**软件 P-256 替身**（SE 在 d 步）⇒ `level=0` 是演示级；
     `payload.nonce` 用的是**软熵后端**（非生产强度，见 `../proto/id_nonce.h`）。
   · **c4-γ-2（待做）**：ATECC608B 接上后把 nonce 后端换成它的 `Random(0x1B)`（交换点一处）。

@@ -225,7 +225,7 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 | **c1** | 本仓 `firmware/` 骨架：Makefile / `ld` / startup / `Core{board.h,main.c}` / `Periph{gpio,uart}` | **✅ 完成（未上机）** |
 | c2 | 协议内核 C 实现 + 与 Python 的**交叉测试**（同一批黄金向量，纯 PC） | **✅ 完成（见下）** |
 | **c3** | HGIC 数据口（UART ↔ TX-AH：8 字节头 + `FRM2` + `CMD`/`EVENT`） | **✅ 完成（2026-09-21 真机全绿）** —— 帧层 + `proto/*.c` 编进固件 + `Periph/hgic_uart.*` 胶水；上机双向通（见 §五末 **c3-2b** 条） |
-| c4 | §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）+ 自限频 + 已签 ID 上报 | **内核已完成（2026-09-22）**：降级（HS256）→ 服务端验签通过（c4-α）；ES256 曲线/ECDSA/RFC 6979（c4-β-1/2）；**level=0 已接进 `idr_build()` 并过上游 `verify_report`**（c4-β-3：交叉测试 14 组 exit 0、`id-report-selftest` 7/7、服务端接受 6 条 level=0/1/2）。**c4-γ-1（2026-09-22）已完成未上机**：设备侧流水线（`proto/id_build.c` = 选级/密钥/nonce/信封/以太帧）接进固件主循环（60 s 周期 + 自限频 + 控制台 `id/idsend/idhex/idmodes/idlevel`），交叉测试 **15 组**、上游接受 C 产出的**整帧**（level=0/1/2）。**剩**：上机 + c4-γ-2（nonce 后端换 ATECC608B RNG） |
+| c4 | §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）+ 自限频 + 已签 ID 上报 | **内核已完成（2026-09-22）**：降级（HS256）→ 服务端验签通过（c4-α）；ES256 曲线/ECDSA/RFC 6979（c4-β-1/2）；**level=0 已接进 `idr_build()` 并过上游 `verify_report`**（c4-β-3：交叉测试 14 组 exit 0、`id-report-selftest` 7/7、服务端接受 6 条 level=0/1/2）。**c4-γ-1（2026-09-22）已接进固件主循环且★上机内容判据已过**（`tools/check_c4g1_bench.py`：`AT`→`OK` + 帧 395 B + 上游接受 level=0/trust=high；实测一条 **build_ms≈9.1 s**，即 8 MHz 上 ES256 的代价）。**剩**：模组侧确认帧真的进了模组（COM24 `[mbus rx]`，本轮台架模组安静）+ c4-γ-2（nonce 后端换 ATECC608B RNG） |
 | c5 | 低功耗 / 取能标定 | 推后到 d/e |
 
 **c1 实测判据（2026-09-20）**：`make clean && make` **exit=0** ⇒ `build/orpah-client.elf` 9644 B、
