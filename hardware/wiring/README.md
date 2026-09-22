@@ -1,14 +1,16 @@
-# b 步夹具接线图：CH347F-EVT ↔ TX-AH EVB
+# 台架夹具接线图（b 步 / c 步）
 
-本目录放 **b 步（PC ↔ TX-AH 模组）台面夹具的接线图** —— Fritzing 工程 + 它的 SVG 导出。
-文字版接线表在 [`../../docs/txah-uart-macbus.md`](../../docs/txah-uart-macbus.md) §3（单块）与
-§7（两块模块端到端）；本文件是那份表的**图版**，并记录**这套接线实测能达成什么**。
+本目录放 **台面夹具的接线图** —— Fritzing 工程 + 它的 SVG 导出。
+文字版接线表：b 步在 [`../../docs/txah-uart-macbus.md`](../../docs/txah-uart-macbus.md) §3（单块）与
+§7（两块模块端到端）；**c 步（自家固件上机）在 [`../../docs/c3-2b-bench-bringup.md`](../../docs/c3-2b-bench-bringup.md) §1**。
+本文件是那些表的**图版**，并记录**这套接线实测能达成什么**。
 
 | 文件 | 说明 |
 |---|---|
 | `bstep-ch347f-txah-evb.fzz` / `.svg` | **单模块**夹具：CH347F ↔ 一块模组（P2 数据口 + P3 AT/打印口）。用来验桥与线 |
 | `bstep-ch347f-2txah-evb.fzz` / `.svg` | **两块模块**夹具（b 步数据面）：CH347F 的 P2 带**客户端(STA)**、P3 带**对端(AP)**，两块各自的 USB 接 PC 看 AT/打印 |
 | `bstep-ch347f-txah-evb-thrj45.fzz` / `.svg` | **客户端 ↔ T-Halow-RJ45** 夹具（2026-09-20 实测用的那套）：客户端 STA 只接 CH347F 的数据口；TH-RJ45 当 **AP**，它的 **RJ45 空着**，只用 USB-C 看 AT |
+| `cstep-ch347f-txah-evb-nanoch32.fzz` / `.svg` | ★ **c 步台架**（2026-09-21 上机验证过的那套、**c4 上机也用这套**）：**nanoCH32V203（跑自家固件）** + TX-AH EVB + CH347F 两个 PC 窗口 |
 
 **三张图都已直接嵌在下面各自那一节里**（点图可看原尺寸 `.svg`）—— 看图不必装 Fritzing。
 
@@ -25,6 +27,33 @@ python tools\fzz_nets.py
 脚本按 Fritzing 自己的存储方式把 `.fzz` 解成网表（含每条 wire 自身导通两端 + 部件内部 `<bus>`），
 再与脚本里的**期望表**逐网比对 —— 期望表就是这两个夹具的接线规格（单一源）。
 **2026-09-19 实跑：两张图均「全部对上 ✓」（退出码 0）。**
+
+---
+
+## ★ c 步台架（`cstep-ch347f-txah-evb-nanoch32`）—— 自家固件上机 / c4 上报也用这套
+
+[![c 步台架：nanoCH32V203（自家固件）+ TX-AH EVB + CH347F 两个 PC 窗口](cstep-ch347f-txah-evb-nanoch32.svg)](cstep-ch347f-txah-evb-nanoch32.svg)
+
+三块板、**三根 USB**、各自供电、**只共地**（图里没有电源线 —— 每块板走自己的 USB 取电）。
+左边 `nanoCH32V203` = 跑**本仓固件**的那块 MCU，右边 `TX-AH EVB` = 模组，中间 `CH347F-EVT`
+把两个 UART 变成两个 PC 窗口。
+
+| 用途 | nano 侧 | 模组侧 | PC 侧 | 备注 |
+|---|---|---|---|---|
+| **数据口**（HGIC，二进制帧） | `PA2`(USART2_TX) → | `A10`（**模组 RX**） | — | 115200 8N1 |
+| | `PA3`(USART2_RX) ← | `A11`（**模组 TX**） | — | 方向固定，别接反 |
+| **窗口①控制台** | `PA9`/`PA10`(USART1) | — | CH347F **P2/UART0 = COM23** | 固件横幅、命令（`help`/`stat`/`id`…）、`[id] sent …` |
+| **窗口②模组口** | — | `A12`(RX)/`A13`(TX) | CH347F **P3/UART1 = COM24** | 模组的 AT 与日志（`[mbus rx]/[mbus tx]`） |
+
+- ★ **c4-γ-1 上机只需要这套**：窗口① 看 `[id] sent level=… build_ms=…`，窗口② 看 `[mbus rx] …`
+  （= 我们那条已签报文真的进了模组）。**不需要 TH-RJ45、也不需要 RJ45 上行**——
+  c4 的判据是「固件产出的帧被上游接受」，用控制台 `idhex` 把 hex 拿回 PC 跑
+  `python tools\check_report_hex.py <hex>` 即可（见 `../../docs/c3-2b-bench-bringup.md`）。
+- ⚠ **跳线帽要拔掉**（板载 CH340E 与 `A12/A13` 断开）；CH347F 的 `3V3`/`VIO` **空着不接**
+  （它与 JP1 同轨，接过去 = 两个 3.3 V 源并联）。
+- ⚠ **别给数据口（`A10/A11`）敲 AT** —— 那条口跑 8 B HGIC 头的二进制帧；AT/日志在 `A12/A13`（COM24）。
+- ⚠ 模组 UART 方向（实测 + 厂商 `pin_function.c` 双证据）：**`A10` = 模组 RX、`A11` = 模组 TX**；
+  `A12` = 模组 RX、`A13` = 模组 TX（见 `../../docs/txah-uart-macbus.md` §5.1）。
 
 ## 接线（从 `.fzz` 里抽出来的真实连线，2026-09-16 修订）—— 单模块那张
 
