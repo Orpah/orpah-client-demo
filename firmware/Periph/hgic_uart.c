@@ -4,6 +4,24 @@
  *   中断 `USARTx_IRQHandler` → `uart_irq_rx()` → 本文件 `hgic_rx_byte()`：**只入环**
  *   主循环 `hgic_uart_poll()`：排空环 → `hgic_parser_feed()`（proto/ 的帧层）→ 回调应用
  *   发送：`hgic_frame_*`（proto/ 组帧）→ `hgic_uart_send()`（本文件写出）
+ *
+ * ★3 **cookie 为什么按通道分两个计数器**（2026-09-22，**待验证的假设**，别当成结论）：
+ *   现场观察：`idsend` 那条 FRM2 被模组收下（`[mbus rx] 403 byte(s)`）**之后**，
+ *   模组跟着打一条 `cookie err: last:110, new:116`；而中间那 5 条 CMD 探测（cookie 111..115）
+ *   模组**一句都没抱怨**。
+ *   ⇒ 假设：模组是**按数据通道**查顺序（拿上一条 FRM2 的 cookie 跟这一条比），
+ *      而以前 CMD 与 FRM2 **共用**一个计数器，所以每条 FRM2 的 cookie 天然比上一条
+ *      FRM2 大一截（这里 110 → 116）。
+ *   ⇒ 改法：**两个通道各一个计数器**，各自逐帧 +1（本文件就这么改了）。
+ *   ⚠ **判据（怎么算证实/证伪）**：复位后连发**两条** `idsend`：
+ *      · 第 1 条**可能**仍报 err（模组的 `last` 还停在上电前那个值，我们复位回 1 了）；
+ *      · 若**第 2 条不再报** `cookie err` ⇒ 假设成立（第 1 条的 last 已被更新成 1）；
+ *      · 若第 2 条**照样报** ⇒ 假设不成立，**回退这次改动**（一个变量、单独一次提交，
+ *        就是为了一条命令能退回去），并把两种解释都记到 `../docs/`。
+ *   代价与边界：即便报 err，本轮也**没观察到任何坏后果**（帧照收、长度正确），
+ *   而且**模组固件是预编译的**（`app=2.4.1.5`，SDK 里没有这段源码）⇒ 查不了它的判据源码，
+ *   只能做这种"改一处 → 看日志"的行为实验。`tools/txah_hgic.py::CookieCounter` 那边
+ *   仍是**单计数器**（PC 侧脚本，另一回事），别把两处混起来改。
  */
 #include "hgic_uart.h"
 
@@ -25,7 +43,10 @@ static volatile uint32_t s_ring_drop;
 
 static hgic_parser_t s_parser;                  /* 4 KB+：放**静态**，不压栈 */
 static uint8_t       s_txbuf[HGIC_TX_MAX];
-static hgic_cookie_t s_cookie;
+/* ★ **两个** cookie 计数器，按**通道**分开（2026-09-22 真机观察后的假设，见文件头 ★3）。
+ *   以前是一个计数器同时喂 CMD（每 3 s 探测）与 FRM2（`idsend`）。*/
+static hgic_cookie_t s_cookie_ctl;              /* 控制面：`CMD`/`CMD2` */
+static hgic_cookie_t s_cookie_data;             /* 数据面：`FRM2` */
 static hgic_rx_fn    s_cb;
 static hgic_uart_stats_t s_st;
 
@@ -80,7 +101,8 @@ void hgic_uart_init(hgic_rx_fn cb)
 
     /* 固件**只收**模组→主机的帧（主机→模组那一半是回环自测才需要） */
     hgic_parser_init(&s_parser, HGIC_EXPECT_MODULE_TO_HOST);
-    hgic_cookie_init(&s_cookie, 1u);            /* 实测：cookie 逐帧 +1，模组会查顺序 */
+    hgic_cookie_init(&s_cookie_ctl, 1u);        /* 两个通道各自从 1 开始逐帧 +1 */
+    hgic_cookie_init(&s_cookie_data, 1u);
 
     uart_init(MODULE_UART, MODULE_GPIO_PORT, MODULE_TX_PIN, MODULE_RX_PIN,
               MODULE_BAUD, MODULE_UART_IRQn, hgic_rx_byte);
@@ -126,7 +148,7 @@ int hgic_uart_send_frm2(const uint8_t *eth, size_t ethlen)
     if (ethlen + HGIC_HDR_LEN > sizeof(s_txbuf)) {
         return HGIC_E_CAP;
     }
-    n = hgic_frame_frm2(s_txbuf, sizeof(s_txbuf), eth, ethlen, hgic_cookie_next(&s_cookie));
+    n = hgic_frame_frm2(s_txbuf, sizeof(s_txbuf), eth, ethlen, hgic_cookie_next(&s_cookie_data));
     if (n < 0) {
         return n;
     }
@@ -141,7 +163,7 @@ int hgic_uart_send_cmd(uint16_t cmd_id, const void *params, size_t plen)
     if (plen > sizeof(buf) - HGIC_HDR_LEN - HGIC_CTRL_UNION) {
         return HGIC_E_CAP;
     }
-    n = hgic_frame_cmd(buf, sizeof(buf), cmd_id, params, plen, hgic_cookie_next(&s_cookie));
+    n = hgic_frame_cmd(buf, sizeof(buf), cmd_id, params, plen, hgic_cookie_next(&s_cookie_ctl));
     if (n < 0) {
         return n;
     }
@@ -167,7 +189,12 @@ void hgic_uart_stats(hgic_uart_stats_t *out)
     out->ring_drop  = s_ring_drop;      /* 这一项只在**中断**里累加，单独读 */
 }
 
-uint8_t hgic_uart_last_cookie(void)
+uint8_t hgic_uart_last_cookie_ctl(void)
 {
-    return (uint8_t)(s_cookie.n & 0xFFu);
+    return (uint8_t)(s_cookie_ctl.n & 0xFFu);
+}
+
+uint8_t hgic_uart_last_cookie_data(void)
+{
+    return (uint8_t)(s_cookie_data.n & 0xFFu);
 }

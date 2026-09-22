@@ -56,6 +56,8 @@ int hgic_uart_send_frm2(const uint8_t *eth, size_t ethlen);
 int hgic_uart_send_cmd(uint16_t cmd_id, const void *params, size_t plen);
 
 void    hgic_uart_stats(hgic_uart_stats_t *out);
-uint8_t hgic_uart_last_cookie(void);      /* 最近一次发出的 cookie（对拍/日志用） */
+/* 最近一次发出的 cookie（低 8 位；对拍/日志用）。**两个通道各一个**（见 `.c` 文件头 ★3）。*/
+uint8_t hgic_uart_last_cookie_ctl(void);       /* 控制面 `CMD` */
+uint8_t hgic_uart_last_cookie_data(void);      /* 数据面 `FRM2` */
 
 #endif /* __HGIC_UART_H__ */
