@@ -151,6 +151,16 @@ orpah-client-demo/
 
 - **2026-09-14**：本仓骨架已就位：`AGENTS.md`（本文件）+ `README.md` + `ROADMAP.md` + `.gitignore`
   + `LICENSE`(Apache-2.0)。当时**没有任何代码、没有硬件实测、没有上机验证。**
+- **2026-09-22（c4-γ-1）**：设备侧**流水线**已接进固件主循环 —— `proto/id_build.{h,c}`（选级 → 演示密钥
+  → nonce → `idr_build` → 链路信封 → 以太帧；**与 PC 侧交叉测试同一份源码**）+ `Core/id_core.c`（周期/
+  自限频/控制台）。控制台新增 `id` / `idsend` / `idhex` / `idmodes` / `idlevel <m>`；上机判据工具
+  `tools/check_report_hex.py`（把 `idhex` 的帧交给上游 `verify_report` 判一次）。判据（PC）：
+  `python proto\run_cross_test.py` → exit 0，**15 组**，含★上游接受 C 产出的**整帧**（level=0/1/2）。
+  ★ 两条**硬教训**（已写进 `proto/README.md`）：① 结构体里的“已派生/已填充”标志**必须显式清零**，
+  否则同进程第 2 次调用会拿栈垃圾当密钥（一次一进程的 CLI 恰好掩盖它）；② jcs 家族输出**不带结尾
+  NUL** ⇒ 只能按返回长度读，`strlen()` 会读到上一行残留。
+  ⚠ **未上机**；`se_ok` 是**软件 P-256 替身**（level=0 属演示级）、nonce 是**软熵后端**（非生产强度），
+  两者都如实打在启动横幅/控制台 `id` 上。
 - **2026-09-21（更新）**：上面那条已过时 —— `firmware/` 已在真机上跑通（c3-2b）：控制台 + 1 ms 时基
   + 心跳灯（板载 `D1`=PA15）+ **模组数据口**（USART2 ↔ TX-AH，HGIC 双向通）；
   协议内核 `proto/` 与 Python 参考零偏差（`python proto\run_cross_test.py` → exit 0）。

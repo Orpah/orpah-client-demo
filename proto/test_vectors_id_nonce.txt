@@ -1,0 +1,10 @@
+# proto/test_vectors_id_nonce.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**
+# 来源：**本仓定义**的软熵公式（规范只要求 nonce 来源是 SE 的 RNG，无外部权威可对拍）
+#   nonce = upperhex(SHA-256("orpah-nonce-soft-v1|<sn>|<entropy>|<ctr>")[:16])
+# 列：<kind><TAB><sn><TAB><entropy><TAB><ctr><TAB><hex32>
+#   ⚠ 非生产强度：熵只有几十 bit；与历史 nonce 撞车会被服务端当重放丢弃（= 漏报）—— d 步换 SE
+nonce	CN-WH01-9AF3C1D2	0	1	51371C2FFD69B52E42A6F5C1A1527B23
+nonce	CN-WH01-9AF3C1D2	305419896	1	7D20F3BDBAD9CA3E53A1E48C84EDA98A
+nonce	CN-WH01-9AF3C1D2	1	7	3A08A0A8440C2B511EFE588285FF62D4
+nonce	CN-AB01-00000001	43981	3	67D29A36AFD890FBC754B3328CDD6C2C
+nonce	CN-WH01-9AF3C1D2	4294967295	4294967295	85179F014A3D78B60938291420C5D3AB

@@ -24,6 +24,7 @@
 
 #include "hgic.h"          /* proto/ 的帧层：hgic_ctrl_parse / HGIC_CMD_* / HGIC_T_* */
 #include "hgic_uart.h"     /* 本仓的模组数据口驱动 */
+#include "id_core.h"       /* ★ c4-γ-1：已签 ID 上报任务（proto/id_build.c 的固件侧外壳）*/
 
 /* ------------------------------------------------------------------ */
 /* 控制台：收字节成行（回显 + 整行命令）                                  */
@@ -217,6 +218,11 @@ static void print_help(void)
     uart_printf(CONSOLE_UART, "  ping         -> send GET_UART_FIXLEN, prove module is alive\r\n");
     uart_printf(CONSOLE_UART, "  stat         -> module-port counters (incl. dropped bytes)\r\n");
     uart_printf(CONSOLE_UART, "  send <hex>   -> tx one ethernet frame (hex, >=14 B)\r\n");
+    uart_printf(CONSOLE_UART, "  id           -> signed-ID task status (level/why/nonce/counters)\r\n");
+    uart_printf(CONSOLE_UART, "  idsend       -> build+send one ORPAH-ID-REPORT now (self-limited)\r\n");
+    uart_printf(CONSOLE_UART, "  idhex        -> dump last frame as hex (paste into PC judge)\r\n");
+    uart_printf(CONSOLE_UART, "  idmodes      -> 8.2 fault-injection modes -> level\r\n");
+    uart_printf(CONSOLE_UART, "  idlevel <m>  -> set mode: auto|sign_fail|se_fail|no_key\r\n");
 }
 
 static void run_cmd(const char *cmd)
@@ -233,6 +239,8 @@ static void run_cmd(const char *cmd)
         send_hex(cmd + 4);
     } else if (str_eq(cmd, "help")) {
         print_help();
+    } else if (idc_console(cmd, g_tick_ms)) {
+        /* 已签 ID 任务的控制台命令（id / idsend / idhex / idmodes / idlevel）*/
     } else if (*cmd != '\0') {
         uart_printf(CONSOLE_UART, "\r\n? unknown: %s (type help)\r\n", cmd);
     }
@@ -245,6 +253,11 @@ static void banner(void)
     uart_printf(CONSOLE_UART, "[orpah-client] clock=%u Hz HSI, console=%u 8N1, module=%u 8N1\r\n",
                 (unsigned)SYSTEM_CLOCK_HZ, (unsigned)CONSOLE_BAUD, (unsigned)MODULE_BAUD);
     uart_printf(CONSOLE_UART, "[orpah-client] module port = HGIC over UART (proto/hgic.c frame layer)\r\n");
+    /* ★ 如实标清：本 demo 的"SE"是**软件 P-256 替身**（SE 驱动在 d 步，见 ROADMAP §五）——
+     *   所以这里 level=0 是**演示级**（密钥在 MCU 内、非 SE 保护），不当真机能力。*/
+    uart_printf(CONSOLE_UART, "[orpah-client] id-task: sn=%s period=%u ms  SE=NONE"
+                              " (demo software key; level=0 is demo-grade)\r\n",
+                IDC_SN_DEFAULT, (unsigned)IDC_INTERVAL_MS);
     uart_printf(CONSOLE_UART, "[orpah-client] type 'help' for commands\r\n");
 }
 
@@ -336,6 +349,12 @@ int main(void)
     banner();
     do_ping();                        /* ★ 上电就探测：模组应答才算数据口通 */
 
+    /* ★ c4-γ-1：已签 ID 上报任务。
+     * `boot_entropy` = 上电熵（**几十 bit、非生产强度**，见 proto/id_nonce.h）：
+     *   取 TIM2 计数（刚跑起来，低位随机）+ ms 时基，混一下即可 —— 它只用来让
+     *   **不同 boot 的 nonce 不撞**；真随机要等 d 步的 ATECC608B。*/
+    idc_init((uint32_t)(TIM2->CNT) ^ (g_tick_ms * 2654435761u));
+
     for (;;) {
         g_loops++;                    /* `stat` 里能看出主循环在不在转 */
         hgic_uart_poll();             /* 数据口：越勤越好（中断只入环）*/
@@ -362,6 +381,10 @@ int main(void)
             uart_printf(CONSOLE_UART,
                         "[mod] no reply in 3s - check wiring / baud / module fw\r\n");
         }
+
+        /* ★ c4-γ-1：已签 ID 上报（``IDC_INTERVAL_MS` 到点就发；组装/签名会阻塞一会儿，
+         *   时长在 `[id] sent … build_ms=` 里如实打出来）*/
+        idc_tick(g_tick_ms);
 
         /* 控制台整行命令 */
         if (g_line_ready) {

@@ -1,0 +1,8 @@
+# proto/test_vectors_id_keys.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**
+# 来源（单一源）：orpah_id.derive_demo_privkey(sn, gen) + derive_demo_hmac(sn, gen)
+# 列：<kind><TAB><sn><TAB><gen><TAB><ec-priv-hex64><TAB><hmac-hex64>
+#   ⚠ 仅演示：真机密钥在 ATECC608B 内生成、不可导出（§6）；这里只是让同一 SN 重启后仍是同一把钥
+keys	CN-WH01-9AF3C1D2	1	e0552315cc24f7f007f7e9541fc3dc7a91e88a1b39185b1bd5b49fa525c201af	370e2ece79fcb65a50eae8812d63ab4fb35d43510bae99e20b3ebca0c74a3e8b
+keys	CN-AB01-00000001	1	a6b806a08cdb56384aa8767de55c9408eda94aa71bb0443fe8e58ff694525110	96f669e14748ee8422568b4e6454c069999d03d59e0492e465ba29e95f3900a3
+keys	CN-ZZ99-ZZZZZZZZ	1	dd08985a256d7be9e84aae896a566f84203a25e58743e9bd1aed139d84f8d9ce	5fd246542a3e6a90927f369b77e65517f7c76baf40dcddad24e1dcb1a734db3a
+keys	CN-WH01-9AF3C1D2	2	bd4f7b866ca6f1f0ffaa13726e7937159b1ce983a9ab366443834d761e1c2bc0	7d185efa46c85e49ea612f366437a66f0bb313ce734240d11e5338c7b546f899

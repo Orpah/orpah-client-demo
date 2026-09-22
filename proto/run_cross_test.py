@@ -73,6 +73,11 @@ VEC_HGIC_CTRL = os.path.join(HERE, "test_vectors_hgic_ctrl.txt")
 VEC_P256 = os.path.join(HERE, "test_vectors_p256.txt")
 VEC_ECDSA = os.path.join(HERE, "test_vectors_ecdsa.txt")
 VEC_ECDSA_RFC = os.path.join(HERE, "test_vectors_ecdsa_rfc6979.txt")
+# c4-γ-1（设备侧流水线：§8.2 选级 / 演示密钥 / nonce / 整帧）
+VEC_ID_KEYS = os.path.join(HERE, "test_vectors_id_keys.txt")
+VEC_ID_LEVEL = os.path.join(HERE, "test_vectors_id_level.txt")
+VEC_ID_NONCE = os.path.join(HERE, "test_vectors_id_nonce.txt")
+VEC_ID_FRAME = os.path.join(HERE, "test_vectors_id_frame.txt")
 
 HEADER_SN = (
     "# proto/test_vectors_sn.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
@@ -136,6 +141,37 @@ HEADER_IDR = (
     "#   ⚠ level 0 的签名用 **RFC 6979 确定性 k**（参考实现默认随机 k，那样两侧逐字节比不了）；\n"
     "#     算法本身的独立证据 = RFC 6979 §A.2.5 官方向量 + OpenSSL 验签 + 上游 verify_report 接受\n"
     "# 覆盖：level 0（ES256）/ level 1、2（HS256 降级链）/ level 3（none，不签名）/ 无 cap 与带 cap+battery+firmware\n"
+)
+# c4-γ-1：设备侧流水线（§8.2 选级 / 演示密钥 / nonce / 整帧）—— 期望值全部由**上游 Python** 现算，
+#   只有软熵 nonce 的公式是本仓定义（无外部权威，见 id_nonce.h）。
+HEADER_ID_KEYS = (
+    "# proto/test_vectors_id_keys.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源（单一源）：orpah_id.derive_demo_privkey(sn, gen) + derive_demo_hmac(sn, gen)\n"
+    "# 列：<kind><TAB><sn><TAB><gen><TAB><ec-priv-hex64><TAB><hmac-hex64>\n"
+    "#   ⚠ 仅演示：真机密钥在 ATECC608B 内生成、不可导出（§6）；这里只是让同一 SN 重启后仍是同一把钥\n"
+)
+HEADER_ID_LEVEL = (
+    "# proto/test_vectors_id_level.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源（单一源）：orpah_id.pick_level() + LEVEL_MODES（§8.1/§8.2）\n"
+    "# 列：level<TAB><se_ok><TAB><sign_ok><TAB><hmac_ok><TAB><level><TAB><reason>\n"
+    "#     mode <TAB><name><TAB><se_ok><TAB><sign_ok><TAB><hmac_ok>\n"
+    "#     order<TAB><name1,name2,name3,name4>（= 上游字典的插入序，C 侧模式表要一模一样）\n"
+)
+HEADER_ID_NONCE = (
+    "# proto/test_vectors_id_nonce.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源：**本仓定义**的软熵公式（规范只要求 nonce 来源是 SE 的 RNG，无外部权威可对拍）\n"
+    "#   nonce = upperhex(SHA-256(\"orpah-nonce-soft-v1|<sn>|<entropy>|<ctr>\")[:16])\n"
+    "# 列：<kind><TAB><sn><TAB><entropy><TAB><ctr><TAB><hex32>\n"
+    "#   ⚠ 非生产强度：熵只有几十 bit；与历史 nonce 撞车会被服务端当重放丢弃（= 漏报）—— d 步换 SE\n"
+)
+HEADER_ID_FRAME = (
+    "# proto/test_vectors_id_frame.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
+    "# 来源（单一源）：上游 Device.report() + build_id_report() + build_eth_frame()\n"
+    "#   （= 设备侧那条流水线的期望结果；C 侧同一份流水线在 proto/id_build.c，两侧共用）\n"
+    "# 列：<kind><TAB><sn><TAB><gen><TAB><mode><TAB><entropy><TAB><ctr><TAB><level><TAB><reason>\n"
+    "#     <TAB><frame-hex><TAB><firmware|->\n"
+    "#   mode = §8.2 故障注入（auto/sign_fail/se_fail/no_key）；nonce 由上面那张表的公式给\n"
+    "# 覆盖：L0/L1/L2/L3 四种级别 + 带与不带 firmware 字段\n"
 )
 HEADER_HGIC = (
     "# proto/test_vectors_hgic.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
@@ -498,6 +534,102 @@ def idr_row(o, proto, case):
 
 def gen_idr_rows(o, proto):
     return [idr_row(o, proto, c) for c in _idr_cases(o)]
+
+
+# ---------------------------------------------------------------------------
+# c4-γ-1：设备侧流水线（§8.2 选级 / 演示密钥 / nonce / 整帧）
+#   期望值全部由**上游 Python** 现算：
+#     · 演示密钥（EC + HMAC）  derive_demo_privkey / derive_demo_hmac
+#     · 选级与理由              pick_level + LEVEL_MODES（顺序也要对）
+#     · 整帧                    Device.report + build_id_report + build_eth_frame
+#   唯一一处**本仓定义**的是软熵 nonce 的公式（规范只要求"来源是 SE 的 RNG"，无外部权威）——
+#   所以这里也写一份同样的公式，钉住 C 侧的字符串拼法（不是"另一份可能同样错的实现"，
+#   而是"这份公式的说明书"）；C 侧另有不变量自检（格式/不重复/随输入变）。
+# ---------------------------------------------------------------------------
+ID_NONCE_PREFIX = "orpah-nonce-soft-v1"
+ID_FLOW_GEN = 1
+# 帧源 MAC = 上游 client.py 的缺省宏（4A:06:59:00:00:01）；C 侧同一个缺省值在 id_build.c
+SIM_SRC_MAC = bytes([0x4A, 0x06, 0x59, 0x00, 0x00, 0x01])
+ID_NONCE_CASES = [
+    ("CN-WH01-9AF3C1D2", 0, 1),
+    ("CN-WH01-9AF3C1D2", 0x12345678, 1),
+    ("CN-WH01-9AF3C1D2", 1, 7),                 # 同一 boot 的第 7 条
+    ("CN-AB01-00000001", 0xABCD, 3),
+    ("CN-WH01-9AF3C1D2", 0xFFFFFFFF, 0xFFFFFFFF),   # 两个上界
+]
+ID_FRAME_CASES = [
+    # sn, mode, entropy, ctr, firmware|-
+    ("auto",      0xABCD, 1, "-"),
+    ("auto",      0xABCD, 2, "0.1.0-c4g1"),      # 带 firmware（已验证的字段形状）
+    ("sign_fail", 0xABCD, 1, "-"),
+    ("se_fail",   0xABCD, 1, "-"),
+    ("no_key",    0xABCD, 1, "-"),
+]
+
+
+def py_nonce(sn, entropy, ctr):
+    """软熵 nonce 公式的**说明书实现**（见 proto/id_nonce.h 的文件头）。大写十六进制、取前 16 字节。"""
+    import hashlib
+
+    msg = ("%s|%s|%d|%d" % (ID_NONCE_PREFIX, sn, entropy, ctr)).encode("utf-8")
+    return hashlib.sha256(msg).hexdigest()[:32].upper()
+
+
+def _id_mode_inputs(o, mode):
+    """模式名 → (se_ok, sign_ok, hmac_ok)，缺省全 True（同上游 `LEVEL_MODES` 的 get 写法）。"""
+    kw = o.LEVEL_MODES[mode]
+    return (kw.get("se_ok", True), kw.get("sign_ok", True), kw.get("hmac_ok", True))
+
+
+def gen_id_keys_rows(o):
+    rows = []
+    for sn, gen in P256_SN_CASES:
+        d = o.derive_demo_privkey(sn, gen).private_numbers().private_value
+        rows.append(("keys", sn, str(gen), "%064x" % d, o.derive_demo_hmac(sn, gen).hex()))
+    return rows
+
+
+def gen_id_level_rows(o):
+    rows = []
+    for se in (0, 1):
+        for sg in (0, 1):
+            for hm in (0, 1):
+                lvl, why = o.pick_level(bool(se), bool(sg), bool(hm))
+                rows.append(("level", str(se), str(sg), str(hm), str(lvl), why))
+    for name in o.LEVEL_MODES:                     # 顺序 = 上游字典序（C 侧的表要一模一样）
+        se, sg, hm = _id_mode_inputs(o, name)
+        rows.append(("mode", name, str(int(se)), str(int(sg)), str(int(hm))))
+    rows.append(("order", ",".join(o.LEVEL_MODES.keys())))
+    return rows
+
+
+def gen_id_nonce_rows(o):
+    return [("nonce", sn, str(ent), str(ctr), py_nonce(sn, ent, ctr))
+            for sn, ent, ctr in ID_NONCE_CASES]
+
+
+def gen_id_frame_rows(o, proto):
+    """整帧期望值：**上游 Python 自己搭一遍**（Device.report → build_id_report → build_eth_frame）。
+
+    ⚠ level 0 必须把 `dev.sign` 换成**确定性 k**（`_det_es256`，同 idr_row）——
+      参考实现默认走 `cryptography`（随机 k），那样两侧的签名逐字节比不了（不是 C 的错）。
+    """
+    sn = "CN-WH01-9AF3C1D2"
+    rows = []
+    for mode, ent, ctr, fw in ID_FRAME_CASES:
+        se, sg, hm = _id_mode_inputs(o, mode)
+        lvl, why = o.pick_level(se, sg, hm)
+        dev = o.Device(sn=sn, gen=ID_FLOW_GEN)
+        if lvl == 0:
+            d = dev.privkey.private_numbers().private_value
+            dev.sign = (lambda alg, pre, _d=d: _det_es256(o, _d, pre))
+        rep = dev.report(level=lvl, ts=0, nonce=py_nonce(sn, ent, ctr), seen_routers=[],
+                         cap={"rtc": False}, firmware=(None if fw == "-" else fw))
+        env = proto.build_id_report(rep, ts=0)
+        frame = proto.build_eth_frame(proto.encode_msg(env), src_mac=SIM_SRC_MAC)
+        rows.append(("frame", sn, str(ID_FLOW_GEN), mode, str(ent), str(ctr),
+                     str(lvl), why, frame.hex(), fw))
+    return rows
 
 
 def gen_hmac_rows(o):
@@ -1021,6 +1153,22 @@ def main():
         write_rows(VEC_HMAC, HEADER_HMAC, rows_hmac)
         if proto is not None:
             write_rows(VEC_IDR, HEADER_IDR, gen_idr_rows(o, proto))
+        rows_id_keys = gen_id_keys_rows(o)
+        rows_id_level = gen_id_level_rows(o)
+        rows_id_nonce = gen_id_nonce_rows(o)
+        write_rows(VEC_ID_KEYS, HEADER_ID_KEYS, rows_id_keys)
+        write_rows(VEC_ID_LEVEL, HEADER_ID_LEVEL, rows_id_level)
+        write_rows(VEC_ID_NONCE, HEADER_ID_NONCE, rows_id_nonce)
+        n_frame = 0
+        if proto is not None:
+            rows_id_frame = gen_id_frame_rows(o, proto)
+            write_rows(VEC_ID_FRAME, HEADER_ID_FRAME, rows_id_frame)
+            n_frame = len(rows_id_frame)
+        print("--refresh 已重写（c4-γ-1）：%s(%d) / %s(%d) / %s(%d) / %s(%d)"
+              % (os.path.basename(VEC_ID_KEYS), len(rows_id_keys),
+                 os.path.basename(VEC_ID_LEVEL), len(rows_id_level),
+                 os.path.basename(VEC_ID_NONCE), len(rows_id_nonce),
+                 os.path.basename(VEC_ID_FRAME), n_frame))
         print("--refresh 已重写：%s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d) / %s(%d)%s"
               % (os.path.basename(VEC_SN), len(rows_sn),
                  os.path.basename(VEC_PARSE), len(rows_parse),
@@ -1049,6 +1197,13 @@ def main():
             print("跳过 test_vectors_msg/downlink.txt：拿不到 orpah_proto（报文构造/解码的单一源）")
         groups.append(("test_vectors_sha256.txt", gen_sha_rows(o), read_rows(VEC_SHA)))
         groups.append(("test_vectors_hmac.txt", gen_hmac_rows(o), read_rows(VEC_HMAC)))
+        # c4-γ-1：设备侧流水线的三张表（只靠上游 orpah_id）；整帧表还靠 orpah_proto
+        groups.append(("test_vectors_id_keys.txt", gen_id_keys_rows(o), read_rows(VEC_ID_KEYS)))
+        groups.append(("test_vectors_id_level.txt", gen_id_level_rows(o), read_rows(VEC_ID_LEVEL)))
+        groups.append(("test_vectors_id_nonce.txt", gen_id_nonce_rows(o), read_rows(VEC_ID_NONCE)))
+        if proto is not None:
+            groups.append(("test_vectors_id_frame.txt", gen_id_frame_rows(o, proto),
+                           read_rows(VEC_ID_FRAME)))
         for name, exp, got in groups:
             cmp_snapshot(name, exp, got, fails)
     else:
@@ -1123,6 +1278,15 @@ def main():
           ("C sign-selftest（RFC 6979 官方 r||s 向量）", ["sign-selftest", VEC_ECDSA_RFC])]
          + ([("C sign-selftest（本仓 ECDSA 向量）", ["sign-selftest", VEC_ECDSA])]
             if os.path.isfile(VEC_ECDSA) else [])),
+        ("ID 流水线（§8.2 选级 / 演示密钥 / nonce / 整帧）", "id_cli",
+         ["id_build.c", "id_level.c", "id_keys.c", "id_nonce.c", "id_report.c",
+          "jcs.c", "b64url.c", "msg.c", "sha256.c", "hmac.c",
+          "p256.c", "rfc6979.c", "ecdsa.c", "id_cli.c"],
+         [("C selfcheck（选级/nonce/流水线不变量）", ["selfcheck"]),
+          ("C keys-selftest（演示密钥向量）", ["keys-selftest", VEC_ID_KEYS]),
+          ("C level-selftest（选级向量）", ["level-selftest", VEC_ID_LEVEL]),
+          ("C nonce-selftest（nonce 向量）", ["nonce-selftest", VEC_ID_NONCE]),
+          ("C frame-selftest（整帧向量）", ["frame-selftest", VEC_ID_FRAME])]),
     ]
     exes = {}
     with tempfile.TemporaryDirectory() as td:
@@ -1224,6 +1388,51 @@ def main():
                 print("FAIL ECDSA/OpenSSL 验签环节出错：%r" % (e,))
                 fails.append("ECDSA/OpenSSL 验签")
 
+        # ---- ★ c4-γ-1：让上游 verify_report 收下 **C 产出的整帧**（= 上机要看的那一条）----
+        #   上机前能把判据先跑一遍的关键一步：固件发出的字节与这里**同一条流水线**
+        #   （proto/id_build.c），差别只有"经不经 UART/空口"。这里过了，上机就差传输。
+        if proto is not None and "id_cli" in exes:
+            import json as _json
+            ks2 = o.KeyStore()
+            ks2.register(o.Device(sn="CN-WH01-9AF3C1D2", gen=ID_FLOW_GEN),
+                         model="bench-c4g1", firmware="c4g1")
+            n_ok = 0
+            for mode, ent, ctr, fw in ID_FRAME_CASES:
+                se, sg, hm = _id_mode_inputs(o, mode)
+                lvl, _why = o.pick_level(se, sg, hm)
+                args = [exes["id_cli"], "dev-frame", "CN-WH01-9AF3C1D2", str(ID_FLOW_GEN),
+                        mode, str(ent), str(ctr)] + ([fw] if fw != "-" else [])
+                p = _run(args)
+                out = (p.stdout or "").strip()
+                if p.returncode != 0 or out.count("\t") < 4:
+                    print("FAIL id_cli dev-frame 未产出（mode=%s rc=%s out=%r）"
+                          % (mode, p.returncode, out))
+                    fails.append("id_cli dev-frame（%s）" % mode)
+                    break
+                frame = bytes.fromhex(out.split("\t")[2])
+                got = proto.parse_eth_frame(frame)      # 帧解析也用上游（单一源）
+                if got is None:
+                    print("FAIL C 产出的不是合法 ORPAH 以太帧（mode=%s）" % mode)
+                    fails.append("以太帧不合法（%s）" % mode)
+                    break
+                env = _json.loads(got[1].decode("utf-8"))
+                # ⚠ 信封里的内层已签报文在 **report** 键下（不是 payload）—— 传错会得到 bad_format
+                # ⚠ nonce 去重缓存**每例一份**：向量里多个模式用同一条 nonce（同 ent/ctr），
+                #    共用缓存会把第 2 条以后当重放拒掉（那是测试自己造成的假失败）。
+                v = o.verify_report(env.get("report"), ks2, used_nonces=o.NonceCache())
+                if lvl in (0, 1, 2):
+                    if not v.get("accepted") or int(v.get("level", -1)) != lvl:
+                        print("FAIL 上游不接受 C 的整帧：mode=%s level=%s accepted=%s error=%s"
+                              % (mode, lvl, v.get("accepted"), v.get("error")))
+                        fails.append("上游不接受整帧（%s）" % mode)
+                    else:
+                        n_ok += 1
+                else:
+                    print("   [info] L3(alg=none) 整帧：accepted=%s coverage_only=%s"
+                          % (v.get("accepted"), v.get("coverage_only")))
+            if n_ok:
+                print("PASS 上游 verify_report 收下 C 产出的整帧（%d 条 level=0/1/2）" % n_ok)
+
     print("-" * 66)
     if fails:
         print("FAIL %d 项未过：%s" % (len(fails), fails))
@@ -1233,7 +1442,8 @@ def main():
         return 0
     print("PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 / JCS / b64url / 报文信封 / "
           "下行解码 / SHA-256 / HMAC / 已签报文 / HGIC 帧构造 / HGIC 流解析 / HGIC 控制面 / "
-          "P-256 公钥派生 / ECDSA 签名（RFC 6979，含 RFC §A.2.5 官方向量）十四组）")
+          "P-256 公钥派生 / ECDSA 签名（RFC 6979，含 RFC §A.2.5 官方向量）/ "
+          "ID 流水线（§8.2 选级 + 演示密钥 + nonce + 整帧）十五组）")
     return 0
 
 

@@ -1,0 +1,18 @@
+# proto/test_vectors_id_level.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**
+# 来源（单一源）：orpah_id.pick_level() + LEVEL_MODES（§8.1/§8.2）
+# 列：level<TAB><se_ok><TAB><sign_ok><TAB><hmac_ok><TAB><level><TAB><reason>
+#     mode <TAB><name><TAB><se_ok><TAB><sign_ok><TAB><hmac_ok>
+#     order<TAB><name1,name2,name3,name4>（= 上游字典的插入序，C 侧模式表要一模一样）
+level	0	0	0	3	no_key
+level	0	0	1	2	se_unavailable
+level	0	1	0	3	no_key
+level	0	1	1	2	se_unavailable
+level	1	0	0	1	slot0_sign_failed
+level	1	0	1	1	slot0_sign_failed
+level	1	1	0	0	normal
+level	1	1	1	0	normal
+mode	auto	1	1	1
+mode	sign_fail	1	0	1
+mode	se_fail	0	1	1
+mode	no_key	0	1	0
+order	auto,sign_fail,se_fail,no_key

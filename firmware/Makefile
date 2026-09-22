@@ -68,6 +68,7 @@ endif
 
 # 固件自己的源文件。
 SRCS = Core/main.c \
+       Core/id_core.c \
        Periph/gpio.c \
        Periph/uart.c \
        Periph/hgic_uart.c
@@ -80,10 +81,9 @@ SRCS = Core/main.c \
 # ⚠ 引脚/端口口径仍是**待定**（`Core/board.h` 的 MODULE_* 宏）；定板后只改 board.h。
 PROTO_SRCS = sn.c jcs.c b64url.c msg.c downlink.c sha256.c hmac.c id_report.c hgic.c
 # ★ c4-β-3（2026-09-22）：`id_report.c` 的 level=0 路径要 P-256/ECDSA/RFC 6979。
-#   现在 main 还没调 `idr_build`，所以 `--gc-sections` 会把它们整个丢掉（尺寸不变）；
-#   等 c4-γ 真的上报时它们才会进镜像 —— 先把编译单元挂上，避免那时才发现链接缺符号。
-PROTO_SRCS += p256.c rfc6979.c ecdsa.c
-
+# ★ c4-γ-1（2026-09-22）：设备侧**流水线**（选级/演示密钥/nonce）已接进主循环（`Core/id_core.c`）
+#   ⇒ 这五个文件现在是**真被调用**的（不再是 gc 丢掉的死代码）。
+PROTO_SRCS += id_build.c id_level.c id_keys.c id_nonce.c p256.c rfc6979.c ecdsa.c
 OBJS = $(addprefix $(BUILD)/, $(SRCS:.c=.o))
 OBJS += $(addprefix $(BUILD)/proto/, $(PROTO_SRCS:.c=.o))
 OBJS += $(BUILD)/startup.o

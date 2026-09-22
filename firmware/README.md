@@ -164,9 +164,22 @@ WCHISPTool 流程：按住 `BOOT` → 按/放 `RST` → 松 `BOOT` → 选 `buil
 
 ## 下一步（别在这里自由发挥，按阶段来）
 
-- **c4（进行中）**：把手边的协议内核实接进主循环 —— §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）
-  + 自限频 + 已签 `ORPAH-ID-REPORT`（`proto/id_report.c` 的 level=1/2 已在 PC 上过服务端验签，
-  还剩 level=0 接进 `idr_build()`，见 `../ROADMAP.md` §五）。
+- **c4（进行中）**：把协议内核实接进主循环 —— §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）
+  + 自限频 + 已签 `ORPAH-ID-REPORT`。
+  · **c4-γ-1 ✅（2026-09-22，未上机）**：主循环已接上（`Core/id_core.c`，流水线本体在
+    `../proto/id_build.c`；两侧**同一份源码**）。上电后**每 60 s**（= 设计常态）自动发一条；
+    控制台新增 `id`（状态/计数）、`idsend`（立即发，受自限频约束）、`idhex`（把上一帧打成 hex，
+    拿去 PC 侧 `tools\check_report_hex.py` 判一次）、`idmodes` / `idlevel <m>`（§8.2 故障注入）。
+  · 判据（PC 上已过）：`python ../proto\run_cross_test.py` → exit 0，**15 组**；
+    其中★**上游 `verify_report()` 收下 C 产出的整帧**（level=0/1/2 全过）。
+  · 实测尺寸：`text 25916 / data 10 / bss 20208`；`_ebss`→栈顶 = **4420 B** 可用栈（
+    `size` 报的 bss 把 NOLOAD 的 heap 标记也算进去了）；签名路径静态栈用量最深处 ≈ **2.4 KB**
+    （`-fstack-usage` 实测：`idr_build` 1024 + `p256_point_mul` 576 + `ecdsa_sign_p256` 432 …）。
+  · ⚠ **未上机**：刷进去之后看控制台 `[id] sent …`（含 `build_ms=`，8 MHz 上签名是秒级）与
+    模组 AT 口的 `[mbus tx] …`；`idhex` 的 hex 贴到 `tools\check_report_hex.py` 应 PASS。
+  · 如实：本 demo 的 `se_ok` 是**软件 P-256 替身**（SE 在 d 步）⇒ `level=0` 是演示级；
+    `payload.nonce` 用的是**软熵后端**（非生产强度，见 `../proto/id_nonce.h`）。
+  · **c4-γ-2（待做）**：ATECC608B 接上后把 nonce 后端换成它的 `Random(0x1B)`（交换点一处）。
 - **c3 剩**：`send <hex>` 已在控制台可用（把 hex 解成以太帧走数据口）；
   模组收上来的帧现在只打摘要，**还没交给协议栈**（c4 才接）。
 - **d 步**：ATECC608B 驱动（Slot 0 私钥不可导出）+ 产线烧录流程。
