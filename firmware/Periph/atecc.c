@@ -270,6 +270,7 @@ int atecc_selftest(void)
 {
     uint8_t r[ATECC_RANDOM_BYTES];
     char hex[ATECC_NONCE_BYTES * 2 + 1];
+    i2c_stats_t ist;
     int rc;
     uint32_t i;
 
@@ -280,6 +281,17 @@ int atecc_selftest(void)
     if (rc != 0) {
         uart_printf(CONSOLE_UART, "[se] 没应答 ⇒ 查三件事：3V3 供电 / SDA(PB7)-SCL(PB6) 接线 "
                                   "/ 4.7k 上拉\r\n");
+        /* ★ 只读诊断（2026-09-22 加，c4-γ-2 第一次上机）：把**总线层**的计数打出来，
+         *   让下一次上机**一次**分清"软件还是硬件" —— 光看 `NO ACK` 是分不出的：
+         *     nack > 0            ⇒ 总线走通了、地址也发出去了，只是**器件没应答**
+         *                            ⇒ 才轮到查供电/接线/上拉（硬件）；
+         *     nack = 0, timeout>0 ⇒ 连 START/时钟都没走完 ⇒ 查 SCL 有没有被钉住、外设使能没；
+         *     两个都是 0          ⇒ 压根没走到总线（`i2c_probe()` 之前就返回了）。
+         *   计数是**累计**的（含开机时 `atecc_init()` 那次探针），只回答"有没有过 NACK"。*/
+        i2c_stats(&ist);
+        uart_printf(CONSOLE_UART, "[se] i2c: start=%u tx=%u rx=%u nack=%u timeout=%u\r\n",
+                    (unsigned)ist.start, (unsigned)ist.tx_bytes, (unsigned)ist.rx_bytes,
+                    (unsigned)ist.nack, (unsigned)ist.timeout);
         return rc;
     }
     rc = atecc_random(r);

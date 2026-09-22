@@ -115,8 +115,12 @@ int i2c_probe(uint8_t addr7)
 {
     int rc;
 
-    rc = wait_flag(I2C_STAR1_SB, 0u, I2C_TIMEOUT_MS);
-    if (rc != IT_OK) { return rc; }
+    /* ★ 顺序只能是「先发 START，再等 SB」（2026-09-22 上机踩坑，c4-γ-2 第一次上机）：
+     *   `i2c_disable()`/`i2c_enable()` 会把外设状态机复位 ⇒ 进这个函数时 SB **必为 0**；
+     *   而 SB 只由硬件在 START 真的发出去之后才置起 ⇒ 若在 START 之前等 SB，
+     *   这一等就是把 20 ms 超时耗光、返回 IT_TIMEOUT —— 现象是
+     *   `[se] wake: NO ACK (ok=0 fail=N)` 里 **ok 恒为 0**（从没成功过一次），
+     *   而接线/供电全对也一样，白查三件事。**别把等待挪到 START 前面**。*/
     I2C1->CTLR1 |= I2C_CTLR1_START;
     rc = wait_flag(I2C_STAR1_SB, 0u, I2C_TIMEOUT_MS);
     if (rc != IT_OK) { return rc; }
