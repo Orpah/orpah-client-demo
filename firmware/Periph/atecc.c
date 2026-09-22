@@ -428,19 +428,21 @@ int atecc_line_test(uint32_t seconds)
     gpio_set_mode(SE_I2C_PORT, SE_SCL_PIN, GPIO_MODE_OUT_OD_2MHZ);
     gpio_set_mode(SE_I2C_PORT, SE_SDA_PIN, GPIO_MODE_OUT_OD_2MHZ);
 
-    uart_printf(CONSOLE_UART, "\r\n[line] SCL(PB%u)/SDA(PB%u) 当 GPIO 开漏翻转 %u s（~2 Hz）：\r\n"
-                             "       现在把探头/表笔沿路逐点量 —— 哪一段不翻就是那一段断\r\n"
-                             "       （nano 排针 → 杜邦线 → 面包板孔 → 转接板孔 → 芯片脚）\r\n",
+    uart_printf(CONSOLE_UART, "\r\n[line] SCL(PB%u) **2 Hz** / SDA(PB%u) **1 Hz**，翻转 %u s\r\n"
+                             "       两条线用**不同频率**是有意的：逐只点芯片的脚时，\r\n"
+                             "       快翻转的那只 = SCL 网、慢翻转的那只 = SDA 网\r\n"
+                             "       （恒定高 = VCC、恒定低 = GND、不动 = NC）—— 不需要知道脚号\r\n",
                 (unsigned)SE_SCL_PIN, (unsigned)SE_SDA_PIN, (unsigned)seconds);
 
     for (n = 0u; n < seconds * 4u; n++) {
-        uint8_t lv = (n & 1u) ? 1u : 0u;
+        uint8_t scl = (n & 1u) ? 1u : 0u;           /* 每 250 ms 翻一次 = 2 Hz */
+        uint8_t sda = ((n >> 1) & 1u) ? 1u : 0u;    /* 每 500 ms 翻一次 = 1 Hz（SCL 的一半）*/
 
-        gpio_set_pin(SE_I2C_PORT, SE_SCL_PIN, lv);
-        gpio_set_pin(SE_I2C_PORT, SE_SDA_PIN, lv);
+        gpio_set_pin(SE_I2C_PORT, SE_SCL_PIN, scl);
+        gpio_set_pin(SE_I2C_PORT, SE_SDA_PIN, sda);
         uart_printf(CONSOLE_UART, "[line] %u/%u  SCL=%u SDA=%u\r\n",
                     (unsigned)(n + 1u), (unsigned)(seconds * 4u),
-                    (unsigned)lv, (unsigned)lv);
+                    (unsigned)scl, (unsigned)sda);
         deadline = g_tick_ms + half;
         while ((int32_t)(g_tick_ms - deadline) < 0) { }
     }
