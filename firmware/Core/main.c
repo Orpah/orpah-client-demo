@@ -235,8 +235,9 @@ static void print_help(void)
     uart_printf(CONSOLE_UART, "  idmodes      -> 8.2 fault-injection modes -> level\r\n");
     uart_printf(CONSOLE_UART, "  idlevel <m>  -> set mode: auto|sign_fail|se_fail|no_key\r\n");
     uart_printf(CONSOLE_UART, "  seline [1-9] -> bench: toggle SCL/SDA as GPIO open-drain (~2 Hz)\r\n");
-    uart_printf(CONSOLE_UART, "  sewake       -> bench: pulse only, probe 0x00/0x60/0x61, then Random anyway\r\n");
+    uart_printf(CONSOLE_UART, "  sewake       -> bench: scan all 7-bit addrs (before/after pulse), then Random\r\n");
     uart_printf(CONSOLE_UART, "  seclk <khz>  -> bench: set I2C clock (wake token must be <=100 kHz)\r\n");
+    uart_printf(CONSOLE_UART, "  seaddr <h>   -> bench: set device 7-bit addr in hex (e.g. 35)\r\n");
 }
 
 static void run_cmd(const char *cmd)
@@ -277,6 +278,28 @@ static void run_cmd(const char *cmd)
         }
         uart_printf(CONSOLE_UART, "\r\n[seclk] I2C 现在是 %u kHz\r\n",
                     (unsigned)(i2c_get_hz() / 1000u));
+    } else if (str_starts(cmd, "seaddr")) {
+        /* 工装：手动设 7 位器件地址（手册第 13 页：608B 的地址可编程）。*/
+        uint32_t v = 0u, ndig = 0u;
+        const char *a = cmd + 6;
+
+        while (*a == ' ') { a++; }
+        for (; *a != '\0' && ndig < 2u; a++) {
+            uint32_t d;
+            char ch = *a;
+
+            if (ch >= '0' && ch <= '9') { d = (uint32_t)(ch - '0'); }
+            else if (ch >= 'a' && ch <= 'f') { d = (uint32_t)(ch - 'a') + 10u; }
+            else if (ch >= 'A' && ch <= 'F') { d = (uint32_t)(ch - 'A') + 10u; }
+            else { break; }
+            v = v * 16u + d;
+            ndig++;
+        }
+        if (ndig > 0u && v <= 0x7Fu) {
+            atecc_set_addr((uint8_t)v);
+        }
+        uart_printf(CONSOLE_UART, "\r\n[seaddr] 器件地址现在是 0x%02x\r\n",
+                    (unsigned)atecc_get_addr());
     } else if (idc_console(cmd, g_tick_ms)) {
         /* 已签 ID 任务的控制台命令（id / idsend / idhex / idmodes / idlevel）*/
     } else if (*cmd != '\0') {

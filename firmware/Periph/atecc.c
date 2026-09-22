@@ -34,6 +34,24 @@
 #define ATECC_WAKE_GAP_US       2000u
 
 static atecc_stats_t s_st;
+
+/* ★ 命令用的 7 位地址（缺省 = `i2c.h` 的 `I2C_ADDR_ATECC`）。
+ * 为什么做成可设（2026-09-23）：手册第 13 页明写 **ATECC608B 的 I²C 地址是可编程的**
+ * （"Programmable I2C address after data (secret) zone lock"），而公开资料里实测到的
+ * 7 位地址有 **0x35**（`i2cdetect` 直接看得到）这类**不是 0x60** 的例子。
+ * 我们以前把 0x60 写死 ⇒ 如果这颗不是 0x60，就会表现为"接线全对、永远 NACK"。
+ * ⇒ `sewake` 扫到谁就用谁（`s_addr = 找到的地址`），控制台也可手动 `seaddr <hex>`。*/
+static uint8_t s_addr = I2C_ADDR_ATECC;
+
+void atecc_set_addr(uint8_t addr7)
+{
+    s_addr = (uint8_t)(addr7 & 0x7Fu);
+}
+
+uint8_t atecc_get_addr(void)
+{
+    return s_addr;
+}
 static int s_present;
 static int s_probed;                    /* 探过了没（`atecc_init()` 幂等，见下）*/
 static int s_crc_mode = -1;             /* -1 = 还没判出来 */
@@ -125,13 +143,13 @@ static int transact(const uint8_t *pkt, uint32_t pktlen,
     for (i = 0u; i < pktlen; i++) {
         wbuf[1u + i] = pkt[i];
     }
-    rc = i2c_write(I2C_ADDR_ATECC, wbuf, 1u + pktlen);
+    rc = i2c_write(s_addr, wbuf, 1u + pktlen);
     if (rc != 0) {
         return ATECC_E_IO;
     }
 
     /* ③ 收响应：先 4 字节 count（这一段事务**要保持打开**）*/
-    rc = i2c_read_begin(I2C_ADDR_ATECC, ATECC_WORD_ADDR);
+    rc = i2c_read_begin(s_addr, ATECC_WORD_ADDR);
     if (rc != 0) {
         return ATECC_E_IO;
     }
@@ -331,10 +349,10 @@ int atecc_selftest(void)
          *     两个都是 0          ⇒ 压根没走到总线（`i2c_probe()` 之前就返回了）。
          *   计数是**累计**的（含开机时 `atecc_init()` 那次探针），只回答"有没有过 NACK"。*/
         i2c_stats(&ist);
-        uart_printf(CONSOLE_UART, "[se] i2c: start=%u tx=%u rx=%u nack=%u timeout=%u hz=%u\r\n",
+        uart_printf(CONSOLE_UART, "[se] i2c: start=%u tx=%u rx=%u nack=%u timeout=%u hz=%u addr=0x%02x\r\n",
                     (unsigned)ist.start, (unsigned)ist.tx_bytes, (unsigned)ist.rx_bytes,
                     (unsigned)ist.nack, (unsigned)ist.timeout,
-                    (unsigned)(i2c_get_hz() / 1000u));
+                    (unsigned)(i2c_get_hz() / 1000u), (unsigned)s_addr);
         return rc;
     }
     rc = atecc_random(r);
@@ -359,56 +377,82 @@ int atecc_selftest(void)
 /* ------------------------------------------------------------------ */
 /* 工装：不信"唤醒令牌没 ACK"就等于器件不在（把握手拆开逐条看）              */
 /* ------------------------------------------------------------------ */
+/* 工装：扫 7 位地址 0x08~0x7F（0x00~0x07 是 I²C 保留区，不扫）。返回第一个应答的地址，0 = 无。*/
+static uint8_t diag_scan(const char *tag)
+{
+    uint8_t a, found = 0u;
+    uint32_t n = 0u;
+
+    uart_printf(CONSOLE_UART, "[sewake] %s：扫 0x08~0x7F -> ", tag);
+    for (a = 0x08u; a <= 0x7Fu; a++) {
+        if (i2c_probe(a) == 0) {
+            uart_printf(CONSOLE_UART, "0x%02x(ACK) ", (unsigned)a);
+            if (found == 0u) { found = a; }
+            n++;
+        }
+    }
+    if (n == 0u) {
+        uart_printf(CONSOLE_UART, "**无任何器件应答**\r\n");
+    } else {
+        uart_printf(CONSOLE_UART, "（共 %u 个）\r\n", (unsigned)n);
+    }
+    return found;
+}
+
 int atecc_diag_probe(void)
 {
-    static const uint8_t addrs[3] = { ATECC_WAKE_TOKEN_ADDR, I2C_ADDR_ATECC,
-                                      (uint8_t)(I2C_ADDR_ATECC + 1u) };
     uint8_t pkt[ATECC_CMD_LEN_CRC];
     uint8_t resp[ATECC_RESP_LEN_CRC];
     uint8_t r32[ATECC_RANDOM_BYTES];
+    uint8_t hit;
     char hex[ATECC_NONCE_BYTES * 2 + 1];
     uint32_t i, pklen, replen = 0u;
     int rc;
 
-    /* 为什么做这条（2026-09-23 现场：接线已核对、两种接法都不通、总线全好却永远 NACK）：
-     *   · 手册表 2-2 写的是 `tWHI = "Wake High Delay **to Data Comm**"` ⇒
-     *     脉冲 + tWHI 之后就可以**数据通信**；而"地址 0x00 的唤醒令牌"是
-     *     **器件在 Sleep 态**才会应答的东西。若器件**已经在 Idle/唤醒态**，
-     *     它对 0x00 会回 **NACK**（0x00 不是它的地址）。
-     *   · 而我们的固件"令牌没 ACK 就早退" ⇒ **从来没试过后面的命令**。
-     * ⇒ 这条工装：① 只打脉冲（不判 ACK）；② 逐地址探测看谁应答；③ **直接把
-     *   `Random` 命令发出去**（用器件真地址 0x60）。三种结果分别对应：
-     *     "器件不在" / "器件在、但握手语义与我们假设的不同" / "命令能通（那就是早退错了）"。*/
-    uart_printf(CONSOLE_UART, "\r\n[sewake] I2C=%u kHz；只打脉冲 + 等 tWHI（**不判唤醒 ACK**）\r\n",
-                (unsigned)(i2c_get_hz() / 1000u));
-    wake_pulse();
+    /* 为什么做这条（2026-09-23 现场：接线/供电/总线/时钟/时序全部实测排除，仍永远 NACK）：
+     *   · 手册第 13 页：**608B 的 I²C 地址是可编程的** ⇒ 不一定是 0x60；
+     *     公开实测里就有 **0x35**（`i2cdetect` 看得到）、而 0x35/0x6A 在 CryptoAuthLib
+     *     的地址表里被归为另一个型号。**我们以前把 0x60 写死，从来没扫过其他地址**。
+     *   · 另外"地址 0x00 的唤醒令牌"是**器件在 Sleep 态**才应答的东西；器件若一直在
+     *     Idle，它对 0x00 会回 NACK —— 而旧固件在这种情形下**从来没试过后面的命令**。
+     * ⇒ 这条工装：① 先扫一遍（器件若没睡，无需唤醒）；② 脉冲 + tWHI 后再扫一遍
+     *   （器件若在 Sleep，这一步把它叫醒）；③ 对找到的地址**直接发 Random**。
+     *   扫到谁就把 `s_addr` 设成谁 ⇒ 后面的 `se` 也跟着用这个地址。*/
+    uart_printf(CONSOLE_UART, "\r\n[sewake] I2C=%u kHz，命令地址当前=0x%02x\r\n",
+                (unsigned)(i2c_get_hz() / 1000u), (unsigned)s_addr);
 
-    for (i = 0u; i < sizeof(addrs); i++) {
-        rc = i2c_probe(addrs[i]);
-        uart_printf(CONSOLE_UART, "[sewake] 探地址 0x%02x -> %s (rc=%d)\r\n",
-                    (unsigned)addrs[i], (rc == 0) ? "ACK！" : "无 ACK", rc);
+    hit = diag_scan("① 未脉冲");
+    if (hit == 0u) {
+        wake_pulse();
+        hit = diag_scan("② 脉冲+tWHI 后");
     }
+    if (hit == 0u) {
+        uart_printf(CONSOLE_UART, "[sewake] 全地址扫描也无人应答 ⇒ 器件侧确实没反应"
+                                 "（供电/焊接/坏件 —— 但已不可能是「地址写错」）\r\n");
+        return ATECC_E_WAKE;
+    }
+    s_addr = hit;
+    uart_printf(CONSOLE_UART, "[sewake] ★ 器件在 0x%02x ⇒ 已把命令地址改成它，接着直接发 Random\r\n",
+                (unsigned)hit);
 
     pklen = (uint32_t)atecc_msg_random(pkt, sizeof(pkt), ATECC_MODE_SEED_UPDATE, 0);
-    uart_printf(CONSOLE_UART, "[sewake] 不等任何 ACK，直接发 Random(%u B, 无CRC) -> ",
-                (unsigned)pklen);
     rc = transact(pkt, pklen, resp, sizeof(resp), &replen);
     if (rc != 0) {
-        uart_printf(CONSOLE_UART, "transact 失败 rc=%d（last_resp_len=%u）\r\n",
+        uart_printf(CONSOLE_UART, "[sewake] Random transact 失败 rc=%d（last_resp_len=%u）\r\n",
                     rc, (unsigned)s_st.last_resp_len);
         return rc;
     }
-    uart_printf(CONSOLE_UART, "收到 %u B：", (unsigned)replen);
+    uart_printf(CONSOLE_UART, "[sewake] 收到 %u B：", (unsigned)replen);
     for (i = 0u; i < replen && i < 12u; i++) {
         uart_printf(CONSOLE_UART, "%02x", resp[i]);
     }
     uart_printf(CONSOLE_UART, "\r\n");
     if (atecc_msg_resp_random(resp, (size_t)replen, r32) == 0) {
         idn_hex_upper(r32, ATECC_NONCE_BYTES, hex);
-        uart_printf(CONSOLE_UART, "[sewake] ★ 器件回了合法 Random！前 16 B = %s\r\n", hex);
+        uart_printf(CONSOLE_UART, "[sewake] ★★ 器件回了合法 Random！前 16 B = %s\r\n", hex);
         return 0;
     }
-    uart_printf(CONSOLE_UART, "[sewake] 响应解析不过（长度/CRC/count 对不上）\r\n");
+    uart_printf(CONSOLE_UART, "[sewake] 响应解析不过（长度/CRC/count 对不上）——可能线上带 CRC\r\n");
     return ATECC_E_RESP;
 }
 

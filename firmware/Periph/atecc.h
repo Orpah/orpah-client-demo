@@ -82,6 +82,12 @@ int atecc_line_test(uint32_t seconds);
  * 而"地址 0x00 的唤醒令牌"是**器件在 Sleep 态**才应答的东西 —— 器件若已在 Idle，
  * 它对 0x00 会回 NACK，而旧固件在这种情形下**从来没试过后面的命令**。返回 0 = 命令通了。*/
 int atecc_diag_probe(void);
+
+/* ★ 命令用的 7 位器件地址（缺省 = `i2c.h` 的 `I2C_ADDR_ATECC`）。
+ * 依据：手册第 13 页 "Programmable I2C address after data (secret) zone lock"
+ * ⇒ 608B 的地址**可编程**，不一定是 0x60；公开实测里有 0x35 这类例子。*/
+void    atecc_set_addr(uint8_t addr7);
+uint8_t atecc_get_addr(void);
 void atecc_stats(atecc_stats_t *out);
 
 /* 给 `proto/id_build.c` 用的 nonce provider（`idb_nonce_fn` 的形状）：
