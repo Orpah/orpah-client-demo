@@ -82,6 +82,9 @@ def read_until(ser, pred, timeout, chunk=0.05):
 def main():
     ap = argparse.ArgumentParser(description="c4-γ-1 上机判据（PC 侧一键）")
     ap.add_argument("--port", default="COM23", help="固件控制台串口（默认 COM23）")
+    ap.add_argument("--mod-port", default="COM24",
+                    help="模组 AT/打印口（默认 COM24；打不开就只报「模组侧未确认」，不当失败）")
+    ap.add_argument("--no-mod-port", action="store_true", help="不看模组打印口")
     ap.add_argument("--baud", type=int, default=BAUD)
     ap.add_argument("--timeout", type=float, default=25.0, help="每一步的等待上限（秒）")
     ap.add_argument("--no-idsend", action="store_true", help="不主动 idsend，只 dump 上一帧")
@@ -96,6 +99,7 @@ def main():
         except Exception:                                       # noqa: BLE001
             pass
 
+    mod_buf = ""          # 模组打印口抓到的内容（--from-file 时为空的）
     if args.from_file:
         text = open(args.from_file, encoding="utf-8", errors="replace").read()
         print("（离线模式：解析 %s，%d 字符）" % (args.from_file, len(text)))
@@ -133,11 +137,28 @@ def main():
             print("PASS 固件活着（`AT` → `OK`）")
             if "orpah-client" in t:
                 print("（顺便收到横幅片段）")
-            # ② idsend（默认）
+            # ② idsend（默认）+ ★ 同时看模组打印口（= "帧真的进了模组"的证据）
+            mod = None
+            mod_buf = ""
+            if args.mod_port and not args.no_mod_port:
+                try:
+                    mod = serial.Serial(args.mod_port, args.baud, timeout=0.2)
+                    mod.reset_input_buffer()
+                    print("已打开 %s（模组 AT/打印口）" % args.mod_port)
+                except Exception as e:                              # noqa: BLE001
+                    print("warn 打不开模组打印口 %s：%r（下面只报内容判据）" % (args.mod_port, e))
+                    mod = None
             if not args.no_idsend:
                 ser.write(b"idsend\r\n")
                 t += read_until(ser, lambda b: "[id] sent" in b or "held (self-limit)" in b,
                                 args.timeout)
+            if mod is not None:
+                end = time.monotonic() + 3.0
+                while time.monotonic() < end:
+                    d = mod.read(4096)
+                    if d:
+                        mod_buf += d.decode("utf-8", "replace")
+                mod.close()
             # ③ idhex
             ser.write(b"idhex\r\n")
             t += read_until(ser, lambda b: "no frame yet" in b or RE_HEXLINE.search(b) is not None,
@@ -175,6 +196,26 @@ def main():
     if o is None:
         return 1
     rc = judge(o, proto, bytes.fromhex(h))
+
+    # ---- ★ 模组侧确认：模组打印口上应当出现 `[mbus rx] <8+len> byte(s)`（8 = HGIC 头）----
+    mod_verdict = "skip"
+    if mod_buf or (args.mod_port and not args.no_mod_port and not args.from_file):
+        want = "%d byte(s)" % (len(h) // 2 + 8)
+        rx = re.findall(r"\[mbus rx\]\s+(\d+)\s+byte", mod_buf)
+        if not mod_buf.strip():
+            mod_verdict = "silent"
+            print("warn 模组打印口没有任何输出 —— 模组在跑吗？供电/接线/跳线帽")
+        elif want in mod_buf:
+            mod_verdict = "ok"
+            print("PASS 模组侧确认：打印口出现 `[mbus rx] %s`（= 8 B HGIC 头 + %d B 帧）"
+                  % (want, len(h) // 2))
+        else:
+            head = mod_buf.strip().splitlines()[-6:]
+            print("FAIL 模组打印口没看到 `[mbus rx] %s`；本轮看到的字节数：%s"
+                  % (want, rx[:8] or "(无)"))
+            for ln in head:
+                print("   | " + ln[:120])
+
     print("=" * 60)
     if rc == 0:
         print("PASS c4-γ-1 上机判据：固件产出的帧**被上游接受**")
