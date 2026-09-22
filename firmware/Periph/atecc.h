@@ -10,6 +10,12 @@
  *   · 上电后 `tPU ≥ 100 µs` 才能拉 SDA；
  *   · `tWLO ≥ 60 µs`（SDA 拉低）；
  *   · `tWHI ≥ 1500 µs`（SDA 拉高后到能发数据）；
+ *   · **`tWHIST ≥ 20 ms`（使能自检时！）** —— 手册同一张表列的是**两个情形**：
+ *     未使能自检 `tWHI ≥ 1500 µs`、**使能自检 `tWHIST ≥ 20 ms`**；两行的说明都写着
+ *     "SDA should be stable high for this entire duration **unless polling is implemented**"
+ *     （`tPU` 那行还补了"使能上电自检时上电延时会长得多"）
+ *     ⇒ 所以 `atecc_wake()` **每轮重做整段唤醒序列、最多 `ATECC_WAKE_TRIES` 次**：
+ *       只等 1.7 ms 且只发一次令牌时，**自检使能的正常芯片也会回 NACK**（2026-09-22 上机现象）。
  *   · `tWATCHDOG 0.7/1.3/1.7 s`：唤醒后这么久没收到**合法命令**就自己回睡。
  *   ⇒ 所以**每条命令前都要唤醒**（我们 60 s 才发一次 ID，中间它早睡了）。
  *   ⚠ 拉低 SDA 那一下必须把 **I2C 外设先关掉**（`i2c_disable`）：否则外设会把
@@ -32,6 +38,10 @@
 typedef struct {
     uint32_t wake_ok;        /* 唤醒后收到 ACK 的次数 */
     uint32_t wake_fail;      /* 唤醒没 ACK 的次数（没接线/没供电/睡着了）*/
+    uint32_t last_wake_tries;/* 最近一次唤醒**轮询了几次令牌**（1 = 第一次就 ACK）——
+                              * ★ 这个数就是"这颗芯片到底要等多久"的**实测值**：
+                              *   1 ⇒ 普通情形（tWHI ≥1.5 ms 就够）；远大于 1 ⇒ 它在自检
+                              *   （手册 tWHIST ≥20 ms，见 `atecc.c` 的 `atecc_wake()`）。*/
     uint32_t cmd;            /* 发出去的命令条数 */
     uint32_t ok;             /* 成功取到 32 字节的次数 */
     uint32_t fail;           /* 失败次数 */

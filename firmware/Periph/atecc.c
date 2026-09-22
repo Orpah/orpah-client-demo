@@ -27,6 +27,11 @@
 #define ATECC_WORD_ADDR         0x03u
 #define ATECC_WAKE_TOKEN_ADDR   0x00u
 #define ATECC_PWRUP_US          200u    /* > tPU(100 µs)，多给一倍余量 */
+/* ★ 唤醒令牌的轮询次数与间隔（2026-09-22，依据=摘要手册表 2-2，见 `atecc_wake()` 的注释）：
+ *   手册允许用"轮询"代替干等，而**使能自检时**要等 `tWHIST ≥ 20 ms` 才收令牌。
+ *   6 次 × 间隔（`i2c_delay_us(2000)` 实测 ≈ 8~10 ms）≈ 50 ms ⇒ 覆盖 20 ms 有余量。*/
+#define ATECC_WAKE_TRIES        6u
+#define ATECC_WAKE_GAP_US       2000u
 
 static atecc_stats_t s_st;
 static int s_present;
@@ -38,29 +43,53 @@ static int s_crc_mode = -1;             /* -1 = 还没判出来 */
 /* ------------------------------------------------------------------ */
 int atecc_wake(void)
 {
+    uint32_t tries;
     int rc;
 
     /* ① 上电延时（若刚上电；重复调用只是多等 200 µs，无害）*/
     i2c_delay_us(ATECC_PWRUP_US);
 
-    /* ② SDA 拉低 ≥60 µs。**先关外设**，否则它会把这一下当成 START。*/
-    i2c_disable();
-    gpio_set_mode(SE_I2C_PORT, SE_SDA_PIN, GPIO_MODE_OUT_OD_2MHZ);
-    gpio_set_pin(SE_I2C_PORT, SE_SDA_PIN, 0u);
-    i2c_delay_us(100u);                 /* tWLO 下界 60 µs；忙等不可靠 ⇒ 给 100 µs */
+    /* ★ 整段唤醒序列最多重做 `ATECC_WAKE_TRIES` 次（手册表 2-2 明确允许"轮询"）。
+     *   为什么**每轮都重做脉冲**、而不是只重发令牌：脉冲没被器件认到时，
+     *   只重发令牌是没用的（器件根本没进入"要醒"的状态）。
+     *
+     *   ★ 为什么必须轮询（2026-09-22 把摘要手册表 2-2 逐字核出来的，以前漏了这条）：
+     *     同一张表给的是**两个情形** ——
+     *       未使能自检：`tWHI  ≥ 1500 µs`
+     *       **使能自检：`tWHIST ≥ 20   ms`**
+     *     两行的说明都写着 "SDA should be stable high for this entire duration
+     *     **unless polling is implemented**"；而 `tPU` 那行还补了一句
+     *     "The power-up delay will be significantly longer if power-on self test
+     *     is enabled in the Configuration zone."
+     *   ⇒ 只等 1700 µs 且**只发一次**令牌时，一颗**完全正常**的芯片（自检开）也会回 NACK
+     *     —— 现象就是 `[se] wake: NO ACK` 而 `nack` 逐帧 +1、`timeout=0`
+     *     （总线全好、器件不应答），正是我们上机看到的那一版。
+     *   ⇒ `tries=` 打在 `se` 的判据行上："第几次才 ACK"就是**这颗芯片到底要多久**的实测值。*/
+    for (tries = 0u; tries < ATECC_WAKE_TRIES; tries++) {
+        /* ② 唤醒脉冲：SDA 拉低 ≥60 µs。**先关外设**，否则它会把这一下当成 START。*/
+        i2c_disable();
+        gpio_set_mode(SE_I2C_PORT, SE_SDA_PIN, GPIO_MODE_OUT_OD_2MHZ);
+        gpio_set_pin(SE_I2C_PORT, SE_SDA_PIN, 0u);
+        i2c_delay_us(100u);             /* tWLO 下界 60 µs；忙等不可靠 ⇒ 给 100 µs */
 
-    /* ③ 放开 SDA（开漏输出 1 = 交给上拉）、回到复用功能，等 tWHI ≥1500 µs */
-    gpio_set_pin(SE_I2C_PORT, SE_SDA_PIN, 1u);
-    gpio_set_mode(SE_I2C_PORT, SE_SDA_PIN, GPIO_MODE_AF_OD_50MHZ);
-    i2c_delay_us(1700u);
-    i2c_enable();
+        /* ③ 放开 SDA（开漏输出 1 = 交给上拉）、回到复用功能，等 tWHI ≥1500 µs */
+        gpio_set_pin(SE_I2C_PORT, SE_SDA_PIN, 1u);
+        gpio_set_mode(SE_I2C_PORT, SE_SDA_PIN, GPIO_MODE_AF_OD_50MHZ);
+        i2c_delay_us(1700u);
+        i2c_enable();
 
-    /* ④ 唤醒令牌：发一个 0x00 字节，器件应答 ACK 才算醒 */
-    rc = i2c_probe(ATECC_WAKE_TOKEN_ADDR);
-    if (rc == 0) {
-        s_st.wake_ok++;
-        return 0;
+        /* ④ 唤醒令牌：0x00 字节（器件应答 ACK 才算醒）*/
+        rc = i2c_probe(ATECC_WAKE_TOKEN_ADDR);
+        if (rc == 0) {
+            s_st.wake_ok++;
+            s_st.last_wake_tries = tries + 1u;
+            return 0;
+        }
+        if (tries + 1u < ATECC_WAKE_TRIES) {
+            i2c_delay_us(ATECC_WAKE_GAP_US);
+        }
     }
+    s_st.last_wake_tries = ATECC_WAKE_TRIES;
     s_st.wake_fail++;
     return ATECC_E_WAKE;
 }
@@ -233,6 +262,7 @@ void atecc_stats(atecc_stats_t *out)
     }
     out->wake_ok       = s_st.wake_ok;
     out->wake_fail     = s_st.wake_fail;
+    out->last_wake_tries = s_st.last_wake_tries;
     out->cmd           = s_st.cmd;
     out->ok            = s_st.ok;
     out->fail          = s_st.fail;
@@ -275,9 +305,10 @@ int atecc_selftest(void)
     uint32_t i;
 
     rc = atecc_wake();
-    uart_printf(CONSOLE_UART, "\r\n[se] wake: %s (ok=%u fail=%u)\r\n",
+    uart_printf(CONSOLE_UART, "\r\n[se] wake: %s (ok=%u fail=%u tries=%u/%u)\r\n",
                 (rc == 0) ? "ACK" : "NO ACK", (unsigned)s_st.wake_ok,
-                (unsigned)s_st.wake_fail);
+                (unsigned)s_st.wake_fail, (unsigned)s_st.last_wake_tries,
+                (unsigned)ATECC_WAKE_TRIES);
     if (rc != 0) {
         uart_printf(CONSOLE_UART, "[se] 没应答 ⇒ 查三件事：3V3 供电 / SDA(PB7)-SCL(PB6) 接线 "
                                   "/ 4.7k 上拉\r\n");
