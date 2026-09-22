@@ -175,9 +175,22 @@ def main():
             # ② `se` 两次（第二次用来证明 RNG 在动）
             for i in (1, 2):
                 ser.write(b"se\r\n")
-                t += read_until(ser, lambda b: "Random(0x1B) 32 B ok" in b or
-                                "Random FAILED" in b or "没应答" in b, args.timeout)
+                chunk = read_until(ser, lambda b: "Random(0x1B) 32 B ok" in b or
+                                   "Random FAILED" in b or "没应答" in b, args.timeout)
+                t += chunk
                 print("（第 %d 次 `se` 已收回）" % i)
+                # ★ `se` 的原始输出要**当场打出来**（2026-09-22 加）：
+                #   原来只打一句"已收回"，而末尾的"控制台（截尾）"早被模组 chatter 挤掉了 ——
+                #   结果是 SE 不工作时我们**看不到** wake 有没有 ACK、rc/last_resp_len/raw 是多少，
+                #   而那三个数正是判断"供电 / 接线 / 上拉 / 响应长度"的唯一依据。
+                se_lines = [ln.strip() for ln in chunk.replace("\r", "\n").split("\n")
+                            if "[se]" in ln]
+                if se_lines:
+                    for ln in se_lines:
+                        print("     | " + ln)
+                else:
+                    print("     | ⚠ 这一轮没读到带 `[se]` 的行 —— `se` 命令没被识别？"
+                          "（固件 `help` 里应有它；看下面的原始输出）")
 
             # ③ `id` ⇒ nonce_src
             ser.write(b"id\r\n")
