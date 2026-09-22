@@ -45,6 +45,23 @@ extern volatile uint32_t g_tick_ms;
 /* ------------------------------------------------------------------ */
 /* 唤醒                                                              */
 /* ------------------------------------------------------------------ */
+/* ② + ③：只做"脉冲 + tWHI"（**不判 ACK**）。
+ * 单独抽出来是因为工装 `atecc_diag_probe()` 要先看"**不把没 ACK 当成器件不在**"会怎样。*/
+static void wake_pulse(void)
+{
+    /* ② 唤醒脉冲：SDA 拉低 ≥60 µs。**先关外设**，否则它会把这一下当成 START。*/
+    i2c_disable();
+    gpio_set_mode(SE_I2C_PORT, SE_SDA_PIN, GPIO_MODE_OUT_OD_2MHZ);
+    gpio_set_pin(SE_I2C_PORT, SE_SDA_PIN, 0u);
+    i2c_delay_us(100u);                 /* tWLO 下界 60 µs；忙等不可靠 ⇒ 给 100 µs */
+
+    /* ③ 放开 SDA（开漏输出 1 = 交给上拉）、回到复用功能，等 tWHI ≥1500 µs */
+    gpio_set_pin(SE_I2C_PORT, SE_SDA_PIN, 1u);
+    gpio_set_mode(SE_I2C_PORT, SE_SDA_PIN, GPIO_MODE_AF_OD_50MHZ);
+    i2c_delay_us(1700u);
+    i2c_enable();
+}
+
 int atecc_wake(void)
 {
     uint32_t tries;
@@ -70,17 +87,7 @@ int atecc_wake(void)
      *     （总线全好、器件不应答），正是我们上机看到的那一版。
      *   ⇒ `tries=` 打在 `se` 的判据行上："第几次才 ACK"就是**这颗芯片到底要多久**的实测值。*/
     for (tries = 0u; tries < ATECC_WAKE_TRIES; tries++) {
-        /* ② 唤醒脉冲：SDA 拉低 ≥60 µs。**先关外设**，否则它会把这一下当成 START。*/
-        i2c_disable();
-        gpio_set_mode(SE_I2C_PORT, SE_SDA_PIN, GPIO_MODE_OUT_OD_2MHZ);
-        gpio_set_pin(SE_I2C_PORT, SE_SDA_PIN, 0u);
-        i2c_delay_us(100u);             /* tWLO 下界 60 µs；忙等不可靠 ⇒ 给 100 µs */
-
-        /* ③ 放开 SDA（开漏输出 1 = 交给上拉）、回到复用功能，等 tWHI ≥1500 µs */
-        gpio_set_pin(SE_I2C_PORT, SE_SDA_PIN, 1u);
-        gpio_set_mode(SE_I2C_PORT, SE_SDA_PIN, GPIO_MODE_AF_OD_50MHZ);
-        i2c_delay_us(1700u);
-        i2c_enable();
+        wake_pulse();
 
         /* ④ 唤醒令牌：0x00 字节（器件应答 ACK 才算醒）*/
         rc = i2c_probe(ATECC_WAKE_TOKEN_ADDR);
@@ -324,9 +331,10 @@ int atecc_selftest(void)
          *     两个都是 0          ⇒ 压根没走到总线（`i2c_probe()` 之前就返回了）。
          *   计数是**累计**的（含开机时 `atecc_init()` 那次探针），只回答"有没有过 NACK"。*/
         i2c_stats(&ist);
-        uart_printf(CONSOLE_UART, "[se] i2c: start=%u tx=%u rx=%u nack=%u timeout=%u\r\n",
+        uart_printf(CONSOLE_UART, "[se] i2c: start=%u tx=%u rx=%u nack=%u timeout=%u hz=%u\r\n",
                     (unsigned)ist.start, (unsigned)ist.tx_bytes, (unsigned)ist.rx_bytes,
-                    (unsigned)ist.nack, (unsigned)ist.timeout);
+                    (unsigned)ist.nack, (unsigned)ist.timeout,
+                    (unsigned)(i2c_get_hz() / 1000u));
         return rc;
     }
     rc = atecc_random(r);
@@ -346,6 +354,62 @@ int atecc_selftest(void)
     idn_hex_upper(r, ATECC_NONCE_BYTES, hex);
     uart_printf(CONSOLE_UART, "[se] Random(0x1B) 32 B ok; 前 16 B = %s\r\n", hex);
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* 工装：不信"唤醒令牌没 ACK"就等于器件不在（把握手拆开逐条看）              */
+/* ------------------------------------------------------------------ */
+int atecc_diag_probe(void)
+{
+    static const uint8_t addrs[3] = { ATECC_WAKE_TOKEN_ADDR, I2C_ADDR_ATECC,
+                                      (uint8_t)(I2C_ADDR_ATECC + 1u) };
+    uint8_t pkt[ATECC_CMD_LEN_CRC];
+    uint8_t resp[ATECC_RESP_LEN_CRC];
+    uint8_t r32[ATECC_RANDOM_BYTES];
+    char hex[ATECC_NONCE_BYTES * 2 + 1];
+    uint32_t i, pklen, replen = 0u;
+    int rc;
+
+    /* 为什么做这条（2026-09-23 现场：接线已核对、两种接法都不通、总线全好却永远 NACK）：
+     *   · 手册表 2-2 写的是 `tWHI = "Wake High Delay **to Data Comm**"` ⇒
+     *     脉冲 + tWHI 之后就可以**数据通信**；而"地址 0x00 的唤醒令牌"是
+     *     **器件在 Sleep 态**才会应答的东西。若器件**已经在 Idle/唤醒态**，
+     *     它对 0x00 会回 **NACK**（0x00 不是它的地址）。
+     *   · 而我们的固件"令牌没 ACK 就早退" ⇒ **从来没试过后面的命令**。
+     * ⇒ 这条工装：① 只打脉冲（不判 ACK）；② 逐地址探测看谁应答；③ **直接把
+     *   `Random` 命令发出去**（用器件真地址 0x60）。三种结果分别对应：
+     *     "器件不在" / "器件在、但握手语义与我们假设的不同" / "命令能通（那就是早退错了）"。*/
+    uart_printf(CONSOLE_UART, "\r\n[sewake] I2C=%u kHz；只打脉冲 + 等 tWHI（**不判唤醒 ACK**）\r\n",
+                (unsigned)(i2c_get_hz() / 1000u));
+    wake_pulse();
+
+    for (i = 0u; i < sizeof(addrs); i++) {
+        rc = i2c_probe(addrs[i]);
+        uart_printf(CONSOLE_UART, "[sewake] 探地址 0x%02x -> %s (rc=%d)\r\n",
+                    (unsigned)addrs[i], (rc == 0) ? "ACK！" : "无 ACK", rc);
+    }
+
+    pklen = (uint32_t)atecc_msg_random(pkt, sizeof(pkt), ATECC_MODE_SEED_UPDATE, 0);
+    uart_printf(CONSOLE_UART, "[sewake] 不等任何 ACK，直接发 Random(%u B, 无CRC) -> ",
+                (unsigned)pklen);
+    rc = transact(pkt, pklen, resp, sizeof(resp), &replen);
+    if (rc != 0) {
+        uart_printf(CONSOLE_UART, "transact 失败 rc=%d（last_resp_len=%u）\r\n",
+                    rc, (unsigned)s_st.last_resp_len);
+        return rc;
+    }
+    uart_printf(CONSOLE_UART, "收到 %u B：", (unsigned)replen);
+    for (i = 0u; i < replen && i < 12u; i++) {
+        uart_printf(CONSOLE_UART, "%02x", resp[i]);
+    }
+    uart_printf(CONSOLE_UART, "\r\n");
+    if (atecc_msg_resp_random(resp, (size_t)replen, r32) == 0) {
+        idn_hex_upper(r32, ATECC_NONCE_BYTES, hex);
+        uart_printf(CONSOLE_UART, "[sewake] ★ 器件回了合法 Random！前 16 B = %s\r\n", hex);
+        return 0;
+    }
+    uart_printf(CONSOLE_UART, "[sewake] 响应解析不过（长度/CRC/count 对不上）\r\n");
+    return ATECC_E_RESP;
 }
 
 /* ------------------------------------------------------------------ */

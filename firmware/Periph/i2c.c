@@ -36,6 +36,24 @@ extern volatile uint32_t g_tick_ms;
 
 static i2c_stats_t s_st;
 
+/* 当前 I²C 速率（工装可改；缺省 = `board.h` 的 `SE_I2C_HZ`）。
+ * ⚠ 唤醒令牌按手册必须 ≤100 kHz ⇒ `seclk` 就是为这条准备的。*/
+static uint32_t s_hz = SE_I2C_HZ;
+
+void i2c_set_hz(uint32_t hz)
+{
+    if (hz < 10000UL || hz > 400000UL) {
+        return;                     /* 越界不动（宁可不改，也别把总线搞成怪的值）*/
+    }
+    s_hz = hz;
+    i2c_init();                     /* 重算 CCR：单一源，不另写一份寄存器序列 */
+}
+
+uint32_t i2c_get_hz(void)
+{
+    return s_hz;
+}
+
 static int expired(uint32_t deadline)
 {
     return (int32_t)(g_tick_ms - deadline) >= 0;
@@ -95,7 +113,13 @@ void i2c_init(void)
     /* FREQ 必须在 PE=0 时写；CCR/TRISE 同理 */
     I2C1->CTLR2 = (I2C1->CTLR2 & ~(uint32_t)I2C_CTLR2_FREQ_MASK) |
                   (I2C_FREQ_MHZ & I2C_CTLR2_FREQ_MASK);
-    I2C1->CKCFGR = I2C_CCR_100K;         /* 标准模式 100 kHz */
+    {
+        /* 标准模式 CCR = fPCLK1 / (2 × 目标速率)；参考手册要求 CCR ≥ 4 */
+        uint32_t ccr = (I2C_FREQ_MHZ * 1000000UL) / (2UL * s_hz);
+
+        if (ccr < 4UL) { ccr = 4UL; }
+        I2C1->CKCFGR = ccr;
+    }
     I2C1->RTR = I2C_TRISE;
     I2C1->OADDR1 = 0u;                   /* 本端只当主机，不用自身地址 */
     i2c_enable();

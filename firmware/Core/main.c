@@ -25,6 +25,7 @@
 #include "hgic.h"          /* proto/ 的帧层：hgic_ctrl_parse / HGIC_CMD_* / HGIC_T_* */
 #include "hgic_uart.h"     /* 本仓的模组数据口驱动 */
 #include "atecc.h"         /* ★ c4-γ-2：安全元件（banner 要打**实测**的 RNG 来源）*/
+#include "i2c.h"           /* 工装 `seclk`：运行时改 I²C 速率 */
 #include "id_core.h"       /* ★ c4-γ-1：已签 ID 上报任务（proto/id_build.c 的固件侧外壳）*/
 
 /* ------------------------------------------------------------------ */
@@ -212,6 +213,15 @@ static int str_eq(const char *a, const char *b)
     return (*a == '\0' && *b == '\0');
 }
 
+/* 前缀匹配（工装命令带参数时用；比逐字节比好读）。*/
+static int str_starts(const char *s, const char *p)
+{
+    while (*p != '\0') {
+        if (*s++ != *p++) { return 0; }
+    }
+    return 1;
+}
+
 static void print_help(void)
 {
     uart_printf(CONSOLE_UART, "\r\ncommands:\r\n");
@@ -225,6 +235,8 @@ static void print_help(void)
     uart_printf(CONSOLE_UART, "  idmodes      -> 8.2 fault-injection modes -> level\r\n");
     uart_printf(CONSOLE_UART, "  idlevel <m>  -> set mode: auto|sign_fail|se_fail|no_key\r\n");
     uart_printf(CONSOLE_UART, "  seline [1-9] -> bench: toggle SCL/SDA as GPIO open-drain (~2 Hz)\r\n");
+    uart_printf(CONSOLE_UART, "  sewake       -> bench: pulse only, probe 0x00/0x60/0x61, then Random anyway\r\n");
+    uart_printf(CONSOLE_UART, "  seclk <khz>  -> bench: set I2C clock (wake token must be <=100 kHz)\r\n");
 }
 
 static void run_cmd(const char *cmd)
@@ -241,14 +253,30 @@ static void run_cmd(const char *cmd)
         send_hex(cmd + 4);
     } else if (str_eq(cmd, "help")) {
         print_help();
-    } else if (cmd[0] == 's' && cmd[1] == 'e' && cmd[2] == 'l' && cmd[3] == 'i' &&
-               cmd[4] == 'n' && cmd[5] == 'e' && (cmd[6] == ' ' || cmd[6] == '\0')) {
+    } else if (str_starts(cmd, "seline")) {
         /* 工装（2026-09-23）：`seline [1-9]` —— SCL/SDA 当 GPIO 开漏翻转几秒，
          * 供沿路逐点量通断（见 `Periph/atecc.h` 的说明）。不带参数 = 10 s。*/
         uint32_t sec = 10u;
+        const char *a = cmd + 6;
 
-        if (cmd[7] >= '1' && cmd[7] <= '9') { sec = (uint32_t)(cmd[7] - '0'); }
+        while (*a == ' ') { a++; }
+        if (*a >= '1' && *a <= '9') { sec = (uint32_t)(*a - '0'); }
         (void)atecc_line_test(sec);
+    } else if (str_starts(cmd, "sewake")) {
+        /* 工装：把握手拆开看（不判唤醒 ACK、逐地址探测、最后直接发 Random）。*/
+        (void)atecc_diag_probe();
+    } else if (str_starts(cmd, "seclk")) {
+        /* 工装：改 I²C 速率（唤醒令牌按手册必须 ≤100 kHz）。*/
+        uint32_t khz = 0u;
+        const char *a = cmd + 5;
+
+        while (*a == ' ') { a++; }
+        while (*a >= '0' && *a <= '9') { khz = khz * 10u + (uint32_t)(*a - '0'); a++; }
+        if (khz >= 10u && khz <= 400u) {
+            i2c_set_hz(khz * 1000u);
+        }
+        uart_printf(CONSOLE_UART, "\r\n[seclk] I2C 现在是 %u kHz\r\n",
+                    (unsigned)(i2c_get_hz() / 1000u));
     } else if (idc_console(cmd, g_tick_ms)) {
         /* 已签 ID 任务的控制台命令（id / idsend / idhex / idmodes / idlevel）*/
     } else if (*cmd != '\0') {

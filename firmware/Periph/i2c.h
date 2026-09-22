@@ -45,6 +45,14 @@ void i2c_enable(void);
 /* 只发地址看有没有 ACK（返回 0 = 有器件应答）。*/
 int i2c_probe(uint8_t addr7);
 
+/* ★ 工装（2026-09-23）：运行时改 I²C 速率。
+ * 为什么需要：手册要求**唤醒令牌 ≤100 kHz**，而我们把 CCR 算成**恰好 100 kHz** ——
+ * 主频用的是内部 HSI（±1% 量级），只要有一点正偏差就**越界**，而越界时器件会
+ * **默默忽略唤醒令牌**（现象：总线全好、`timeout=0`、永远 NACK）。
+ * ⇒ 现场要能一键降到 50 kHz 对比（`seclk 50`）。hz 会被夹到 [10k, 400k]。*/
+void     i2c_set_hz(uint32_t hz);
+uint32_t i2c_get_hz(void);
+
 /* START + addr|W + buf[0..n) + STOP。返回 0 = OK，<0 = 错误码（见 i2c.c 的 IT_*）。*/
 int i2c_write(uint8_t addr7, const uint8_t *buf, uint32_t n);
 

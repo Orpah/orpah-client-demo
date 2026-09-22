@@ -74,7 +74,12 @@ int atecc_selftest(void);
  * 高电平仍靠外部 4.7 k 上拉（**开漏**）⇒ 看到的电平与真跑 I²C 时同一套，才有可比性。
  * 结束时调 `i2c_init()` 恢复复用开漏（单一源）。返回 0。*/
 int atecc_line_test(uint32_t seconds);
-
+/* ★ 工装（2026-09-23）：**不信"唤醒令牌没 ACK"就等于器件不在**——只用脉冲 + tWHI，
+ * 然后逐地址探测（0x00 / 0x60 / 0x61），最后**不等任何 ACK 直接发一条 `Random`**，
+ * 把原始响应打出来。依据：手册表 2-2 说的是"脉冲 + tWHI → **Data Comm**"，
+ * 而"地址 0x00 的唤醒令牌"是**器件在 Sleep 态**才应答的东西 —— 器件若已在 Idle，
+ * 它对 0x00 会回 NACK，而旧固件在这种情形下**从来没试过后面的命令**。返回 0 = 命令通了。*/
+int atecc_diag_probe(void);
 void atecc_stats(atecc_stats_t *out);
 
 /* 给 `proto/id_build.c` 用的 nonce provider（`idb_nonce_fn` 的形状）：
