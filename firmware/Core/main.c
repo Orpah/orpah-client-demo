@@ -237,6 +237,7 @@ static void print_help(void)
     uart_printf(CONSOLE_UART, "  seline [1-9] -> bench: toggle SCL/SDA as GPIO open-drain (~2 Hz)\r\n");
     uart_printf(CONSOLE_UART, "  sewake       -> bench: scan addr 0x01-0x7F (before/after pulse), then\r\n");
     uart_printf(CONSOLE_UART, "                  Info(0x30) + Read cfg lock + Random -> one verdict line\r\n");
+    uart_printf(CONSOLE_UART, "  sescan [n]   -> bench: repeat full scan n rounds (default 10) -> rate table\r\n");
     uart_printf(CONSOLE_UART, "  seclk <khz>  -> bench: set I2C clock (wake token must be <=100 kHz)\r\n");
     uart_printf(CONSOLE_UART, "  seaddr <h>   -> bench: set device 7-bit addr in hex (e.g. 35)\r\n");
 }
@@ -267,6 +268,15 @@ static void run_cmd(const char *cmd)
     } else if (str_starts(cmd, "sewake")) {
         /* 工装：把握手拆开看（不判唤醒 ACK、逐地址探测、最后直接发 Random）。*/
         (void)atecc_diag_probe();
+    } else if (str_starts(cmd, "sescan")) {
+        /* 工装：重复扫描统计（一轮 = 完整唤醒 + 扫一遍全地址）——
+         * 用来分开"稳定器件 / 虚焊时有时无 / 纯毛刺"，不用示波器抓那一下。*/
+        uint32_t rounds = 0u;
+        const char *a = cmd + 6;
+
+        while (*a == ' ') { a++; }
+        while (*a >= '0' && *a <= '9') { rounds = rounds * 10u + (uint32_t)(*a - '0'); a++; }
+        (void)atecc_diag_scan_stats(rounds);
     } else if (str_starts(cmd, "seclk")) {
         /* 工装：改 I²C 速率（唤醒令牌按手册必须 ≤100 kHz）。*/
         uint32_t khz = 0u;

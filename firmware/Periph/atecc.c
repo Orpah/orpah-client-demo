@@ -384,6 +384,11 @@ int atecc_selftest(void)
 #define DIAG_PROBE_TRIES  3u
 #define DIAG_PROBE_MIN    2u
 
+/* `sescan`（重复扫描统计）的上限：轮数上限 60（计数存 uint8_t），命中表只留 8 项
+ * （现场基本是 0 个或 1 个地址；本芯片 RAM 只剩 ~4 KB 给栈，别开大数组）。*/
+#define ATECC_SCAN_HIT_MAX    8u
+#define ATECC_SCAN_MAX_ROUNDS 60u
+
 /* 工装：把两条线放开（开漏输出写 1 = 只剩 4.7 k 上拉在拉）再读回真实电平。
  * 两个都该是 1；若有一个是 0 ⇒ 那根线被**某处按住**（器件拉低/虚焊搭到 GND/坏件），
  * 而 SDA 被按住时，第九个时钟采样到低 = 正是"偶然 ACK"的温床。*/
@@ -405,6 +410,18 @@ static void diag_levels(void)
                 (unsigned)scl, (unsigned)sda);
 }
 
+/* 对**单个地址**连探 `DIAG_PROBE_TRIES` 次，返回 ACK 次数（0..3）。
+ * `diag_scan()` 与 `atecc_diag_scan_stats()` 共用它 ⇒ "一次探测回合"只有一份定义。*/
+static uint32_t diag_probe_n(uint8_t a)
+{
+    uint32_t hit = 0u, k;
+
+    for (k = 0u; k < DIAG_PROBE_TRIES; k++) {
+        if (i2c_probe(a) == 0) { hit++; }
+    }
+    return hit;
+}
+
 /* 工装：扫 7 位地址 0x01~0x7F（**跳过 0x00** —— 那是唤醒令牌的地址，探它会把两种含义搞混）。
  * 返回第一个**确认过的**地址，0 = 无。*/
 static uint8_t diag_scan(const char *tag)
@@ -415,11 +432,8 @@ static uint8_t diag_scan(const char *tag)
     uart_printf(CONSOLE_UART, "[sewake] %s：扫 0x01~0x7F（每址 %u 探，≥%u 次 ACK 才算）-> ",
                 tag, (unsigned)DIAG_PROBE_TRIES, (unsigned)DIAG_PROBE_MIN);
     for (a = 0x01u; a <= 0x7Fu; a++) {
-        uint32_t hit = 0u, k;
+        uint32_t hit = diag_probe_n(a);
 
-        for (k = 0u; k < DIAG_PROBE_TRIES; k++) {
-            if (i2c_probe(a) == 0) { hit++; }
-        }
         if (hit >= DIAG_PROBE_MIN) {
             uart_printf(CONSOLE_UART, "0x%02x(ACK %u/%u) ",
                         (unsigned)a, (unsigned)hit, (unsigned)DIAG_PROBE_TRIES);
@@ -554,6 +568,84 @@ int atecc_diag_probe(void)
                 cfg_ok ? ((cfg[0] == 0x55u) ? "unlocked" : "locked") : "读不到",
                 (rc == 0) ? "OK" : "失败");
     return (rc == 0) ? 0 : ATECC_E_RESP;
+}
+
+/* ★ 工装（2026-09-23，现场需要）：**重复扫描统计** —— 一次 ACK 说明不了问题，
+ * 但"答中几轮 / 一共跑几轮"一下就把三种情形分开：
+ *   真实器件 = **每轮都答**；虚焊/接触不良 = **时有时无**（0 < k < 轮数，地址还可能变）；
+ *   纯毛刺 = 偶发、地址每次不一样。
+ * 为什么让固件做而不是拿示波器：那一下太短、又不常出现，**抓不到**；
+ * 重复采样是固件最擅长的事（而且顺带把唤醒令牌的 ACK 率也统计了）。*/
+int atecc_diag_scan_stats(uint32_t rounds)
+{
+    /* 命中表只存"答过"的地址（现场基本是 0 个或 1 个）⇒ 比 128 项数组省 RAM
+     * （本芯片 RAM 只剩 ~4 KB 给栈，别乱开大数组）。*/
+    struct { uint8_t addr; uint8_t cnt; } hit[ATECC_SCAN_HIT_MAX];
+    uint32_t r, a, any = 0u, wake_ok = 0u, best_n = 0u;
+    uint8_t best = 0u, i;
+
+    if (rounds == 0u) { rounds = 10u; }
+    if (rounds > ATECC_SCAN_MAX_ROUNDS) { rounds = ATECC_SCAN_MAX_ROUNDS; }
+    for (i = 0u; i < ATECC_SCAN_HIT_MAX; i++) { hit[i].addr = 0u; hit[i].cnt = 0u; }
+
+    uart_printf(CONSOLE_UART, "\r\n[sescan] %u 轮；每轮 = 完整唤醒序列 + 扫 0x01~0x7F"
+                             "（每址 %u 探，≥%u 次算这一轮答了）\r\n",
+                (unsigned)rounds, (unsigned)DIAG_PROBE_TRIES, (unsigned)DIAG_PROBE_MIN);
+    diag_levels();
+
+    for (r = 1u; r <= rounds; r++) {
+        uint32_t nthis = 0u;
+        int wrc = atecc_wake();
+
+        if (wrc == 0) { wake_ok++; }
+        for (a = 0x01u; a <= 0x7Fu; a++) {
+            if (diag_probe_n((uint8_t)a) < DIAG_PROBE_MIN) { continue; }
+            nthis++;
+            for (i = 0u; i < ATECC_SCAN_HIT_MAX; i++) {
+                if (hit[i].addr == (uint8_t)a) { hit[i].cnt++; break; }
+            }
+            if (i == ATECC_SCAN_HIT_MAX) {                 /* 表里没有 ⇒ 新地址 */
+                for (i = 0u; i < ATECC_SCAN_HIT_MAX; i++) {
+                    if (hit[i].cnt == 0u) {
+                        hit[i].addr = (uint8_t)a;
+                        hit[i].cnt = 1u;
+                        break;
+                    }
+                }
+                if (i == ATECC_SCAN_HIT_MAX) { nthis--; }  /* 表满：丢掉，但仍计入本轮提示 */
+            }
+        }
+        uart_printf(CONSOLE_UART, "[sescan] 轮 %u/%u：唤醒令牌 %s（tries=%u），本轮命中 %u 个地址\r\n",
+                    (unsigned)r, (unsigned)rounds,
+                    (wrc == 0) ? "ACK" : "无 ACK",
+                    (unsigned)s_st.last_wake_tries, (unsigned)nthis);
+    }
+
+    uart_printf(CONSOLE_UART, "[sescan] 唤醒令牌：%u/%u 轮 ACK\r\n",
+                (unsigned)wake_ok, (unsigned)rounds);
+    for (i = 0u; i < ATECC_SCAN_HIT_MAX; i++) {
+        if (hit[i].cnt == 0u) { continue; }
+        uart_printf(CONSOLE_UART, "[sescan]   0x%02x：%u/%u 轮\r\n",
+                    (unsigned)hit[i].addr, (unsigned)hit[i].cnt, (unsigned)rounds);
+        any++;
+        if ((uint32_t)hit[i].cnt > best_n) { best_n = hit[i].cnt; best = hit[i].addr; }
+    }
+    if (any == 0u) {
+        uart_printf(CONSOLE_UART, "[sescan] ===== 结论：连着 %u 轮一个地址都没答过"
+                                 "（不是\"偶然没答\"，是**真没反应**）=====\r\n", (unsigned)rounds);
+        return ATECC_E_RESP;
+    }
+    if (best_n == rounds) {
+        uart_printf(CONSOLE_UART, "[sescan] ===== 结论：**稳定器件 0x%02x**（%u/%u 轮全答）"
+                                 " ⇒ 接着敲 `sewake` 验 Info/锁/Random =====\r\n",
+                    (unsigned)best, (unsigned)best_n, (unsigned)rounds);
+        return 0;
+    }
+    uart_printf(CONSOLE_UART, "[sescan] ===== 结论：**不稳定**（最像器件的 0x%02x 只答 %u/%u 轮）"
+                             " ⇒ 虚焊/接触不良的典型签名：先重烫那 8 只脚（SDA/SCL/GND 重点）"
+                             "再跑一次 =====\r\n",
+                (unsigned)best, (unsigned)best_n, (unsigned)rounds);
+    return ATECC_E_RESP;
 }
 
 /* ------------------------------------------------------------------ */

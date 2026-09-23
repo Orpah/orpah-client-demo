@@ -90,6 +90,14 @@ int atecc_line_test(uint32_t seconds);
  * 返回 0 = 命令通了。*/
 int atecc_diag_probe(void);
 
+/* ★ 工装（2026-09-23）：**重复扫描统计** —— 一轮 = 完整唤醒序列 + 扫 0x01~0x7F。
+ * 一次 ACK 说明不了问题，但"答中几轮 / 共几轮"一下就把三种情形分开：
+ *   真实器件（每轮都答）/ 虚焊接触不良（时有时无）/ 纯毛刺（偶发且地址还会变）。
+ * 也是"不靠示波器"的做法：那一下太短又不常出现，重复采样交给固件做。
+ * `rounds` = 0 ⇒ 默认 10；上限 `ATECC_SCAN_MAX_ROUNDS`。
+ * 返回 0 = 找到"每轮都答"的稳定器件（可接着 `sewake` 逐项验）。*/
+int atecc_diag_scan_stats(uint32_t rounds);
+
 /* ★ 命令用的 7 位器件地址（缺省 = `i2c.h` 的 `I2C_ADDR_ATECC`）。
  * 依据：手册第 13 页 "Programmable I2C address after data (secret) zone lock"
  * ⇒ 608B 的地址**可编程**，不一定是 0x60；公开实测里有 0x35 这类例子。*/
