@@ -377,19 +377,57 @@ int atecc_selftest(void)
 /* ------------------------------------------------------------------ */
 /* 工装：不信"唤醒令牌没 ACK"就等于器件不在（把握手拆开逐条看）              */
 /* ------------------------------------------------------------------ */
+/* ★ 一次 ACK 不算命中（2026-09-23 实测教训）：现场出现过**仅一次**应答 0x64、
+ *   随后 Info/Read/Random 全 NACK；而 `i2c_probe()` 只探一次 ⇒ 一次毛刺就冒充器件。
+ *   现在每个地址探 `DIAG_PROBE_TRIES` 次、ACK 次数 ≥ `DIAG_PROBE_MIN` 才算命中；
+ *   只 ACK 一两次的**也打出来**（当线索看），但不当器件。*/
+#define DIAG_PROBE_TRIES  3u
+#define DIAG_PROBE_MIN    2u
+
+/* 工装：把两条线放开（开漏输出写 1 = 只剩 4.7 k 上拉在拉）再读回真实电平。
+ * 两个都该是 1；若有一个是 0 ⇒ 那根线被**某处按住**（器件拉低/虚焊搭到 GND/坏件），
+ * 而 SDA 被按住时，第九个时钟采样到低 = 正是"偶然 ACK"的温床。*/
+static void diag_levels(void)
+{
+    uint8_t scl, sda;
+
+    i2c_disable();
+    gpio_set_mode(SE_I2C_PORT, SE_SCL_PIN, GPIO_MODE_OUT_OD_2MHZ);
+    gpio_set_mode(SE_I2C_PORT, SE_SDA_PIN, GPIO_MODE_OUT_OD_2MHZ);
+    gpio_set_pin(SE_I2C_PORT, SE_SCL_PIN, 1u);
+    gpio_set_pin(SE_I2C_PORT, SE_SDA_PIN, 1u);
+    i2c_delay_us(50u);                   /* 给上拉一点时间（4.7 k × 线容 ≈ µs 级）*/
+    scl = gpio_get_pin(SE_I2C_PORT, SE_SCL_PIN);
+    sda = gpio_get_pin(SE_I2C_PORT, SE_SDA_PIN);
+    i2c_init();                          /* 恢复复用开漏（单一源在 i2c.c）*/
+    uart_printf(CONSOLE_UART, "[sewake] 空闲电平：SCL=%u SDA=%u（**都该是 1**；"
+                             "有一个是 0 ⇒ 那根线被按住，后面的 ACK 就不一定可信）\r\n",
+                (unsigned)scl, (unsigned)sda);
+}
+
 /* 工装：扫 7 位地址 0x01~0x7F（**跳过 0x00** —— 那是唤醒令牌的地址，探它会把两种含义搞混）。
- * 返回第一个应答的地址，0 = 无。*/
+ * 返回第一个**确认过的**地址，0 = 无。*/
 static uint8_t diag_scan(const char *tag)
 {
     uint8_t a, found = 0u;
     uint32_t n = 0u;
 
-    uart_printf(CONSOLE_UART, "[sewake] %s：扫 0x01~0x7F -> ", tag);
+    uart_printf(CONSOLE_UART, "[sewake] %s：扫 0x01~0x7F（每址 %u 探，≥%u 次 ACK 才算）-> ",
+                tag, (unsigned)DIAG_PROBE_TRIES, (unsigned)DIAG_PROBE_MIN);
     for (a = 0x01u; a <= 0x7Fu; a++) {
-        if (i2c_probe(a) == 0) {
-            uart_printf(CONSOLE_UART, "0x%02x(ACK) ", (unsigned)a);
+        uint32_t hit = 0u, k;
+
+        for (k = 0u; k < DIAG_PROBE_TRIES; k++) {
+            if (i2c_probe(a) == 0) { hit++; }
+        }
+        if (hit >= DIAG_PROBE_MIN) {
+            uart_printf(CONSOLE_UART, "0x%02x(ACK %u/%u) ",
+                        (unsigned)a, (unsigned)hit, (unsigned)DIAG_PROBE_TRIES);
             if (found == 0u) { found = a; }
             n++;
+        } else if (hit != 0u) {
+            uart_printf(CONSOLE_UART, "[0x%02x 仅 %u/%u ⇒ 偶然，不当器件] ",
+                        (unsigned)a, (unsigned)hit, (unsigned)DIAG_PROBE_TRIES);
         }
     }
     if (n == 0u) {
@@ -453,6 +491,7 @@ int atecc_diag_probe(void)
      *   一颗芯片一行判据，明早逐颗试时不用再去分辨「没打结论」是哪种情形。*/
     uart_printf(CONSOLE_UART, "\r\n[sewake] I2C=%u kHz，命令地址当前=0x%02x\r\n",
                 (unsigned)(i2c_get_hz() / 1000u), (unsigned)s_addr);
+    diag_levels();                       /* 先看两线空闲电平（SDA 被按住 = 偶然 ACK 的温床）*/
 
     hit = diag_scan("① 未脉冲");
     if (hit == 0u) {

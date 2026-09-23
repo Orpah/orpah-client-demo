@@ -77,7 +77,9 @@ int atecc_selftest(void);
  * 结束时调 `i2c_init()` 恢复复用开漏（单一源）。返回 0。*/
 int atecc_line_test(uint32_t seconds);
 /* ★ 工装（2026-09-23）：**不信"唤醒令牌没 ACK"就等于器件不在**——只用脉冲 + tWHI，
- * 然后**扫 0x01~0x7F**（地址可编程，不能假定 0x60），命中后接着逐项验：
+ * 然后**扫 0x01~0x7F**（地址可编程，不能假定 0x60；先打两线空闲电平），
+ * 命中要求**探 3 次里 ≥2 次 ACK**（单次 ACK 当偶然，不当器件 —— 2026-09-23 实测出现过），
+ * 命中后接着逐项验：
  * `Info(0x30)` 读版本 → `Read` 配置区 word 0x15（= 字节 0x54）判锁 → `Random(0x1B)`，
  * 最后打一行**结论**（addr / rev / cfg=locked|unlocked / random=OK|失败）。
  * 依据：手册表 2-2 说的是"脉冲 + tWHI → **Data Comm**"，
