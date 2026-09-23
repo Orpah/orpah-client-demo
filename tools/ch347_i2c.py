@@ -287,6 +287,37 @@ def cmd_atecc(args):
     return 0
 
 
+def cmd_health(args):
+    """总线健康度：重复读**正对照**（板载 EEPROM `0x50`）N 次，报成功率 + 退出码。
+
+    为什么需要（2026-09-23 实测）：把 SE 从面包板上取下来之后，同一个操作从「约 50% 失败」
+    变成 **5/5 全成功** ⇒ **SE 一挂上就把整条总线拖坏**（连板载 EEPROM 的读都受影响）。
+    所以判「是不是器件/接线把线拖住了」，先看这一项 —— 不用去猜器件协议的细节。
+    """
+    with Ch347I2c(index=args.index) as dev:
+        if not dev.i2c_usable(args.clk):
+            print("I²C 初始化失败：设备没插 / 驱动不对 / iIndex 不对")
+            return 2
+        ok = fail = 0
+        first_err = None
+        for _ in range(args.n):
+            try:
+                dev.read_from(0x50, 0x00, 4)
+                ok += 1
+            except Exception as exc:                       # noqa: BLE001
+                fail += 1
+                first_err = first_err or str(exc)
+                dev.i2c_usable(args.clk)                   # 失败即重初始化（防卡死）
+        rate = 100.0 * ok / max(1, args.n)
+        print("总线健康度：读正对照 0x50（板载 24C02）%d 次 → 成功 %d / 失败 %d（约 %.0f%%）"
+              % (args.n, ok, fail, rate))
+        if first_err:
+            print("  首次失败：%s" % first_err)
+        print("  判读：≈100% = 总线干净；明显偏低 ⇒ 有东西在拖总线（器件/焊接/接触）；"
+              "0x50 不在线 ⇒ 连正对照都没了，先查桥自己那一侧。")
+        return 0 if rate >= 95.0 else 1
+
+
 def cmd_selftest(args):
     """离线自检：不碰硬件，只验报文组包与（能拿到时的）CRC 参考。"""
     bad = 0
@@ -318,6 +349,9 @@ def main():
 
     sub.add_parser("scan", help="扫 0x01~0x7F（写/读两个方向）")
 
+    p = sub.add_parser("health", help="重复读正对照 0x50，报总线健康度（判有没有东西拖总线）")
+    p.add_argument("--n", type=int, default=10, help="重复次数（缺省 10）")
+
     p = sub.add_parser("xfer", help="任意一次传输（写缓冲首字节=地址+方向位）")
     p.add_argument("addr", type=lambda s: int(s, 16), help="7 位地址（hex）")
     p.add_argument("hex", nargs="?", default="", help="要写的 payload（hex 串，可空）")
@@ -332,7 +366,7 @@ def main():
     p.add_argument("--crc", action="store_true", help="命令包挂 CRC-16/BUYPASS")
 
     args = ap.parse_args()
-    fn = {"list": dev_list, "selftest": cmd_selftest, "scan": cmd_scan,
+    fn = {"list": dev_list, "selftest": cmd_selftest, "scan": cmd_scan, "health": cmd_health,
           "xfer": cmd_xfer, "atecc": cmd_atecc}[args.cmd]
     try:
         return fn(args)
