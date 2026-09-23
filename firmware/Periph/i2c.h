@@ -30,6 +30,11 @@ typedef struct {
     uint32_t timeout;    /* 等标志超时的次数（**超时必须可见**）*/
     uint32_t bus_err;    /* BERR */
     uint32_t arb_lost;   /* ARLO */
+    uint8_t  last_step;  /* ★ **最近一次失败卡在哪一步**（现场一眼定位，别再猜）：
+                          *   0 = 没失败过；1 = 等 BUSY 清零超时；2 = 等 SB 超时（START 没发出去）；
+                          *   3 = 写方向的地址阶段失败（NACK/超时）；4 = 数据字节阶段失败；
+                          *   5 = 最后一字节 BTF 失败；6 = 读方向：字地址字节阶段失败；
+                          *   7 = 读方向：RESTART 后的地址阶段失败；8 = 读字节（RXNE）失败。*/
 } i2c_stats_t;
 
 /* 初始化 I2C1（含 GPIOB/AFIO 与 I2C1 的外设时钟；100 kHz @ APB1=SYS_CLOCK）。

@@ -147,13 +147,15 @@ int i2c_probe(uint8_t addr7)
      *   而接线/供电全对也一样，白查三件事。**别把等待挪到 START 前面**。*/
     I2C1->CTLR1 |= I2C_CTLR1_START;
     rc = wait_flag(I2C_STAR1_SB, 0u, I2C_TIMEOUT_MS);
-    if (rc != IT_OK) { return rc; }
+    if (rc != IT_OK) { s_st.last_step = 2u; return rc; }
     (void)I2C1->STAR1;                   /* 读 SR1 → 写 DR 才清 SB */
     I2C1->DATAR = (uint32_t)((uint32_t)addr7 << 1);
     rc = wait_flag(I2C_STAR1_ADDR, I2C_STAR1_AF, I2C_TIMEOUT_MS);
     if (rc == IT_OK) {
         (void)I2C1->STAR1;               /* 读 SR1 再读 SR2 = 清 ADDR */
         (void)I2C1->STAR2;
+    } else {
+        s_st.last_step = 3u;
     }
     I2C1->CTLR1 |= I2C_CTLR1_STOP;
     return rc;
@@ -171,7 +173,7 @@ int i2c_write(uint8_t addr7, const uint8_t *buf, uint32_t n)
         uint32_t deadline = g_tick_ms + I2C_TIMEOUT_MS;
 
         while ((I2C1->STAR2 & I2C_STAR2_BUSY) != 0u) {
-            if (expired(deadline)) { s_st.timeout++; return IT_TIMEOUT; }
+            if (expired(deadline)) { s_st.timeout++; s_st.last_step = 1u; return IT_TIMEOUT; }
         }
     }
 
@@ -180,13 +182,19 @@ int i2c_write(uint8_t addr7, const uint8_t *buf, uint32_t n)
     /* ---- START ---- */
     I2C1->CTLR1 |= I2C_CTLR1_START;
     rc = wait_flag(I2C_STAR1_SB, 0u, I2C_TIMEOUT_MS);
-    if (rc != IT_OK) { return rc; }
+    if (rc != IT_OK) { s_st.last_step = 2u; return rc; }
     s_st.start++;
 
-    /* ---- 地址 + 写 ---- */
+    /* ---- 地址 + 写 ----
+     * ★ 2026-09-23：这里原来**漏了“读 SR1”**（下面 `i2c_probe()` 有）。
+     *   RM 的时序是“**读 SR1 → 写 DR 才清 SB**”，与探针路径不一致时会出现
+     *   **同一个地址字节在探针里 ACK、在写路径里不过**的怪现象（现场 `se` 的
+     *   `tx=0 nack` 在涨 就是这个形状）。三处（probe / write / read_begin 两段）现在一致。*/
+    (void)I2C1->STAR1;
     I2C1->DATAR = (uint32_t)(((uint32_t)addr7 << 1) | 0u);
     rc = wait_flag(I2C_STAR1_ADDR, I2C_STAR1_AF, I2C_TIMEOUT_MS);
     if (rc != IT_OK) {
+        s_st.last_step = 3u;
         I2C1->CTLR1 |= I2C_CTLR1_STOP;
         return rc;
     }
@@ -198,6 +206,7 @@ int i2c_write(uint8_t addr7, const uint8_t *buf, uint32_t n)
         rc = wait_flag(I2C_STAR1_TXE, I2C_STAR1_AF | I2C_STAR1_BERR |
                                       I2C_STAR1_ARLO, I2C_TIMEOUT_MS);
         if (rc != IT_OK) {
+            s_st.last_step = 4u;
             I2C1->CTLR1 |= I2C_CTLR1_STOP;
             return rc;
         }
@@ -207,6 +216,7 @@ int i2c_write(uint8_t addr7, const uint8_t *buf, uint32_t n)
     /* 最后一字节要等 BTF（真的移位出去了），否则 STOP 会截断它 */
     rc = wait_flag(I2C_STAR1_BTF, I2C_STAR1_AF | I2C_STAR1_BERR |
                                   I2C_STAR1_ARLO, I2C_TIMEOUT_MS);
+    if (rc != IT_OK) { s_st.last_step = 5u; }
     I2C1->CTLR1 |= I2C_CTLR1_STOP;
     return rc;
 }
@@ -219,18 +229,20 @@ int i2c_read_begin(uint8_t addr7, uint8_t word_addr)
         uint32_t deadline = g_tick_ms + I2C_TIMEOUT_MS;
 
         while ((I2C1->STAR2 & I2C_STAR2_BUSY) != 0u) {
-            if (expired(deadline)) { s_st.timeout++; return IT_TIMEOUT; }
+            if (expired(deadline)) { s_st.timeout++; s_st.last_step = 1u; return IT_TIMEOUT; }
         }
     }
 
-    /* 阶段 1：写"字地址"（**由调用方给**：ATECC 命令写 `0x03`、
+    /* 阶段 1：写“字地址”（**由调用方给**：ATECC 命令写 `0x03`、
      *   **读响应用 `0x00`** —— 见 `atecc.c` 的长注释与出处；这里曾经两个方向都用 0x03，是真 bug）*/
     I2C1->CTLR1 |= I2C_CTLR1_START;
     rc = wait_flag(I2C_STAR1_SB, 0u, I2C_TIMEOUT_MS);
-    if (rc != IT_OK) { return rc; }
+    if (rc != IT_OK) { s_st.last_step = 2u; return rc; }
+    (void)I2C1->STAR1;                  /* ★ 同上：读 SR1 → 写 DR 才清 SB */
     I2C1->DATAR = (uint32_t)(((uint32_t)addr7 << 1) | 0u);
     rc = wait_flag(I2C_STAR1_ADDR, I2C_STAR1_AF, I2C_TIMEOUT_MS);
     if (rc != IT_OK) {
+        s_st.last_step = 3u;
         I2C1->CTLR1 |= I2C_CTLR1_STOP;
         return rc;
     }
@@ -239,6 +251,7 @@ int i2c_read_begin(uint8_t addr7, uint8_t word_addr)
 
     rc = wait_flag(I2C_STAR1_TXE, I2C_STAR1_AF, I2C_TIMEOUT_MS);
     if (rc != IT_OK) {
+        s_st.last_step = 6u;
         I2C1->CTLR1 |= I2C_CTLR1_STOP;
         return rc;
     }
@@ -246,6 +259,7 @@ int i2c_read_begin(uint8_t addr7, uint8_t word_addr)
     s_st.tx_bytes++;
     rc = wait_flag(I2C_STAR1_BTF, I2C_STAR1_AF | I2C_STAR1_BERR, I2C_TIMEOUT_MS);
     if (rc != IT_OK) {
+        s_st.last_step = 6u;
         I2C1->CTLR1 |= I2C_CTLR1_STOP;
         return rc;
     }
@@ -253,11 +267,13 @@ int i2c_read_begin(uint8_t addr7, uint8_t word_addr)
     /* 阶段 2：RESTART + 地址（读）*/
     I2C1->CTLR1 |= I2C_CTLR1_START;
     rc = wait_flag(I2C_STAR1_SB, 0u, I2C_TIMEOUT_MS);
-    if (rc != IT_OK) { return rc; }
+    if (rc != IT_OK) { s_st.last_step = 2u; return rc; }
     s_st.start++;
+    (void)I2C1->STAR1;                  /* ★ 同上：读 SR1 → 写 DR 才清 SB */
     I2C1->DATAR = (uint32_t)(((uint32_t)addr7 << 1) | 1u);
     rc = wait_flag(I2C_STAR1_ADDR, I2C_STAR1_AF, I2C_TIMEOUT_MS);
     if (rc != IT_OK) {
+        s_st.last_step = 7u;
         I2C1->CTLR1 |= I2C_CTLR1_STOP;
         return rc;
     }
@@ -278,7 +294,7 @@ int i2c_read_byte(uint8_t *b, int ack)
         I2C1->CTLR1 &= ~(uint32_t)I2C_CTLR1_ACK;
     }
     rc = wait_flag(I2C_STAR1_RXNE, I2C_STAR1_BERR | I2C_STAR1_ARLO, I2C_TIMEOUT_MS);
-    if (rc != IT_OK) { return rc; }
+    if (rc != IT_OK) { s_st.last_step = 8u; return rc; }
     *b = (uint8_t)(I2C1->DATAR & 0xFFu);
     s_st.rx_bytes++;
     return IT_OK;
@@ -298,6 +314,7 @@ void i2c_stats(i2c_stats_t *out)
     out->rx_bytes = s_st.rx_bytes;
     out->nack     = s_st.nack;
     out->timeout  = s_st.timeout;
+    out->last_step = s_st.last_step;
     out->bus_err  = s_st.bus_err;
     out->arb_lost = s_st.arb_lost;
 }

@@ -401,9 +401,10 @@ int atecc_selftest(void)
          *     两个都是 0          ⇒ 压根没走到总线（`i2c_probe()` 之前就返回了）。
          *   计数是**累计**的（含开机时 `atecc_init()` 那次探针），只回答"有没有过 NACK"。*/
         i2c_stats(&ist);
-        uart_printf(CONSOLE_UART, "[se] i2c: start=%u tx=%u rx=%u nack=%u timeout=%u hz=%u addr=0x%02x\r\n",
+        uart_printf(CONSOLE_UART, "[se] i2c: start=%u tx=%u rx=%u nack=%u timeout=%u step=%u"
+                                  " hz=%u addr=0x%02x\r\n",
                     (unsigned)ist.start, (unsigned)ist.tx_bytes, (unsigned)ist.rx_bytes,
-                    (unsigned)ist.nack, (unsigned)ist.timeout,
+                    (unsigned)ist.nack, (unsigned)ist.timeout, (unsigned)ist.last_step,
                     (unsigned)(i2c_get_hz() / 1000u), (unsigned)s_addr);
     }
     /* ★ 不再早退（2026-09-23）："令牌没 ACK"**不影响**要不要发命令 —— 走 `atecc_random()`
