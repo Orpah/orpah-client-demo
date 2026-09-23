@@ -103,6 +103,26 @@ EXPECT = {
         {(BRIDGE, "3V3"), (SE, "VCC"), (RES, "connector0")},   # 3V3 = 两只上拉的另一端
         {(BRIDGE, "GND"), (SE, "GND")},                        # 共地（SE 的 GND 只跟 CH347F 的地在一起）
     ],
+    # ---- c4-γ-2 台架：上面那套 + **面包板上的安全元件**（nano 当 I²C 主机）--------
+    #   规格出处 `hardware/wiring/README.md` 的「c4-γ-2 台架」节 + `docs/atecc608b-se.md` §1/§2：
+    #   其余连线与前一张（`…-nanoch32`）**逐根相同**；新增的只有 SE 那 4 根 + 两只上拉。
+    #   · I²C1 默认脚：`PB6 = SCL`、`PB7 = SDA`；
+    #   · **两只 4.7 kΩ 上拉**（各一端接 SDA/SCL、另一端接 3V3）；SE 的 pin8=3V3、pin4=GND；
+    #   · 3V3 一栏用 `VDDA` 代表 nano 的 3V3 轨 —— 部件把那几个电源脚并成了**同一个网**
+    #     （网表里是 `VDDA ↔ VDD_2 ↔ VDD_VIO_1 ↔ VDD_VIO_3`），任一个都能证明"接在轨上"。
+    #   ⚠ 与上一张的差别：这张图里 SE **吃 nano 的 3V3**（CH347F 的 3V3 空着，别并联两个 3.3V 源）。
+    "cstep-ch347f-txah-evb-nanoch32-atecc608b.fzz": [
+        {(MCU, "PB7/USB2DM"), (SE, "SDA"), (RES, "connector1")},   # I²C 数据 + 一只上拉
+        {(MCU, "PB6/USB2DP"), (SE, "SCL"), (RES, "connector1")},   # I²C 时钟 + 一只上拉
+        {(MCU, "VDDA"), (SE, "VCC"), (RES, "connector0")},        # SE 与上拉吃 nano 的 3V3 轨
+        {(MCU, "PA2/ADC2"), (MOD, "A10")},                    # 数据口：nano USART2_TX → 模组 RX
+        {(MCU, "PA3/ADC3"), (MOD, "A11")},                    # 数据口：模组 TX → nano USART2_RX
+        {(BRIDGE, "TXD0"), (MCU, "PA10")},                    # 窗口①：CH347F TXD0 → nano USART1_RX
+        {(BRIDGE, "RXD0"), (MCU, "PA9")},                     # 窗口①：nano USART1_TX → CH347F RXD0
+        {(MOD, "A12"), (BRIDGE, "TXD1")},                     # 窗口②：CH347F TXD1 → 模组 AT/打印口
+        {(MOD, "A13"), (BRIDGE, "RXD1")},                     # 窗口②：模组 TX → CH347F RXD1
+        {(MOD, "GND"), (MCU, "GND"), (BRIDGE, "GND"), (SE, "GND")},   # 四块共地
+    ],
 }
 
 
