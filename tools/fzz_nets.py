@@ -3,12 +3,13 @@
 
 用法::
 
-    python tools\\fzz_nets.py                 # 核对 hardware/wiring/ 下两张图
+    python tools\\fzz_nets.py                 # 核对 hardware/wiring/ 下已登记规格的各张图
     python tools\\fzz_nets.py <file.fzz> ...  # 核对指定工程
 
 为什么需要它：`.fzz` 是个 zip，接线对不对**不该靠肉眼数线**。这里按 Fritzing 自己的
 存储方式读连接——① 每个 instance 的 `<connector>/<connects>`；② **每条 wire 自身导通两端**；
-③ 部件 `.fzp` 里的**内部 `<bus>`**（同网脚，例如 CH347F 的 11 个 GND、模组的 3 个 GND 焊盘）
+③ 部件 `.fzp` 里的**内部 `<bus>`**（同网脚，例如 CH347F 的 11 个 GND、模组的 3 个 GND 焊盘）；
+④ **面包板的同列导通**（见 `_breadboard_columns`）
 ——把连接并成网（union-find），翻译成「实例.脚名」后与**期望表**逐网比对。
 
 期望表 `EXPECT` 就是这两个夹具的**接线规格**（单一源）：改图时先改这里，
@@ -30,15 +31,16 @@ WIRING_DIR = os.path.normpath(os.path.join(
 #   理由：实例 title（U2/U3/U4…）**重画就会变**（2026-09-19 两块模组那张图就换过），
 #   而“哪块板是什么”由部件本身决定 ⇒ 认 moduleIdRef 才稳。
 #   没登记的角色（例如老写法里的 `"U3"`）仍按**实例 title** 精确匹配。
-MOD, MCU, BRIDGE, LED, RES = "MOD", "MCU", "BRIDGE", "LED", "RES"
+MOD, MCU, BRIDGE, LED, RES, SE = "MOD", "MCU", "BRIDGE", "LED", "RES", "SE"
 ROLES = {
     MOD:    lambda mid: mid.startswith("TX-AH-R900PNR"),   # 任意一块 TX-AH 模组
     MCU:    lambda mid: mid == "CH32V203C8T6",            # nanoCH32V203 开发板
     BRIDGE: lambda mid: mid == "CH347F",                  # CH347F-EVT（USB ↔ 2×UART 桥）
     LED:    lambda mid: "ColorLED" in mid,                # Fritzing 核心 LED 部件
     RES:    lambda mid: "Resistor" in mid,                # Fritzing 核心电阻部件
+    SE:     lambda mid: mid.startswith("ATECC608B"),      # 安全元件（SOIC-8 转 DIP）
 }
-ROLE_CN = {MOD: "模组", MCU: "MCU", BRIDGE: "桥", LED: "灯", RES: "电阻"}
+ROLE_CN = {MOD: "模组", MCU: "MCU", BRIDGE: "桥", LED: "灯", RES: "电阻", SE: "安全元件"}
 
 # ---- 接线规格（期望的网表）--------------------------------------------------
 #   每个集合 = 一个网；元素写作 `(角色, 脚名)`，脚名照部件里的 `connectorname`
@@ -87,6 +89,20 @@ EXPECT = {
         {(MOD, "A13"), (BRIDGE, "RXD1")},       # 窗口②：模组 UART1_TX → CH347F RXD1（看日志）
         {(MOD, "GND"), (MCU, "GND"), (BRIDGE, "GND")},   # 三块板共地
     ],
+    # ---- B 方案：**独立 I²C 主机**（CH347F 直连 SE，nano 不在图上）----------------
+    #   规格出处 `docs/ch347f-i2c-crosscheck.md` §2；目的见 `docs/atecc608b-se.md` §9：
+    #   把 nano 固件排除在外，判「器件不讲 CryptoAuth」还是「我们固件还有毛病」。
+    #   · CH347F 的 **P5 = I²C**（板子丝印 `P5` + 那 4 个脚名；脚位**未核实**）；
+    #   · SE 的 pin4/5/6/8 = GND/SDA/SCL/VCC；
+    #   · **两只 4.7k 上拉**（一端接 SDA/SCL、另一端接 3V3）——电源由 CH347F 的 3V3 出；
+    #   · **图上没有 nano** = 两个主机不同时驱动同一对线（nano 要断电或按住 RST）。
+    #   ⚠ 上拉的**阻值**（4.7k）本脚本不断言，只断言它接在哪个网上。
+    "cstep-ch347f-atecc608b.fzz": [
+        {(BRIDGE, "SDA"), (SE, "SDA"), (RES, "connector1")},   # 数据线 + 一只上拉
+        {(BRIDGE, "SCL"), (SE, "SCL"), (RES, "connector1")},   # 时钟线 + 一只上拉
+        {(BRIDGE, "3V3"), (SE, "VCC"), (RES, "connector0")},   # 3V3 = 两只上拉的另一端
+        {(BRIDGE, "GND"), (SE, "GND")},                        # 共地（SE 的 GND 只跟 CH347F 的地在一起）
+    ],
 }
 
 
@@ -116,6 +132,31 @@ def read_fzz(path):
         if mi:
             insts[mi.group(1)] = (midref, title.group(1) if title else "?", body)
     return fz, pins, insts, buses
+
+
+# ---- 面包板内部的「同列导通」--------------------------------------------------
+#   面包板上一个「列」是两段各 5 孔：**A–E 同列互连、F–J 同列互连**（列内 0.1 in 间距）。
+#   出处：标准面包板结构。Fritzing 把这件事写在**核心部件**的 `.fzp`（`<bus>`）里，
+#   而**核心部件不内嵌进 `.fzz`** ⇒ 读不到，只能按这条规则补上（孔名就是列号，不需要外部文件）。
+#   ⚠ 覆盖上限：**不建模电源轨** —— 若某张图用 `+`/`-`/`TP…` 这类孔，它们不会与任何东西并网，
+#     会显示成「断开的网」。那是本规则的边界，不是图错了。
+HALF = {"A": 0, "B": 0, "C": 0, "D": 0, "E": 0,
+        "F": 1, "G": 1, "H": 1, "I": 1, "J": 1}
+
+
+def _breadboard_columns(insts, pins):
+    """给**核心**面包板实例补「同列导通」的边；内嵌部件自己有 `<bus>`，不猜。"""
+    edges = []
+    for mi, (midref, _t, body) in insts.items():
+        if midref == "WireModuleID" or midref in pins:
+            continue
+        cols = {}
+        for cid in re.findall(r'<connector connectorId="([A-J]\d+)"', body):
+            cols.setdefault((HALF[cid[0]], int(cid[1:])), []).append(cid)
+        for grp in cols.values():
+            for cid in grp[1:]:
+                edges.append(((mi, grp[0]), (mi, cid)))
+    return edges
 
 
 def nets(path):
@@ -152,6 +193,8 @@ def nets(path):
             grp = sorted(grp)
             for cid in grp[1:]:
                 union((mi, grp[0]), (mi, cid))
+    for a, b in _breadboard_columns(insts, pins):             # 面包板：同列两半各自导通
+        union(a, b)
 
     groups = {}
     for k in list(parent):
@@ -202,6 +245,11 @@ def check(path):
     if exp is None:
         print("  （EXPECT 里没有这张图的规格，仅列出网表）")
         return True
+    # 面包板实例的孔（`A4`/`J11` 这种名字）：它只是个「插座」，**孔里有脚 ≠ 有线**。
+    # 判「多出来的连线」时要把孔排除掉，否则「NC 脚插在空孔上」会被误报成多余连线。
+    hole_owner = {t for _m, (mr, t, body) in insts.items()
+                  if mr != "WireModuleID"
+                  and re.search(r'<connector connectorId="[A-J]\d+"', body)}
     ok = True
     print("  --- 逐网核对（模块侧不限实例编号）---")
     matched = []
@@ -223,14 +271,16 @@ def check(path):
     for g in got:
         if g in matched:
             continue
-        owners = {t for t, _m, _n in g}
-        if len(owners) > 1:                     # 跨实例却没写进规格 = 多出来的连线
+        parts = sorted((t, n) for t, _m, n in g if t not in hole_owner)
+        holes = sorted(n for t, _m, n in g if t in hole_owner)
+        if len({t for t, _n in parts}) > 1:     # 跨实例却没写进规格 = 多出来的连线
             ok = False
             print("    ✗ 多出来的跨实例网：%s"
-                  % "  <->  ".join("%s.%s" % (t, n) for t, _m, n in sorted(g)))
-        elif len(g) > 1:                        # 同一实例内部同网 = 部件自己的 <bus>，不是连线
-            print("    · 部件内部同网（非图上连线）：%s"
-                  % "  <->  ".join("%s.%s" % (t, n) for t, _m, n in sorted(g)))
+                  % "  <->  ".join("%s.%s" % (t, n) for t, n in parts))
+        elif len(g) > 1:                        # 非连线：部件内部同网 / 只插在面包板空孔上
+            print("    · 非连线（部件内部同网 / 空孔）：%s%s"
+                  % ("  <->  ".join("%s.%s" % (t, n) for t, n in parts) or "(只有孔)",
+                     ("  @" + ",".join(holes)) if holes else ""))
     print("  结论：" + ("全部对上 ✓" if ok else "有差异 ✗"))
     return ok
 
