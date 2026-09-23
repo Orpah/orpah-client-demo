@@ -35,6 +35,7 @@ typedef struct {
                           *   3 = 写方向的地址阶段失败（NACK/超时）；4 = 数据字节阶段失败；
                           *   5 = 最后一字节 BTF 失败；6 = 读方向：字地址字节阶段失败；
                           *   7 = 读方向：RESTART 后的地址阶段失败；8 = 读字节（RXNE）失败。*/
+    uint8_t  last_nack_byte; /* ★ 数据阶段**第几个字节**被 NACK（1 起数；0 = 没被 NACK 过）*/
 } i2c_stats_t;
 
 /* 初始化 I2C1（含 GPIOB/AFIO 与 I2C1 的外设时钟；100 kHz @ APB1=SYS_CLOCK）。

@@ -206,24 +206,34 @@ int i2c_write(uint8_t addr7, const uint8_t *buf, uint32_t n)
     (void)I2C1->STAR1;
     (void)I2C1->STAR2;
 
-    /* ---- 数据 ---- */
+    /* ---- 数据 ----
+     * ★ 2026-09-23：改成**每个字节都等 BTF + 看 AF**。
+     *   只等 TXE 时，某个字节被 NACK 要到**下一次**等待才会被发现；而地址阶段之后
+     *   “读 SR1 再读 SR2 清 ADDR”那一步有可能把 `AF` 一并吞掉 ⇒ **数据明明被 NACK，
+     *   我们却当成成功**（现象：`tx` 在涨、看不到 nack、然后读响应全 `0xFF`）。
+     *   逐字等 BTF 是慢一点，但（a）NACK 当场就看到，（b）STOP 不会截断最后一字节。*/
     for (i = 0u; i < n; i++) {
         rc = wait_flag(I2C_STAR1_TXE, I2C_STAR1_AF | I2C_STAR1_BERR |
                                       I2C_STAR1_ARLO, I2C_TIMEOUT_MS);
         if (rc != IT_OK) {
             s_st.last_step = 4u;
+            s_st.last_nack_byte = (uint8_t)(i + 1u);
             I2C1->CTLR1 |= I2C_CTLR1_STOP;
             return rc;
         }
         I2C1->DATAR = buf[i];
         s_st.tx_bytes++;
+        rc = wait_flag(I2C_STAR1_BTF, I2C_STAR1_AF | I2C_STAR1_BERR |
+                                      I2C_STAR1_ARLO, I2C_TIMEOUT_MS);
+        if (rc != IT_OK) {
+            s_st.last_step = 4u;
+            s_st.last_nack_byte = (uint8_t)(i + 1u);
+            I2C1->CTLR1 |= I2C_CTLR1_STOP;
+            return rc;
+        }
     }
-    /* 最后一字节要等 BTF（真的移位出去了），否则 STOP 会截断它 */
-    rc = wait_flag(I2C_STAR1_BTF, I2C_STAR1_AF | I2C_STAR1_BERR |
-                                  I2C_STAR1_ARLO, I2C_TIMEOUT_MS);
-    if (rc != IT_OK) { s_st.last_step = 5u; }
     I2C1->CTLR1 |= I2C_CTLR1_STOP;
-    return rc;
+    return IT_OK;
 }
 
 int i2c_read_begin(uint8_t addr7, uint8_t word_addr)
@@ -320,6 +330,7 @@ void i2c_stats(i2c_stats_t *out)
     out->nack     = s_st.nack;
     out->timeout  = s_st.timeout;
     out->last_step = s_st.last_step;
+    out->last_nack_byte = s_st.last_nack_byte;
     out->bus_err  = s_st.bus_err;
     out->arb_lost = s_st.arb_lost;
 }
