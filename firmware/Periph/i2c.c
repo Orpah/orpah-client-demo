@@ -223,7 +223,8 @@ int i2c_read_begin(uint8_t addr7, uint8_t word_addr)
         }
     }
 
-    /* 阶段 1：写"字地址"（ATECC：0x03 = 命令/响应）*/
+    /* 阶段 1：写"字地址"（**由调用方给**：ATECC 命令写 `0x03`、
+     *   **读响应用 `0x00`** —— 见 `atecc.c` 的长注释与出处；这里曾经两个方向都用 0x03，是真 bug）*/
     I2C1->CTLR1 |= I2C_CTLR1_START;
     rc = wait_flag(I2C_STAR1_SB, 0u, I2C_TIMEOUT_MS);
     if (rc != IT_OK) { return rc; }
