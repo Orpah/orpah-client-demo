@@ -24,8 +24,30 @@
 #include "id_nonce.h"          /* idn_hex_upper()（别在业务代码里另写一份 hex）*/
 #include "uart.h"              /* 控制台（自检打印）*/
 
-#define ATECC_WORD_ADDR         0x03u
+#define ATECC_WORD_ADDR         0x03u   /* 命令：写到字地址 0x03 */
+#define ATECC_WORD_ADDR_RESP    0x00u   /* ★ 响应：**从字地址 0x00 读**（见下）*/
+#define ATECC_WORD_ADDR_RESP_ALT 0x03u  /* 兜底：旧写法（读 0x03）；两种都试，结果打出来 */
 #define ATECC_WAKE_TOKEN_ADDR   0x00u
+
+/* ★★ 字地址到底在哪一个（2026-09-23 复核 CryptoAuthLib 源码发现的 bug）
+ *
+ * 我们原先**读写都用 0x03**，而公开实现里是一张四元表：
+ *   `0x00` = 响应（读）、`0x01` = sleep、`0x02` = idle、`0x03` = 命令（写）；
+ *   同一个表在 1 线侧写得最清楚：`hal_swi_gpio.h` 的
+ *     `ATCA_1WIRE_RESET_WORD_ADDR 0x00` / `_SLEEP_ 0x01` / `_SLEEP_ALTERNATE 0x02` /
+ *     `_COMMAND_ 0x03`。
+ *   而“读响应前先发 0x00”在 `lib/calib/calib_execution.c` 里能看到：非 SWI 设备时
+ *     `word_address = 0;` → `atsend(iface, word_address, NULL, 0)`（“Send Word address
+ *     to device...”，只发那一个字节）→ `atreceive(...)`。
+ *   侧证：`hal_i2c_sleep()` 写 `0x01`、`hal_i2c_idle()` 写 `0x02`（多处 HAL，含
+ *     `hal_uc3_i2c_asf.c` / `hal_sam_i2c_asf.c` / `hal_sam0_i2c_asf.c`）。
+ *
+ * ⇒ 读错字地址的表现**恰好**是我们在台架上看到的：
+ *   **地址被 ACK、命令字节写进去了（`tx` 在涨）、但响应一个字节也读不回（`rx=0`）
+ *     而 `nack` 在涨** —— 器件不认“从 0x03 读”。
+ *   所以 `transact()` 现在**两种都试**（先 0x00、不行再 0x03），并把**哪个通了**记进
+ *   `s_st.resp_waddr`（`se` 会打出来）—— 真机上一眼就能确认到底哪个对，不再靠猜。*/
+#define ATECC_WORD_ADDR_TRY_N   2u
 #define ATECC_PWRUP_US          200u    /* > tPU(100 µs)，多给一倍余量 */
 /* ★ 唤醒令牌的轮询次数与间隔（2026-09-22，依据=摘要手册表 2-2，见 `atecc_wake()` 的注释）：
  *   手册允许用"轮询"代替干等，而**使能自检时**要等 `tWHIST ≥ 20 ms` 才收令牌。
@@ -126,30 +148,27 @@ int atecc_wake(void)
 /* ------------------------------------------------------------------ */
 /* 一条命令 → 一条响应（响应长度由前 4 字节 count 决定）                  */
 /* ------------------------------------------------------------------ */
-static int transact(const uint8_t *pkt, uint32_t pktlen,
-                    uint8_t *resp, uint32_t respcap, uint32_t *resplen)
+
+/* 只发“字地址 0x03 + 命令包”（不含接收）*/
+static int cmd_write(const uint8_t *pkt, uint32_t pktlen)
 {
     uint8_t wbuf[1 + ATECC_CMD_LEN_CRC];
-    uint32_t i, count;
-    int rc;
+    uint32_t i;
 
-    if (pkt == 0 || resp == 0 || resplen == 0 || pktlen > sizeof(wbuf) - 1u) {
-        return ATECC_E_ARG;
-    }
-    s_st.cmd++;
-
-    /* ② 发命令：字地址 + 包 */
     wbuf[0] = ATECC_WORD_ADDR;
     for (i = 0u; i < pktlen; i++) {
         wbuf[1u + i] = pkt[i];
     }
-    rc = i2c_write(s_addr, wbuf, 1u + pktlen);
-    if (rc != 0) {
-        return ATECC_E_IO;
-    }
+    return (i2c_write(s_addr, wbuf, 1u + pktlen) == 0) ? 0 : ATECC_E_IO;
+}
 
-    /* ③ 收响应：先 4 字节 count（这一段事务**要保持打开**）*/
-    rc = i2c_read_begin(s_addr, ATECC_WORD_ADDR);
+/* 从指定字地址读一条响应（先 4 字节 count，再按 count 读满）*/
+static int resp_read(uint8_t waddr, uint8_t *resp, uint32_t respcap, uint32_t *resplen)
+{
+    uint32_t i, count;
+    int rc;
+
+    rc = i2c_read_begin(s_addr, waddr);
     if (rc != 0) {
         return ATECC_E_IO;
     }
@@ -187,6 +206,36 @@ static int transact(const uint8_t *pkt, uint32_t pktlen,
     i2c_read_end();
     *resplen = count;
     return 0;
+}
+
+/* 发一条命令再读回响应。★ **响应字地址两种都试**（0x00 优先，见上面的长注释）：
+ * 第一种读不通时**把命令重发一次**再用 0x03 读 —— 因为读失败的那次可能已经把命令取走了。*/
+static int transact(const uint8_t *pkt, uint32_t pktlen,
+                    uint8_t *resp, uint32_t respcap, uint32_t *resplen)
+{
+    static const uint8_t waddr[ATECC_WORD_ADDR_TRY_N] = {
+        ATECC_WORD_ADDR_RESP, ATECC_WORD_ADDR_RESP_ALT
+    };
+    uint32_t k;
+    int rc = ATECC_E_IO;
+
+    if (pkt == 0 || resp == 0 || resplen == 0 || pktlen > ATECC_CMD_LEN_CRC) {
+        return ATECC_E_ARG;
+    }
+    s_st.cmd++;
+
+    for (k = 0u; k < ATECC_WORD_ADDR_TRY_N; k++) {
+        rc = cmd_write(pkt, pktlen);
+        if (rc != 0) {
+            return rc;
+        }
+        rc = resp_read(waddr[k], resp, respcap, resplen);
+        if (rc == 0) {
+            s_st.resp_waddr = k + 1u;                 /* 1 = 读 0x00 通了；2 = 读 0x03 通了 */
+            return 0;
+        }
+    }
+    return rc;
 }
 
 /* 取一条 32 字节随机数（`with_crc` 决定线上带不带 CRC）*/
@@ -296,6 +345,7 @@ void atecc_stats(atecc_stats_t *out)
     out->ok            = s_st.ok;
     out->fail          = s_st.fail;
     out->crc_mode      = s_st.crc_mode;
+    out->resp_waddr    = s_st.resp_waddr;
     out->last_err      = s_st.last_err;
     out->last_resp_len = s_st.last_resp_len;
     {
@@ -341,6 +391,8 @@ int atecc_selftest(void)
     if (rc != 0) {
         uart_printf(CONSOLE_UART, "[se] 没应答 ⇒ 查三件事：3V3 供电 / SDA(PB7)-SCL(PB6) 接线 "
                                   "/ 4.7k 上拉\r\n");
+        uart_printf(CONSOLE_UART, "[se] 令牌没 ACK **不等于器件不在**（器件若已在 Idle，"
+                                  "它对 0x00 本来就会回 NACK）⇒ 照样发一条命令，看结果说话\r\n");
         /* ★ 只读诊断（2026-09-22 加，c4-γ-2 第一次上机）：把**总线层**的计数打出来，
          *   让下一次上机**一次**分清"软件还是硬件" —— 光看 `NO ACK` 是分不出的：
          *     nack > 0            ⇒ 总线走通了、地址也发出去了，只是**器件没应答**
@@ -353,13 +405,18 @@ int atecc_selftest(void)
                     (unsigned)ist.start, (unsigned)ist.tx_bytes, (unsigned)ist.rx_bytes,
                     (unsigned)ist.nack, (unsigned)ist.timeout,
                     (unsigned)(i2c_get_hz() / 1000u), (unsigned)s_addr);
-        return rc;
     }
+    /* ★ 不再早退（2026-09-23）："令牌没 ACK"**不影响**要不要发命令 —— 走 `atecc_random()`
+     *   的宽容路径（`random_try()` 不会因为令牌没 ACK 就退出）。
+     *   这也是 `seaddr <任意地址>` + `se` 能当"**在别的地址上试命令**"用的前提：
+     *   以前令牌一 NACK 就 `return`，命令阶段根本没走到，于是"0x60 上到底行不行"一直没答案。*/
     rc = atecc_random(r);
-    uart_printf(CONSOLE_UART, "[se] cmd=%u ok=%u fail=%u crc_mode=%s\r\n",
+    uart_printf(CONSOLE_UART, "[se] cmd=%u ok=%u fail=%u crc_mode=%s resp_waddr=%s\r\n",
                 (unsigned)s_st.cmd, (unsigned)s_st.ok, (unsigned)s_st.fail,
                 (s_st.crc_mode == 0u) ? "no-crc(响应 36 B)" :
-                (s_st.crc_mode == 1u) ? "crc(响应 38 B)" : "unknown");
+                (s_st.crc_mode == 1u) ? "crc(响应 38 B)" : "unknown",
+                (s_st.resp_waddr == 1u) ? "0x00" :
+                (s_st.resp_waddr == 2u) ? "0x03" : "unknown");
     if (rc != 0) {
         uart_printf(CONSOLE_UART, "[se] Random FAILED rc=%d last_resp_len=%u raw=",
                     rc, (unsigned)s_st.last_resp_len);
