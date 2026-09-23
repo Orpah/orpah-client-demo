@@ -12,10 +12,9 @@
 | `bstep-ch347f-txah-evb-thrj45.fzz` / `.svg` | **客户端 ↔ T-Halow-RJ45** 夹具（2026-09-20 实测用的那套）：客户端 STA 只接 CH347F 的数据口；TH-RJ45 当 **AP**，它的 **RJ45 空着**，只用 USB-C 看 AT |
 | `cstep-ch347f-txah-evb-nanoch32.fzz` / `.svg` | ★ **c 步台架**（2026-09-21 上机验证过的那套、**c4 上机也用这套**）：**nanoCH32V203（跑自家固件）** + TX-AH EVB + CH347F 两个 PC 窗口 |
 | `cstep-ch347f-txah-evb-nanoch32-atecc608b.fzz` / `.svg` | **c 步台架 + 安全元件**（c4-γ-2 用，2026-09-22）：上面那套**只多一件** —— 面包板上的 ATECC608B 转接板 + 两只 4.7 kΩ 上拉 |
-| `cstep-ch347f-atecc608b.fzz`（⚠ **暂无 `.svg`**） | ★ **B 方案**（2026-09-23）：**CH347F 自己当 I²C 主机**直连 ATECC608B（**图上没有 nano**）—— 用来把「器件不回应」与「我们固件还有毛病」分开。规格与判据见 [`../../docs/ch347f-i2c-crosscheck.md`](../../docs/ch347f-i2c-crosscheck.md) |
+| `cstep-ch347f-atecc608b.fzz` / `.svg` | ★ **B 方案**（2026-09-23）：**CH347F 自己当 I²C 主机**直连 ATECC608B（**图上没有 nano**）—— 用来把「器件不回应」与「我们固件还有毛病」分开。规格与判据见 [`../../docs/ch347f-i2c-crosscheck.md`](../../docs/ch347f-i2c-crosscheck.md) |
 
-**已导出 `.svg` 的图都直接嵌在下面各自那一节里**（点图可看原尺寸 `.svg`）—— 看图不必装 Fritzing；
-**B 方案那张（`cstep-ch347f-atecc608b`）还没导出**，暂时只能装 Fritzing 看 `.fzz`。
+**每张图都直接嵌在下面各自那一节里**（点图可看原尺寸 `.svg`）—— 看图不必装 Fritzing。
 
 前两张图都**内嵌**用到的部件（自包含）；`.svg` 是同图的导出，文档里直接看不必装 Fritzing。
 ⚠ 第三张（`…-thrj45`）**没有内嵌 `T-Halow-RJ45` 部件**（它引用本机 Fritzing 的
@@ -102,7 +101,13 @@ python tools\fzz_nets.py
 
 ## ★ B 方案（`cstep-ch347f-atecc608b`）—— CH347F 自己当 I²C 主机（2026-09-23）
 
-⚠ **这张图还没有 `.svg` 导出**（导出后补图）；现在只能装 Fritzing 打开 `.fzz`。
+[![B 方案接线图：CH347F 直接当 I²C 主机接 ATECC608B（面包板上），图上没有 nano](cstep-ch347f-atecc608b.svg)](cstep-ch347f-atecc608b.svg)
+
+看图三步：**①** 右边那块 `CH347F-EVT-R0-1v0`（`P5`/`JP1` 在它左上角）→ **②** 四根跳线
+（`棕`=地、`红`=3V3、`蓝`/`绿`=I²C 两线；从板子的 `P5` 与 `P2` 末端引出）→ **③** 左边小面包板：
+绿色转接板上那块芯片（板上丝印 `CN`，就是 **ATECC608B**，蓝字那行标注指着它）+ 它旁边两只**上拉**
+（两根**黄色跳线**把 SDA/SCL 引到上拉那一端）。橙色三行字（`供电 / I2C通讯 / 打印日志`）是**贴在导出的
+`.svg` 上**的说明 —— 重新导出会丢（要长期保留就跟 `ATECC608B` 那样放进工程）。
 
 用途：SE 在台架上「地址被 ACK、字节收下、但从不回应」（见 `../../docs/atecc608b-se.md` §9）。
 把 **nano 固件排除在外**（图上就没有 nano）⇒ 独立主机若也拿不到响应 = 器件侧问题；

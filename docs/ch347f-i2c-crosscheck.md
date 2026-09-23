@@ -37,6 +37,8 @@
 
 ## 2b. 接线图（2026-09-23 已核对）
 
+[![B 方案接线图：CH347F 直接当 I²C 主机接 ATECC608B（面包板上），图上没有 nano](../hardware/wiring/cstep-ch347f-atecc608b.svg)](../hardware/wiring/cstep-ch347f-atecc608b.svg)
+
 **`hardware/wiring/cstep-ch347f-atecc608b.fzz`** —— 用 Fritzing 打开即可照插。
 按 `tools/fzz_nets.py`（已登记规格）从 `.fzz` 里读出来**真实网表**，逐网核对结论：
 
