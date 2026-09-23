@@ -135,7 +135,7 @@ void i2c_enable(void)
     I2C1->CTLR1 |= (uint32_t)(I2C_CTLR1_PE | I2C_CTLR1_ACK);
 }
 
-int i2c_probe(uint8_t addr7)
+int i2c_probe_dir(uint8_t addr7, int read_dir)
 {
     int rc;
 
@@ -149,7 +149,7 @@ int i2c_probe(uint8_t addr7)
     rc = wait_flag(I2C_STAR1_SB, 0u, I2C_TIMEOUT_MS);
     if (rc != IT_OK) { s_st.last_step = 2u; return rc; }
     (void)I2C1->STAR1;                   /* 读 SR1 → 写 DR 才清 SB */
-    I2C1->DATAR = (uint32_t)((uint32_t)addr7 << 1);
+    I2C1->DATAR = (uint32_t)((uint32_t)addr7 << 1) | (read_dir ? 1u : 0u);
     rc = wait_flag(I2C_STAR1_ADDR, I2C_STAR1_AF, I2C_TIMEOUT_MS);
     if (rc == IT_OK) {
         (void)I2C1->STAR1;               /* 读 SR1 再读 SR2 = 清 ADDR */
@@ -159,6 +159,11 @@ int i2c_probe(uint8_t addr7)
     }
     I2C1->CTLR1 |= I2C_CTLR1_STOP;
     return rc;
+}
+
+int i2c_probe(uint8_t addr7)
+{
+    return i2c_probe_dir(addr7, 0);
 }
 
 int i2c_write(uint8_t addr7, const uint8_t *buf, uint32_t n)

@@ -411,6 +411,9 @@ int atecc_selftest(void)
      *   的宽容路径（`random_try()` 不会因为令牌没 ACK 就退出）。
      *   这也是 `seaddr <任意地址>` + `se` 能当"**在别的地址上试命令**"用的前提：
      *   以前令牌一 NACK 就 `return`，命令阶段根本没走到，于是"0x60 上到底行不行"一直没答案。*/
+    uart_printf(CONSOLE_UART, "[se] 命令发往 addr=0x%02x（重烧/复位后回到缺省 0x60——"
+                              "先 `seaddr <hex>` 或用 `sewake` 扫一下）\r\n",
+                (unsigned)s_addr);
     rc = atecc_random(r);
     uart_printf(CONSOLE_UART, "[se] cmd=%u ok=%u fail=%u crc_mode=%s resp_waddr=%s\r\n",
                 (unsigned)s_st.cmd, (unsigned)s_st.ok, (unsigned)s_st.fail,
@@ -469,15 +472,21 @@ static void diag_levels(void)
 }
 
 /* 对**单个地址**连探 `DIAG_PROBE_TRIES` 次，返回 ACK 次数（0..3）。
- * `diag_scan()` 与 `atecc_diag_scan_stats()` 共用它 ⇒ "一次探测回合"只有一份定义。*/
-static uint32_t diag_probe_n(uint8_t a)
+ * `read_dir` != 0 时发读方向（用来分辨"真器件"与"伪 ACK"：真从机两个方向都该 ACK）。
+ * `diag_scan()` / `atecc_diag_scan_stats()` 共用它 ⇒ "一次探测回合"只有一份定义。*/
+static uint32_t diag_probe_dir_n(uint8_t a, int read_dir)
 {
     uint32_t hit = 0u, k;
 
     for (k = 0u; k < DIAG_PROBE_TRIES; k++) {
-        if (i2c_probe(a) == 0) { hit++; }
+        if (i2c_probe_dir(a, read_dir) == 0) { hit++; }
     }
     return hit;
+}
+
+static uint32_t diag_probe_n(uint8_t a)
+{
+    return diag_probe_dir_n(a, 0);
 }
 
 /* 工装：扫 7 位地址 0x01~0x7F（**跳过 0x00** —— 那是唤醒令牌的地址，探它会把两种含义搞混）。
@@ -493,8 +502,14 @@ static uint8_t diag_scan(const char *tag)
         uint32_t hit = diag_probe_n(a);
 
         if (hit >= DIAG_PROBE_MIN) {
-            uart_printf(CONSOLE_UART, "0x%02x(ACK %u/%u) ",
-                        (unsigned)a, (unsigned)hit, (unsigned)DIAG_PROBE_TRIES);
+            /* ★ 命中时**顺便探一次读方向**：真从机两个方向都该 ACK。
+             *   “W 方向 ACK 但 R 方向 NACK” ⇒ 这个 ACK 可疑（不是正常从机），
+             *   这是把“器件真在”与“我们的 ACK 判定有毛病”分开的一条判据。*/
+            uint32_t rhit = diag_probe_dir_n(a, 1);
+
+            uart_printf(CONSOLE_UART, "0x%02x(ACK %u/%u, R %u/%u) ",
+                        (unsigned)a, (unsigned)hit, (unsigned)DIAG_PROBE_TRIES,
+                        (unsigned)rhit, (unsigned)DIAG_PROBE_TRIES);
             if (found == 0u) { found = a; }
             n++;
         } else if (hit != 0u) {

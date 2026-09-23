@@ -47,7 +47,10 @@ void i2c_init(void);
 void i2c_disable(void);
 void i2c_enable(void);
 
-/* 只发地址看有没有 ACK（返回 0 = 有器件应答）。*/
+/* 只发地址看有没有 ACK（返回 0 = 有器件应答）。
+ * `read_dir` != 0 ⇒ 发**读方向**（`addr<<1 | 1`）—— 真从机两个方向都该 ACK，
+ * 所以“W 方向 ACK 但 R 方向 NACK”是用来分辨“真器件”与“伪/偶然 ACK”的一条判据。*/
+int i2c_probe_dir(uint8_t addr7, int read_dir);
 int i2c_probe(uint8_t addr7);
 
 /* ★ 工装（2026-09-23）：运行时改 I²C 速率。
