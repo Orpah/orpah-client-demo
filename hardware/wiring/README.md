@@ -13,6 +13,7 @@
 | `cstep-ch347f-txah-evb-nanoch32.fzz` / `.svg` | ★ **c 步台架**（2026-09-21 上机验证过的那套、**c4 上机也用这套**）：**nanoCH32V203（跑自家固件）** + TX-AH EVB + CH347F 两个 PC 窗口 |
 | `cstep-ch347f-txah-evb-nanoch32-atecc608b.fzz` / `.svg` | **c 步台架 + 安全元件**（c4-γ-2 用，2026-09-22）：上面那套**只多一件** —— 面包板上的 ATECC608B 转接板 + 两只 4.7 kΩ 上拉 |
 | `cstep-ch347f-atecc608b.fzz` / `.svg` | ★ **B 方案**（2026-09-23）：**CH347F 自己当 I²C 主机**直连 ATECC608B（**图上没有 nano**）—— 用来把「器件不回应」与「我们固件还有毛病」分开。规格与判据见 [`../../docs/ch347f-i2c-crosscheck.md`](../../docs/ch347f-i2c-crosscheck.md) |
+| `cstep-nanoch32-atecc608b.fzz` / `.svg` | **最小 SE 台架**（2026-10-06）：**只有 nano + ATECC608B**（+ 两只 4.7 kΩ 上拉），单一主机、线最少 —— 用来判「nano 能不能读到 SE 的随机数」。**PC 窗口不在图上**（靠 CH347F 的 `UART0 ↔ PA9/PA10` 或 USB-TTL，**那几根线不进 I²C**） |
 
 **每张图都直接嵌在下面各自那一节里**（点图可看原尺寸 `.svg`）—— 看图不必装 Fritzing。
 
@@ -118,6 +119,24 @@ python tools\fzz_nets.py
 - 两个主机不能同时驱动同一对线 ⇒ **nano 断电或按住 RST**（这块图上不出现 nano 就是这个意思）；
 - 图上 **SE + 两只 4.7 kΩ 吃 CH347F 的 3V3**（与 c4-γ-2 那张相反：那张吃 nano 的 3V3）；
 - `P5` 第 4 脚丝印是 **`VIO`**，图上没接 ⇒ 上机前确认 **`JP1` 已把 VIO 跳到 3V3**（**未核实**）。
+
+## ★ 最小 SE 台架（`cstep-nanoch32-atecc608b`）—— 只有 nano + 608b（2026-10-06）
+
+[![最小 SE 台架：只有 nanoCH32V203 + 面包板上的 ATECC608B 与两只 4.7 kΩ 上拉](cstep-nanoch32-atecc608b.svg)](cstep-nanoch32-atecc608b.svg)
+
+用途：**只想验「nano 能不能读到 SE 的随机数」**时用这一张 —— **单一主机、线最少**
+（B 方案那张是「CH347F 当主机」，这张是「nano 当主机」）。图上**没有** CH347F、没有模组：
+**PC 窗口不在图里**（要靠 CH347F 的 `UART0 ↔ PA9/PA10` 或一根 USB-TTL，**那几根线不进 I²C**）。
+
+| 用途 | nano 侧 | SE 侧（转接板） |
+|---|---|---|
+| I²C 数据 | `PB7`（SDA） | `pin5` SDA，+ 一只 **4.7 kΩ** 到 3V3 |
+| I²C 时钟 | `PB6`（SCL） | `pin6` SCL，+ 另一只 **4.7 kΩ** 到 3V3 |
+| 供电 | `3V3` 轨 | `pin8` VCC（**与两只上拉同一轨**） |
+| 地 | `GND` | `pin4` GND |
+| 空脚 | — | `pin1/2/3/7`（NC）**各自悬空** |
+
+判据（跑 `sewake` → `se`）：`Random(0x1B)` 回来 **32 字节 + CRC 对上**才算通过。
 
 ## 接线（从 `.fzz` 里抽出来的真实连线，2026-09-16 修订）—— 单模块那张
 

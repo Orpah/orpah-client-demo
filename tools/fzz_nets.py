@@ -123,6 +123,18 @@ EXPECT = {
         {(MOD, "A13"), (BRIDGE, "RXD1")},                     # 窗口②：模组 TX → CH347F RXD1
         {(MOD, "GND"), (MCU, "GND"), (BRIDGE, "GND"), (SE, "GND")},   # 四块共地
     ],
+    # ---- 最小 SE 台架（**只有 nano + 608b**，2026-10-06 用户画）------------------------
+    #   用途：只想验「nano 能不能读到 SE 的随机数」时用这一张 —— 单一主机、线最少。
+    #   规格（2026-10-06 给用户的清单）：
+    #   · I²C1 默认脚：`PB6 = SCL`、`PB7 = SDA`；SE 的 pin5=SDA / pin6=SCL / pin8=VCC / pin4=GND；
+    #   · **每根线一只独立 4.7 kΩ 上拉**到 3V3；SE 与两只上拉都吃 **nano 自己的 3V3 轨**；
+    #   · 图上**没有 CH347F**（PC 窗口靠它的 UART0 ↔ PA9/PA10 或 USB-TTL，**不进 I²C**）。
+    "cstep-nanoch32-atecc608b.fzz": [
+        {(MCU, "PB7/USB2DM"), (SE, "SDA"), (RES, "connector1")},   # I²C 数据 + 一只 4.7k
+        {(MCU, "PB6/USB2DP"), (SE, "SCL"), (RES, "connector1")},   # I²C 时钟 + 另一只 4.7k
+        {(MCU, "VDDA"), (SE, "VCC"), (RES, "connector0")},        # 3V3：SE 与两只上拉的另一端
+        {(MCU, "GND"), (SE, "GND")},                              # 共地
+    ],
 }
 
 
