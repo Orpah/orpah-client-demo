@@ -14,6 +14,12 @@
 | `cstep-ch347f-txah-evb-nanoch32-atecc608b.fzz` / `.svg` | **c 步台架 + 安全元件**（c4-γ-2 用，2026-09-22）：上面那套**只多一件** —— 面包板上的 ATECC608B 转接板 + 两只 4.7 kΩ 上拉 |
 | `cstep-ch347f-atecc608b.fzz` / `.svg` | ★ **B 方案**（2026-09-23）：**CH347F 自己当 I²C 主机**直连 ATECC608B（**图上没有 nano**）—— 用来把「器件不回应」与「我们固件还有毛病」分开。规格与判据见 [`../../docs/ch347f-i2c-crosscheck.md`](../../docs/ch347f-i2c-crosscheck.md) |
 | `cstep-nanoch32-atecc608b.fzz` / `.svg` | **最小 SE 台架**（2026-10-06）：**只有 nano + ATECC608B**（+ 两只 4.7 kΩ 上拉），单一主机、线最少 —— 用来判「nano 能不能读到 SE 的随机数」。**PC 窗口不在图上**（靠 CH347F 的 `UART0 ↔ PA9/PA10` 或 USB-TTL，**那几根线不进 I²C**） |
+| `cstep-ch347f-nanoch32-atecc608b.fzz` / `.svg` | ★ **最小 SE 台架 + PC 窗口**（2026-10-06）：上面那张**只多三根线** —— CH347F 的 `UART0`（`TXD0→PA10`、`RXD0→PA9`）+ **三块共地**；**CH347F 的 `P5`(I²C) 一根都不接**（单一主机）。**跑 `sewake`/`se` 用这一张** |
+
+⚠ **标注与图不符（已知两处，2026-10-06）**：`cstep-ch347f-atecc608b.svg` 与
+`cstep-nanoch32-atecc608b.svg` 上印着「打印日志」，但**这两张图里没有 PC 串口**
+（nano 的 `PA9/PA10` 空着）⇒ 照它们接**看不到日志**。两种收尾随选：下次重导时把那句删掉/
+改成「串口另接」，或直接把窗口画进去（`cstep-ch347f-nanoch32-atecc608b` 就是画了窗口的版本）。
 
 **每张图都直接嵌在下面各自那一节里**（点图可看原尺寸 `.svg`）—— 看图不必装 Fritzing。
 
@@ -29,7 +35,7 @@ python tools\fzz_nets.py
 
 脚本按 Fritzing 自己的存储方式把 `.fzz` 解成网表（含每条 wire 自身导通两端 + 部件内部 `<bus>`
 + **面包板同列导通**），再与脚本里的**期望表**逐网比对 —— 期望表就是这几套夹具的接线规格（单一源）。
-**2026-09-23 实跑：6 张图均「全部对上 ✓」（退出码 0）；改图时先改 `EXPECT`。**
+**2026-10-06 实跑：8 张图均「全部对上 ✓」（退出码 0）；改图时先改 `EXPECT`。**
 
 ---
 
@@ -137,6 +143,22 @@ python tools\fzz_nets.py
 | 空脚 | — | `pin1/2/3/7`（NC）**各自悬空** |
 
 判据（跑 `sewake` → `se`）：`Random(0x1B)` 回来 **32 字节 + CRC 对上**才算通过。
+
+## ★ 最小 SE 台架 + PC 窗口（`cstep-ch347f-nanoch32-atecc608b`）—— 2026-10-06
+
+[![最小 SE 台架 + PC 窗口：nano + ATECC608B + CH347F（只用它的 UART0 当串口）](cstep-ch347f-nanoch32-atecc608b.svg)](cstep-ch347f-nanoch32-atecc608b.svg)
+
+在上面那张（只有 nano + 608b）的基础上**只加三根线**：
+
+| 用途 | 一端 | 另一端 |
+|---|---|---|
+| 窗口（看日志 / 发命令） | `CH347F.TXD0`（`P2` 排针） | `nano.PA10`（USART1_RX） |
+| 窗口 | `CH347F.RXD0` | `nano.PA9`（USART1_TX） |
+| 地 | `CH347F.GND` | 并进**同一个地网**（nano + SE + CH347F **三块共地**） |
+
+- ★ **CH347F 的 `P5`（I²C）一根都不接** —— 同一时刻只能有一个 I²C 主机；这条由
+  `tools/fzz_nets.py` 守着（有导线接到 `P5` 会被判成「多出来的跨实例网」）。
+- 串口 `115200 8N1`；判据：`sewake` → `se`，`Random(0x1B)` 回 **32 字节 + CRC 对上**。
 
 ## 接线（从 `.fzz` 里抽出来的真实连线，2026-09-16 修订）—— 单模块那张
 

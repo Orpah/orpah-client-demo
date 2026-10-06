@@ -135,6 +135,21 @@ EXPECT = {
         {(MCU, "VDDA"), (SE, "VCC"), (RES, "connector0")},        # 3V3：SE 与两只上拉的另一端
         {(MCU, "GND"), (SE, "GND")},                              # 共地
     ],
+    # ---- 最小 SE 台架 + **PC 窗口**（`cstep-ch347f-nanoch32-atecc608b`，2026-10-06 用户画）----
+    #   在上面那张的基础上**只加窗口三根**：`TXD0 → PA10`、`RXD0 → PA9`，地并成**三块共地**。
+    #   ★ **CH347F 的 `P5`（I²C）一根都不接** —— 硬要求（同一时刻只能一个 I²C 主机）；
+    #     一旦有导线接到 `P5`，本脚本会把它报成"多出来的跨实例网"。
+    #   ★ 这张图的标注里 "打印日志" 是**名副其实**的（窗口就在图上）；
+    #     没窗口那两张（`cstep-ch347f-atecc608b` / `cstep-nanoch32-atecc608b`）的同一句标注
+    #     与图不符，已在 `hardware/wiring/README.md` 里列为"已知不符"。
+    "cstep-ch347f-nanoch32-atecc608b.fzz": [
+        {(MCU, "PB7/USB2DM"), (SE, "SDA"), (RES, "connector1")},   # I²C 数据 + 一只 4.7k
+        {(MCU, "PB6/USB2DP"), (SE, "SCL"), (RES, "connector1")},   # I²C 时钟 + 另一只 4.7k
+        {(MCU, "VDDA"), (SE, "VCC"), (RES, "connector0")},        # 3V3：SE 与两只上拉的另一端
+        {(MCU, "GND"), (SE, "GND"), (BRIDGE, "GND")},            # **三块共地**
+        {(BRIDGE, "TXD0"), (MCU, "PA10")},                         # 窗口：CH347F UART0 → nano 控制台
+        {(BRIDGE, "RXD0"), (MCU, "PA9")},
+    ],
 }
 
 
