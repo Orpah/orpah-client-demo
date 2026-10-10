@@ -115,8 +115,9 @@ void atecc_stats(atecc_stats_t *out);
 int atecc_nonce_hex(char out[ATECC_NONCE_BYTES * 2 + 1], void *ctx);
 
 #define ATECC_E_ARG     (-1)
-#define ATECC_E_WAKE    (-2)     /* 唤醒没 ACK */
+#define ATECC_E_WAKE    (-2)     /* 没拿到正确的唤醒应答 */
 #define ATECC_E_IO      (-3)     /* I²C 读写失败（NACK/超时）*/
 #define ATECC_E_RESP    (-4)     /* 响应不符合预期（长度/count/CRC）*/
+#define ATECC_E_SELFTEST (-5)    /* 器件回了“自检失败”应答 `04 07 C4 40` ✗ */
 
 #endif /* __ATECC_H__ */

@@ -102,35 +102,41 @@ static void wake_pulse(void)
     i2c_enable();
 }
 
+/* ★★ 2026-10-10：唤醒的**权威口径**（照 CryptoAuthLib `hal_i2c_start.c::hal_i2c_wake()`
+ *   + `lib/hal/atca_hal.c::hal_check_wake()`）：
+ *     ① 脉冲 = **对从机地址 0x00 写 0 字节** —— 库里那句注释就是"part will NACK,
+ *        so don't check for status" ⇒ **它本来就不 ACK** ✗；
+ *        （我们原来拿"令牌没 ACK"当"没醒"，判据本身就是错的 ✗）
+ *     ② 等 tWHI（自检使能时是 tWHIST ≥ 20 ms，见下）；
+ *     ③ **从字地址 0x00 读 4 字节**，应当正好是 `04 11 33 43`（被唤醒 ✓）
+ *        或 `04 07 C4 40`（**自检失败** ✗）—— `hal_check_wake()` 就是核对这两个常量 ✓。
+ *   ⚠⚠ 第 ③ 步**必须读掉**：那 4 字节是器件放进输出缓冲的**回复**，库里是**读掉**它的 ✓；
+ *      我们原来只"探地址"**不读** ✗ ⇒ 它就留在缓冲里，之后读命令响应时读到的很可能
+ *      **正是这串旧的唤醒应答** ✓（2026-10-10 实测：`04 11 33 43` 反复被读回来 ✗）。
+ *   返回 0 = 拿到并读掉了正确的唤醒应答；-4 = 自检失败；其它 <0 = 没拿到（见下）。*/
+static int wake_reply_read(uint8_t out4[4]);   /* 定义在 resp_read() 之后 */
+
 int atecc_wake(void)
 {
-    uint32_t tries;
+    uint32_t tries, i;
     int rc;
+    uint8_t rep[4] = { 0u, 0u, 0u, 0u };
 
     /* ① 上电延时（若刚上电；重复调用只是多等 200 µs，无害）*/
     i2c_delay_us(ATECC_PWRUP_US);
 
-    /* ★ 整段唤醒序列最多重做 `ATECC_WAKE_TRIES` 次（手册表 2-2 明确允许"轮询"）。
-     *   为什么**每轮都重做脉冲**、而不是只重发令牌：脉冲没被器件认到时，
-     *   只重发令牌是没用的（器件根本没进入"要醒"的状态）。
-     *
-     *   ★ 为什么必须轮询（2026-09-22 把摘要手册表 2-2 逐字核出来的，以前漏了这条）：
-     *     同一张表给的是**两个情形** ——
-     *       未使能自检：`tWHI  ≥ 1500 µs`
-     *       **使能自检：`tWHIST ≥ 20   ms`**
-     *     两行的说明都写着 "SDA should be stable high for this entire duration
-     *     **unless polling is implemented**"；而 `tPU` 那行还补了一句
-     *     "The power-up delay will be significantly longer if power-on self test
-     *     is enabled in the Configuration zone."
-     *   ⇒ 只等 1700 µs 且**只发一次**令牌时，一颗**完全正常**的芯片（自检开）也会回 NACK
-     *     —— 现象就是 `[se] wake: NO ACK` 而 `nack` 逐帧 +1、`timeout=0`
-     *     （总线全好、器件不应答），正是我们上机看到的那一版。
-     *   ⇒ `tries=` 打在 `se` 的判据行上："第几次才 ACK"就是**这颗芯片到底要多久**的实测值。*/
+    /* ★ 整段序列最多重做 `ATECC_WAKE_TRIES` 次（手册表 2-2 明确允许"轮询"；库里也是重试整段 ✓）。
+     *   为什么**每轮都重做脉冲**：脉冲没被器件认到时，只重发令牌没用。
+     *   ★ 为什么必须轮询（2026-09-22 逐字核摘要手册表 2-2）：同一张表给了两个情形 ——
+     *     未使能自检 `tWHI ≥ 1500 µs`；**使能自检 `tWHIST ≥ 20 ms`**；两行都写着
+     *     "SDA should be stable high for this entire duration **unless polling is implemented**" ✓
+     *   ⇒ 只等 1.7 ms 且只发一次令牌时，**自检使能的正常芯片**也不应答应 ✓
+     *   ⇒ `轮=` 打在 `se` 的判据行上："第几轮才拿到正确唤醒应答" = 这颗芯片到底要多久 ✓。*/
     for (tries = 0u; tries < ATECC_WAKE_TRIES; tries++) {
         wake_pulse();
 
-        /* ④ 唤醒令牌：0x00 字节（器件应答 ACK 才算醒）*/
-        rc = i2c_probe(ATECC_WAKE_TOKEN_ADDR);
+        /* ③ 读「唤醒应答」并**读掉**（这才是权威判据 ✓）*/
+        rc = wake_reply_read(rep);
         if (rc == 0) {
             s_st.wake_ok++;
             s_st.last_wake_tries = tries + 1u;
@@ -139,6 +145,11 @@ int atecc_wake(void)
         if (tries + 1u < ATECC_WAKE_TRIES) {
             i2c_delay_us(ATECC_WAKE_GAP_US);
         }
+    }
+    /* 失败时把**最后一轮读到的字节**留在 stats 里（现场判据：唤醒应答长什么样 ✓）*/
+    s_st.last_resp_len = 4u;
+    for (i = 0u; i < sizeof(s_st.last_resp); i++) {
+        s_st.last_resp[i] = (i < 4u) ? rep[i] : 0u;
     }
     s_st.last_wake_tries = ATECC_WAKE_TRIES;
     s_st.wake_fail++;
@@ -207,23 +218,60 @@ static int resp_read(uint8_t waddr, uint8_t *resp, uint32_t respcap, uint32_t *r
     return 0;
 }
 
-/* ★ 2026-10-10：写完命令到能读响应之间要**等** —— 器件需要 tEXEC 量级的时间才把响应备好，
- *   快读会：① 直接 NACK（器件还没准备好）✗；② 读出**唤醒响应** `04 11 33 43`（刚被唤醒 ✓）。
- *   做法照 CryptoAuthLib 的 I²C HAL：**反复探地址，直到器件 ACK**。
- *   ⚠ 这两个值是按手册的 tEXEC 量级 + 实测保守取的；若以后实测出更好的数，改这里（只此一处）。*/
-#define ATECC_READY_POLL_MS   8u      /* 轮询上限（ms）*/
-#define ATECC_READY_GAP_US    200u    /* 两次探测之间（µs）*/
+/* ★ 2026-10-10：读「唤醒应答」并核对 —— 常量照 CryptoAuthLib `hal_check_wake()` ✓。
+ *   返回 0 = `04 11 33 43`（被唤醒 ✓）；-4 = `04 07 C4 40`（**自检失败** ✗）；
+ *   其它 <0 = 没读到 / 读到别的东西（字节留在 `out4` 供上层打印 ✓）。*/
+static int wake_reply_read(uint8_t out4[4])
+{
+    static const uint8_t wake_ok[4]       = { 0x04u, 0x11u, 0x33u, 0x43u };
+    static const uint8_t wake_selftest[4] = { 0x04u, 0x07u, 0xC4u, 0x40u };
+    uint32_t got = 0u, i;
 
-static void wait_ready(uint32_t ms)
+    if (resp_read(ATECC_WORD_ADDR_RESP, out4, 4u, &got) != 0) {
+        return ATECC_E_IO;
+    }
+    if (got == 4u) {
+        for (i = 0u; i < 4u; i++) {
+            if (out4[i] != wake_ok[i]) {
+                break;
+            }
+        }
+        if (i == 4u) {
+            return 0;                       /* 04 11 33 43 ✓ */
+        }
+        for (i = 0u; i < 4u; i++) {
+            if (out4[i] != wake_selftest[i]) {
+                break;
+            }
+        }
+        if (i == 4u) {
+            return ATECC_E_SELFTEST;        /* 04 07 C4 40 ✗（自检失败）*/
+        }
+    }
+    return ATECC_E_RESP;
+}
+/* ★★ 2026-10-10 改：写成"轮询到器件答地址再读"，并把上限放到 **60 ms** ——
+ *   因为执行时间**不是**我们原来以为的几毫秒：CryptoAuthLib 的表里 `Random` 是 **23 ms**
+ *   （`lib/calib/calib_execution.c` 的 `device_execution_time_108[]`：`{ ATCA_RANDOM, 23}`；
+ *     ATECC608 那张表同量级）✗ —— 原来只等 8 ms ⇒ **每次都在它还在算的时候去读** ✗。
+ *   2026-10-10 实测（不烧录、走 `i2cwr`/`i2crd`）：下命令后 **10 ms 读地址被 NACK**
+ *   （= 器件正忙、根本不答地址 ✓）；**210 ms 时它已经睡了** ⇒ 只有"**轮询到 ACK 立刻读**"
+ *   这一条路走得通 ✓——而这正是 CryptoAuthLib 的做法（响应靠**轮询**，不是干等一个数 ✓）。
+ *   返回 1 = 它答了地址（响应已备好）；0 = 60 ms 内一直不答 ⇒ **本轮不读**（交给上层重试）。*/
+#define ATECC_READY_POLL_MS   60u      /* ≥ 2 × 23 ms（给两倍余量）*/
+#define ATECC_READY_GAP_US    300u     /* 两次探地址之间（探一次只要 µs 量级 ✓）*/
+
+static int wait_ready(uint32_t ms)
 {
     uint32_t deadline = g_tick_ms + ms;
 
     do {
         if (i2c_probe(s_addr) == 0) {   /* 0 = 有器件应答 ⇒ 它备好了 */
-            return;
+            return 1;
         }
         i2c_delay_us(ATECC_READY_GAP_US);
     } while ((int32_t)(g_tick_ms - deadline) < 0);
+    return 0;
 }
 
 /* ★ 2026-10-10：读响应**之前**看两条线有没有被器件放开。
@@ -268,7 +316,12 @@ static int transact(const uint8_t *pkt, uint32_t pktlen,
         if (rc != 0) {
             return rc;
         }
-        wait_ready(ATECC_READY_POLL_MS);   /* ★ 等它备好（见上面注释）*/
+        if (!wait_ready(ATECC_READY_POLL_MS)) {
+            uart_printf(CONSOLE_UART,
+                        "[se] 等器件备好超时（%u ms 内它一直不答地址）⇒ 本轮不读（留给重试）\r\n",
+                        (unsigned)ATECC_READY_POLL_MS);
+            return ATECC_E_IO;
+        }
         /* ★ 读前判据：两线真被放开才读。若有线被按住 ⇒ **不读**（否则必是 BERR）⇒
          *   返回错误、交给上层 `random_try()` 重试（那里会重做唤醒序列）。*/
         if (!lines_free(&lv_scl, &lv_sda)) {
@@ -466,15 +519,20 @@ int atecc_selftest(void)
     uint32_t i;
 
     rc = atecc_wake();
-    uart_printf(CONSOLE_UART, "\r\n[se] wake: %s (ok=%u fail=%u tries=%u/%u)\r\n",
-                (rc == 0) ? "ACK" : "NO ACK", (unsigned)s_st.wake_ok,
-                (unsigned)s_st.wake_fail, (unsigned)s_st.last_wake_tries,
-                (unsigned)ATECC_WAKE_TRIES);
+    uart_printf(CONSOLE_UART,
+                "\r\n[se] 唤醒判据 = 读回的 4 字节应等于 04 11 33 43：%s（ok=%u fail=%u 轮=%u/%u）\r\n",
+                (rc == 0) ? "是 ✓" : "不是 ✗",
+                (unsigned)s_st.wake_ok, (unsigned)s_st.wake_fail,
+                (unsigned)s_st.last_wake_tries, (unsigned)ATECC_WAKE_TRIES);
     if (rc != 0) {
-        uart_printf(CONSOLE_UART, "[se] 没应答 ⇒ 查三件事：3V3 供电 / SDA(PB7)-SCL(PB6) 接线 "
-                                  "/ 4.7k 上拉\r\n");
-        uart_printf(CONSOLE_UART, "[se] 令牌没 ACK **不等于器件不在**（器件若已在 Idle，"
-                                  "它对 0x00 本来就会回 NACK）⇒ 照样发一条命令，看结果说话\r\n");
+        uart_printf(CONSOLE_UART,
+                    "[se] 最后一轮读到：%02x %02x %02x %02x（≠04 11 33 43）"
+                    "⇒ 查 3V3 供电 / SDA(PB7)-SCL(PB6) 接线 / 4.7k 上拉\r\n",
+                    (unsigned)s_st.last_resp[0], (unsigned)s_st.last_resp[1],
+                    (unsigned)s_st.last_resp[2], (unsigned)s_st.last_resp[3]);
+        uart_printf(CONSOLE_UART,
+                    "[se] 注：对地址 0x00 写 0 字节**本来就不会 ACK**（库里原话 "
+                    "\"part will NACK, so don't check for status\"）⇒ 别拿它当\"器件不在\"✗\r\n");
         /* ★ 只读诊断（2026-09-22 加，c4-γ-2 第一次上机）：把**总线层**的计数打出来，
          *   让下一次上机**一次**分清"软件还是硬件" —— 光看 `NO ACK` 是分不出的：
          *     nack > 0            ⇒ 总线走通了、地址也发出去了，只是**器件没应答**
