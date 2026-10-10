@@ -574,6 +574,35 @@ for (counter = 0; counter < length; counter++)
 `docs/*` 里凡写 "CRC-16/BUYPASS" 的地方都要改成这个口径 ✓；改完必须**重跑交叉测试**并用
 **原厂那两条实发包**当新向量（它们是最好的真值 ✓）。
 
+★★★ **2026-10-10 深夜（第五段）：★ 硬件当场证明 —— 器件开始执行命令了 ✓**
+
+改完 CRC（`proto/crc16.*` 换成原厂 `atCRC()` 口径）后，**不烧固件**、直接用 CH347F 当主机验
+（判据脚本见下），两次只差**一个变量**：
+
+| 变量 | 器件回什么 | 判读 |
+|---|---|---|
+| 修好 CRC，但**命令字地址用 0x00** ✗ | `04 11 33 43`（4 B） | 状态 `0x11` = **唤醒成功** ⇒ **不再说 bad crc** ✓（修 CRC 前是 `04 FF 01 42` = `0xFF` bad crc ✗） |
+| 修好 CRC + **命令字地址 0x03** ✓ | `23 \| FF FF 00 00 ×8 \| 41 1A`（**35 B**） | **count=0x23** ✓ + 响应 **CRC 自洽** ✓ ⇒ **器件执行了 `Random(0x1B)`** ✓✓✓ |
+
+★ 结论：**根因就是 CRC** ✓ —— 修掉它，器件立刻开始干活 ✓（从 c4-γ-2 到今天，
+我们发过的每一条命令都是"CRC 错"被丢弃的 ✗）。
+
+★★ **两条硬事实（本次新得，写进本仓规矩）**：
+1. **命令的 I²C 字地址 = `0x03`** ✓（读响应才是 `0x00`）—— 出处：原厂
+   `hal_is_command_word()` 认的就是 `0x00/0x03/0x10` 里的 **`0x03`**（0xFF 是 legacy）✓。
+   ⚠ 我们的自定义 HAL 把原厂栈传来的 `word_address=0x00` 原样转发 ✗ ⇒ 器件把它当成
+   "读/唤醒" ⇒ 只回 4 字节状态包 ✗（这也是为什么"原厂代码也拿不到数据"那一轮看起来像器件的问题 ✗）。
+2. **这颗件的 Config 区还没锁定**（`LockConfig` 未做）✓ —— 证据：`Random` 回的是
+   `FF FF 00 00` 重复模式 ✓（原厂 `atcab_random` 的 docstring 原话："if the configuration zone
+   isn't locked yet (LockConfig) then it will return a 0xFFFF0000 repeating pattern instead" ✓）。
+   ⇒ 想要**真随机数**要先按流程配 Config + LockConfig ✓（d 步的事 ✓）；现在拿到的是
+   "能通信、能执行"这个更重要的结论 ✓。
+
+**复现**（PC 侧，10 秒；台架 = CH347F 当唯一主机，nano 断电 ✓）：
+`python proto\run_cross_test.py --refresh && python proto\run_cross_test.py`（十六组 exit 0 ✓）
+＋ 一次性判据脚本：唤醒令牌（向 `0x00` 写 0 字节）→ 写 `[addr|0][0x03] + 07 1B 00 00 00 24 CD`
+→ 等 30 ms → 从 `0x00` 读 count 再续读 ⇒ **应当 35 字节**（`FF FF 00 00`×8 + CRC）✓。
+
 ### 8.3 采购与验收（买回来先跑哪几条）
 
 拆机 / 散新件最常见的三种"还能用但不像新的"：
