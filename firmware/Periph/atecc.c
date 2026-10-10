@@ -161,12 +161,18 @@ int atecc_wake(void)
 /* 一条命令 → 一条响应（响应长度由**第 1 字节** count 决定）                      */
 /* ------------------------------------------------------------------ */
 
-/* 只发“字地址 0x03 + 命令包”（不含接收）*/
+/* 只发“字地址 0x03 + 命令包”（不含接收）
+ * ★ 2026-10-11 修：缓冲必须按**最长的命令**算（`ATECC_CMD_LEN_MAX` = d 步的 Nonce 39 B ✗）
+ *   —— 原来是 `1 + ATECC_CMD_LEN_CRC` = 8 B ⇒ 一写就**栈溢出** ✗。
+ *   长度上限与缓冲尺寸现在都引**同一个**常量（`proto/atecc_msg.h`）⇒ 不会再各写一个数 ✓。*/
 static int cmd_write(const uint8_t *pkt, uint32_t pktlen)
 {
-    uint8_t wbuf[1 + ATECC_CMD_LEN_CRC];
+    uint8_t wbuf[1u + ATECC_CMD_LEN_MAX];
     uint32_t i;
 
+    if (pktlen > ATECC_CMD_LEN_MAX) {
+        return ATECC_E_ARG;
+    }
     wbuf[0] = ATECC_WORD_ADDR;
     for (i = 0u; i < pktlen; i++) {
         wbuf[1u + i] = pkt[i];
@@ -310,8 +316,8 @@ static int transact(const uint8_t *pkt, uint32_t pktlen,
     uint32_t k;
     int rc = ATECC_E_IO;
 
-    if (pkt == 0 || resp == 0 || resplen == 0 || pktlen > ATECC_CMD_LEN_CRC) {
-        return ATECC_E_ARG;
+    if (pkt == 0 || resp == 0 || resplen == 0 || pktlen > ATECC_CMD_LEN_MAX) {
+        return ATECC_E_ARG;      /* ★ 上限 = **最长的那条命令**（Nonce 39 B），别用 7 ✗ */
     }
     s_st.cmd++;
 
@@ -464,8 +470,7 @@ int atecc_sign_digest(const uint8_t digest32[ATECC_NONCE_DIGEST_BYTES],
 {
     uint8_t pkt[ATECC_CMD_LEN_NONCE_CRC];
     uint8_t resp[ATECC_RESP_LEN_SIG_CRC];
-    uint32_t pklen, replen = 0u, attempt;
-    uint8_t st = 0u;
+    uint32_t pklen, replen = 0u, attempt;    uint8_t st = 0u;
     int rc, mrc;
     /* 线上要不要挂 CRC 已经由开机那次 `Random` 判定了（`s_crc_mode`）——
      *   还没判定过（理论上不会：`atecc_init()` 会先取一条）就按**带 CRC**（实测要带 ✓）。*/
@@ -487,6 +492,10 @@ int atecc_sign_digest(const uint8_t digest32[ATECC_NONCE_DIGEST_BYTES],
         (void)atecc_wake();                 /* 器件若已醒，它对令牌回 NACK —— 不早退 ✓ */
         rc = transact(pkt, pklen, resp, sizeof(resp), &replen);
         if (rc != 0) {
+            /* ⚠ 这里**必须也打一行**：否则“事务直接没走”这条分支在日志上是**静音**的 ✗
+             *   （2026-10-11 实测：包长超限被守卫拦下，现场只能看到“装摘要失败”、看不到原因 ✗）*/
+            uart_printf(CONSOLE_UART, "[se] Nonce 第%u次：事务失败 rc=%d（%u B 包）\r\n",
+                        (unsigned)(attempt + 1u), rc, (unsigned)pklen);
             continue;
         }
         st = 0u;
@@ -515,6 +524,8 @@ int atecc_sign_digest(const uint8_t digest32[ATECC_NONCE_DIGEST_BYTES],
         (void)atecc_wake();
         rc = transact(pkt, pklen, resp, sizeof(resp), &replen);
         if (rc != 0) {
+            uart_printf(CONSOLE_UART, "[se] Sign 第%u次：事务失败 rc=%d（%u B 包）\r\n",
+                        (unsigned)(attempt + 1u), rc, (unsigned)pklen);
             continue;
         }
         mrc = atecc_msg_resp_sign(resp, (size_t)replen, out64);

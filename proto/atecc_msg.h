@@ -97,6 +97,11 @@
  *   签名响应 `43 …` = 67 = 1 count + 64 签名 + 2 CRC ✓）*/
 #define ATECC_CMD_LEN_NONCE_NOCRC  (ATECC_CMD_LEN_NOCRC + ATECC_NONCE_DIGEST_BYTES)
 #define ATECC_CMD_LEN_NONCE_CRC    (ATECC_CMD_LEN_CRC + ATECC_NONCE_DIGEST_BYTES)
+/* ★ **命令包的最长长度**（= Nonce 带 CRC 的 39 B）—— 传输层（`Periph/atecc.c`）的
+ *   发包缓冲与长度上限都引它，**别各自写数** ✗：2026-10-11 踩过 —— 那里还按 7 B 写，
+ *   Nonce（39 B）一发包就被守卫拦下（还差一点写出栈溢出 ✗），而现场日志只看到
+ *   “装摘要失败”、看不到原因 ✗。*/
+#define ATECC_CMD_LEN_MAX          ATECC_CMD_LEN_NONCE_CRC
 #define ATECC_RESP_LEN_SIG_NOCRC   (ATECC_RESP_DATA_IDX + ATECC_SIGN_BYTES)
 #define ATECC_RESP_LEN_SIG_CRC     (ATECC_RESP_DATA_IDX + ATECC_SIGN_BYTES + 2u)
 /* 状态码：出处 `lib/calib/calib_command.h` 的 `CMD_STATUS_*` 与
