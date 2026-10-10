@@ -222,6 +222,162 @@ static int str_starts(const char *s, const char *p)
     return 1;
 }
 
+/* ------------------------------------------------------------------ */
+/* 工装（2026-10-10）：通用 I²C 读/写 —— 把"主机坏"与"某个器件坏"分开      */
+/* ------------------------------------------------------------------ */
+/* 覆盖的形状（寄存器/"字地址"型器件：24C02、寄存器型传感器、ATECC 的 0x03/0x00）：
+ *   读： START + addr|W + 字地址 + RESTART + addr|R + 读 n 字节
+ *   写： START + addr|W [+ 字地址] + 数据 + STOP
+ * ⚠ **不覆盖** AHT20/SHT3x 那种"先写多字节命令、再读"的形状（那要在 `i2c.c` 里
+ *   另加一段带 RESTART 的写+读事务，本轮没做）—— 别把这两条当成"传感器全支持"。
+ * 时序**不另写一份**：读走 `i2c_read_begin/read_byte/read_end`、写走 `i2c_write`（都在 `i2c.c`）。
+ * 打的是**本命令的计数器增量**（`i2c_stats` 是累计值，直接看会串行）。
+ *   用法： i2crd <addr7> <n> [--waddr <h>]      例： i2crd 50 8 --waddr 0
+ *          i2cwr <addr7> <hex…> [--waddr <h>]   例： i2cwr 50 12 34 --waddr 0
+ *   （24C02 写完要 ~5 ms 内部写周期 ⇒ 隔一会儿再 `i2crd` 读回）*/
+#define I2C_BENCH_MAXB  32u
+
+static const char *str_find(const char *s, const char *pat)
+{
+    const char *p;
+
+    for (; *s != '\0'; s++) {
+        for (p = pat; *p != '\0' && s[p - pat] == *p; p++) { }
+        if (*p == '\0') { return s; }
+    }
+    return 0;
+}
+
+static void i2c_bench_delta(const i2c_stats_t *a, const i2c_stats_t *b)
+{
+    uart_printf(CONSOLE_UART, " tx=+%u rx=+%u nack=+%u timeout=+%u step=%u nackbyte=%u\r\n",
+                (unsigned)(b->tx_bytes - a->tx_bytes),
+                (unsigned)(b->rx_bytes - a->rx_bytes),
+                (unsigned)(b->nack - a->nack),
+                (unsigned)(b->timeout - a->timeout),
+                (unsigned)b->last_step, (unsigned)b->last_nack_byte);
+}
+
+static void i2c_bench(const char *args, int is_read)
+{
+    static uint8_t wbuf[1u + I2C_BENCH_MAXB];   /* [0] 留给字地址，数据放后面 */
+    static uint8_t rbuf[I2C_BENCH_MAXB];
+    const char *s = args, *wp, *end;
+    uint32_t addr = 0u, waddr = 0u, n = 0u, nb = 0u, k = 0u;
+    int have_waddr = 0, hi = -1, ch, rc;
+    i2c_stats_t a, b;
+
+    while (*s == ' ') { s++; }
+
+    /* ① <addr7>：1~2 位 hex、≤0x7F */
+    { uint32_t v = 0u, nd = 0u;
+
+      while (nd < 2u) {
+          ch = hexval(*s);
+          if (ch < 0) { break; }
+          v = v * 16u + (uint32_t)ch; s++; nd++;
+      }
+      if (nd == 0u || v > 0x7Fu) {
+          uart_printf(CONSOLE_UART, "\r\n[i2c] 用法：%s <addr7> <%s> [--waddr <h>]"
+                                   "（addr7 是 7 位地址，如 50）\r\n",
+                      is_read ? "i2crd" : "i2cwr", is_read ? "n" : "hex…");
+          return;
+      }
+      addr = v; }
+
+    /* ② 可选 `--waddr <h>`（放哪儿都行：先摘出来，剩下的就是参数区）*/
+    wp = str_find(s, "--waddr");
+    if (wp != 0) {
+        const char *p = wp + 7;
+        uint32_t v = 0u, nd = 0u;
+
+        while (*p == ' ') { p++; }
+        while (nd < 2u) {
+            ch = hexval(*p);
+            if (ch < 0) { break; }
+            v = v * 16u + (uint32_t)ch; p++; nd++;
+        }
+        if (nd == 0u || v > 0xFFu) {
+            uart_printf(CONSOLE_UART, "\r\n[i2c] --waddr 要 1~2 位 hex（如 --waddr 3）\r\n");
+            return;
+        }
+        waddr = v; have_waddr = 1;
+        end = wp;                       /* 参数区在它之前结束 */
+    } else {
+        end = 0;                        /* 一直到行尾 */
+    }
+
+    i2c_stats(&a);
+
+    if (is_read) {
+        /* 参数区：十进制 n（1~32）*/
+        for (;;) {
+            if (end == 0 && *s == '\0') { break; }
+            if (end != 0 && s >= end) { break; }
+            if (*s == ' ') { s++; continue; }
+            if (*s < '0' || *s > '9') { break; }
+            n = n * 10u + (uint32_t)(*s - '0'); s++;
+        }
+        if (n == 0u || n > I2C_BENCH_MAXB) {
+            uart_printf(CONSOLE_UART, "\r\n[i2c] i2crd 的 n 要 1~%u\r\n",
+                        (unsigned)I2C_BENCH_MAXB);
+            return;
+        }
+        rc = i2c_read_begin((uint8_t)addr, (uint8_t)waddr);
+        if (rc == 0) {
+            for (k = 0u; k < n; k++) {
+                rc = i2c_read_byte(&rbuf[k], (k + 1u < n) ? 1 : 0);
+                if (rc != 0) { break; }
+            }
+        }
+        i2c_read_end();
+        i2c_stats(&b);
+        uart_printf(CONSOLE_UART, "\r\n[i2crd] addr=0x%02x waddr=0x%02x n=%u rc=%d",
+                    (unsigned)addr, (unsigned)waddr, (unsigned)n, rc);
+        if (rc == 0) {
+            uart_printf(CONSOLE_UART, " 数据:");
+            for (k = 0u; k < n; k++) {
+                uart_printf(CONSOLE_UART, " %02x", (unsigned)rbuf[k]);
+            }
+        }
+        uart_printf(CONSOLE_UART, "\r\n[i2crd]");
+        i2c_bench_delta(&a, &b);
+    } else {
+        /* 参数区：hex 字节（可空格分隔，也可连写）*/
+        for (;;) {
+            if (end == 0 && *s == '\0') { break; }
+            if (end != 0 && s >= end) { break; }
+            if (*s == ' ') { s++; continue; }
+            ch = hexval(*s);
+            if (ch < 0) { break; }
+            if (hi < 0) { hi = ch; s++; continue; }
+            if (nb >= I2C_BENCH_MAXB) { break; }
+            wbuf[1u + nb] = (uint8_t)(((uint32_t)hi << 4) | (uint32_t)ch);
+            nb++; hi = -1; s++;
+        }
+        if (hi >= 0) {
+            uart_printf(CONSOLE_UART, "\r\n[i2c] i2cwr 的 hex 要成对（例：12 34）\r\n");
+            return;
+        }
+        if (nb == 0u) {
+            uart_printf(CONSOLE_UART, "\r\n[i2c] i2cwr 至少要一个字节"
+                                     "（例：i2cwr 50 12 34 --waddr 0）\r\n");
+            return;
+        }
+        if (have_waddr) {
+            wbuf[0] = (uint8_t)waddr;       /* 字地址 = 负载的第一个字节 */
+            rc = i2c_write((uint8_t)addr, wbuf, nb + 1u);
+        } else {
+            rc = i2c_write((uint8_t)addr, wbuf + 1, nb);
+        }
+        i2c_stats(&b);
+        uart_printf(CONSOLE_UART, "\r\n[i2cwr] addr=0x%02x waddr=0x%02x n=%u rc=%d\r\n",
+                    (unsigned)addr, (unsigned)waddr, (unsigned)nb, rc);
+        uart_printf(CONSOLE_UART, "[i2cwr]");
+        i2c_bench_delta(&a, &b);
+    }
+}
+
 static void print_help(void)
 {
     uart_printf(CONSOLE_UART, "\r\ncommands:\r\n");
@@ -240,6 +396,8 @@ static void print_help(void)
     uart_printf(CONSOLE_UART, "  sescan [n]   -> bench: repeat full scan n rounds (default 10) -> rate table\r\n");
     uart_printf(CONSOLE_UART, "  seclk <khz>  -> bench: set I2C clock (wake token must be <=100 kHz)\r\n");
     uart_printf(CONSOLE_UART, "  seaddr <h>   -> bench: set device 7-bit addr in hex (e.g. 35)\r\n");
+    uart_printf(CONSOLE_UART, "  i2crd <a7> <n> [--waddr <h>]  -> bench: read n bytes (e.g. i2crd 50 8 --waddr 0)\r\n");
+    uart_printf(CONSOLE_UART, "  i2cwr <a7> <hex..> [--waddr <h>] -> bench: write bytes (e.g. i2cwr 50 12 34 --waddr 0)\r\n");
 }
 
 static void run_cmd(const char *cmd)
@@ -268,6 +426,12 @@ static void run_cmd(const char *cmd)
     } else if (str_starts(cmd, "sewake")) {
         /* 工装：把握手拆开看（不判唤醒 ACK、逐地址探测、最后直接发 Random）。*/
         (void)atecc_diag_probe();
+    } else if (str_starts(cmd, "i2crd")) {
+        /* 工装（2026-10-10）：读任意地址 n 字节（拍“主机行不行”）。*/
+        i2c_bench(cmd + 5, 1);
+    } else if (str_starts(cmd, "i2cwr")) {
+        /* 工装（2026-10-10）：写任意地址若干字节（记 ACK 计数）。*/
+        i2c_bench(cmd + 5, 0);
     } else if (str_starts(cmd, "sescan")) {
         /* 工装：重复扫描统计（一轮 = 完整唤醒 + 扫一遍全地址）——
          * 用来分开"稳定器件 / 虚焊时有时无 / 纯毛刺"，不用示波器抓那一下。*/
