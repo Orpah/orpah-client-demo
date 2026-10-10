@@ -178,9 +178,12 @@ HEADER_ID_FRAME = (
 HEADER_CRC16 = (
     "# proto/test_vectors_crc16.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
     "# 来源（单一源）：Microchip CryptoAuthLib `lib/calib/calib_command.c` 的 atCRC()\n"
-    "#   poly 0x8005 / 初值 0 / **MSB-first**（`crc_bit = crc_register >> 15; crc_register <<= 1`）\n"
-    "#   ⇒ CRC 目录里就是 CRC-16/BUYPASS：check(\"123456789\") = 0xFEE8（**外部校验值**）\n"
-    "#   C 实现 = proto/crc16.c（固件与 PC 侧同一份源码）；Python 参考有两份写法互相印证\n"
+    "# 来源（单一源）：Microchip CryptoAuthLib `lib/calib/calib_command.c` 的 atCRC()\n"
+    "#   poly 0x8005 / 初值 0 / ★ **数据位低位先喂 + 寄存器左移**（★ 不是标准 CRC 变体 ✗）\n"
+    "#   ⚠ 旧版写成 CRC-16/BUYPASS 并对目录校验值 0xFEE8 —— **那条是错的** ✗\n"
+    "#     （器件因此把每条命令都判成 bad crc、从不执行；见 docs/atecc608b-se.md §8.2 第四段）\n"
+    "#   锚点 = 另一方产出的真实字节：04 11→3343 / 04 FF→0142 / 07 1B 00 00 00→24CD / 07 30 00 00 00→035D\n"
+    "#   C 实现 = proto/crc16.c（固件与 PC 侧同一份源码）；import 时会 assert 这四条锚点 ✓\n"
     "# 列：<kind><TAB><输入-hex|-><TAB><-><TAB><CRC 4 位大写>\n"
 )
 HEADER_ATECC = (
@@ -657,12 +660,19 @@ def gen_id_frame_rows(o, proto):
 
 
 # ---------------------------------------------------------------------------
-# ATECC608B 报文层（c4-γ-2）：CRC-16/BUYPASS + Random 命令包/响应解析
+# ATECC608B 报文层（c4-γ-2）：CRC（★ 原厂 `atCRC()` 口径，2026-10-10 改正）+ Random 包/响应解析
 #   单一源 = Microchip CryptoAuthLib（出处见 HEADER_CRC16 / HEADER_ATECC）。
-#   ⚠ CRC 这里故意写**两种独立写法**并互相印证，再对**目录校验值** 0xFEE8 ——
-#     只抄一种写法时，方向（反射/不反射）抄错了自己看不出来。
+#   ⚠ **本段是历史遗留、已被下面同名的一段覆盖**（Python 后定义覆盖前者）⇒ 改这边**不生效** ✗；
+#     两段一起改是为了不在文件里留下**错的算法** ✗（去重留作单独一步）。
 # ---------------------------------------------------------------------------
-CRC16_BYPASS_CHECK = 0xFEE8
+# ★ 2026-10-10 定案：原厂 `atCRC()` 的数据位是**低位先喂** ⇒ **不是**任何标准 CRC 变体
+#   （不是 BUYPASS/CCITT/ARC/MODBUS ✗）⇒ 没有“目录校验值”可用；
+#   锚点改成**另一方产出的真实字节**（见 docs/atecc608b-se.md §8.2 第四段）：
+#     器件实回 04 11→33 43、04 FF→01 42；原厂库实发 07 1B 00 00 00→24 CD、07 30 00 00 00→03 5D
+CRC16_ATCA_ANCHORS = ((bytes([0x04, 0x11]), 0x4333),
+                      (bytes([0x04, 0xFF]), 0x4201),
+                      (bytes([0x07, 0x1B, 0x00, 0x00, 0x00]), 0xCD24),
+                      (bytes([0x07, 0x30, 0x00, 0x00, 0x00]), 0x5D03))
 ATECC_OP_RANDOM = 0x1B
 ATECC_MODE_SEED_UPDATE = 0x00
 ATECC_MODE_NO_SEED_UPDATE = 0x01
@@ -676,12 +686,22 @@ ATECC_MSG_E_LEN = -2
 ATECC_MSG_E_CRC = -3
 
 
-def py_crc16_bits(data):
-    """按位循环：左移取最高位（照 atCRC() 的字面写法）。"""
+def py_crc16(data):
+    """★ 2026-10-10 定案：**照抄 CryptoAuthLib `atCRC()` 的口径**。
+
+    数据位**低位先喂** + 寄存器**左移** + poly 0x8005 + 初值 0
+    （★ **不是**任何标准 CRC 变体 ✗）。出处 `lib/calib/calib_command.c::atCRC()`：
+        for (shift_register = 0x01; ...; shift_register <<= 1) {
+            data_bit = (data[counter] & shift_register) ? 1 : 0;   /* 低位先喂 */
+            crc_bit  = crc_register >> 15;  crc_register <<= 1;    /* 寄存器左移 */
+            if (data_bit != crc_bit) { crc_register ^= polynom; }  /* polynom = 0x8005 */
+        }
+    覆盖范围 = count..最后一个数据字节（不含 CRC 自身，见 `atCalcCrc()`）；输出小端。
+    """
     crc = 0
     for b in data:
-        for i in range(7, -1, -1):
-            data_bit = (b >> i) & 1
+        for shift in (0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80):
+            data_bit = 1 if (b & shift) else 0
             crc_bit = (crc >> 15) & 1
             crc = (crc << 1) & 0xFFFF
             if data_bit != crc_bit:
@@ -689,21 +709,15 @@ def py_crc16_bits(data):
     return crc
 
 
-def py_crc16_std(data):
-    """教科书式 MSB-first 形式（先把字节异或进高 8 位，再逐位左移/条件异或）。"""
-    crc = 0
-    for b in data:
-        crc ^= (b << 8)
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x8005) & 0xFFFF if (crc & 0x8000) else ((crc << 1) & 0xFFFF)
-    return crc
+def crc16_anchors_check():
+    """外部锚点自查：**另一方产出的真实字节**（比任何目录校验值都硬 ✓）。"""
+    for data, want in CRC16_ATCA_ANCHORS:
+        got = py_crc16(data)
+        assert got == want, ("CRC 外部锚点不符：%s 算 %04X 期望 %04X"
+                             % (data.hex(), got, want))
 
 
-def py_crc16(data):
-    a = py_crc16_bits(data)
-    b = py_crc16_std(data)
-    assert a == b, "两种 CRC 写法不一致：%04X vs %04X" % (a, b)
-    return a
+crc16_anchors_check()      # ★ import 时就验：锚点不对，整份 Python 参考都不许用 ✓
 
 
 def py_atecc_cmd_random(mode, with_crc):
@@ -762,13 +776,17 @@ def gen_atecc_rows(o):
 # ---------------------------------------------------------------------------
 # ATECC608B 报文层（c4-γ-2）：CRC-16/BUYPASS + Random 命令包/响应解析
 #   单一源 = Microchip CryptoAuthLib（出处见 HEADER_CRC16 / HEADER_ATECC）。
-#   ⚠ CRC 这里故意写**两种独立写法**并互相印证，再对**目录校验值** 0xFEE8 ——
-#     只抄一种写法时，方向（反射/不反射）抄错了自己看不出来。
+#   ⚠ 本段曾把 CRC 写成两种“独立写法”互证再对目录校验值 —— **那个路子是错的** ✗：
+#     两种写法都错在同一个假设上（都按标准变体）⇒ “两边一致”照样是错的（AGENTS §4 那条教训）。
 #   ★★ 2026-10-10：**本段在文件里出现过两次**（上面还有一份同名的历史遗留段），
-#     同名定义**以本段为准**（Python 后定义覆盖前者）⇒ **要改就改本段**；
-#     改上面那份**不生效** ✗。（去重要把整段重写，留作单独一步。）
+#     同名定义**以本段为准**（Python 后定义覆盖前者）⇒ 两段现在都已改成新口径 ✓；
+#     去重要把整段重写，留作单独一步。
 # ---------------------------------------------------------------------------
-CRC16_BYPASS_CHECK = 0xFEE8
+# ★ 锚点 = **另一方产出的真实字节**（不是目录校验值 —— 原厂这个算法目录里没有 ✗）
+CRC16_ATCA_ANCHORS = ((bytes([0x04, 0x11]), 0x4333),
+                      (bytes([0x04, 0xFF]), 0x4201),
+                      (bytes([0x07, 0x1B, 0x00, 0x00, 0x00]), 0xCD24),
+                      (bytes([0x07, 0x30, 0x00, 0x00, 0x00]), 0x5D03))
 ATECC_OP_RANDOM = 0x1B
 ATECC_MODE_SEED_UPDATE = 0x00
 ATECC_MODE_NO_SEED_UPDATE = 0x01
@@ -786,12 +804,22 @@ ATECC_MSG_E_LEN = -2
 ATECC_MSG_E_CRC = -3
 
 
-def py_crc16_bits(data):
-    """按位循环：左移取最高位（照 atCRC() 的字面写法）。"""
+def py_crc16(data):
+    """★ 2026-10-10 定案：**照抄 CryptoAuthLib `atCRC()` 的口径**。
+
+    数据位**低位先喂** + 寄存器**左移** + poly 0x8005 + 初值 0
+    （★ **不是**任何标准 CRC 变体 ✗）。出处 `lib/calib/calib_command.c::atCRC()`：
+        for (shift_register = 0x01; ...; shift_register <<= 1) {
+            data_bit = (data[counter] & shift_register) ? 1 : 0;   /* 低位先喂 */
+            crc_bit  = crc_register >> 15;  crc_register <<= 1;    /* 寄存器左移 */
+            if (data_bit != crc_bit) { crc_register ^= polynom; }  /* polynom = 0x8005 */
+        }
+    覆盖范围 = count..最后一个数据字节（不含 CRC 自身，见 `atCalcCrc()`）；输出小端。
+    """
     crc = 0
     for b in data:
-        for i in range(7, -1, -1):
-            data_bit = (b >> i) & 1
+        for shift in (0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80):
+            data_bit = 1 if (b & shift) else 0
             crc_bit = (crc >> 15) & 1
             crc = (crc << 1) & 0xFFFF
             if data_bit != crc_bit:
@@ -799,21 +827,15 @@ def py_crc16_bits(data):
     return crc
 
 
-def py_crc16_std(data):
-    """教科书式 MSB-first 形式（先把字节异或进高 8 位，再逐位左移/条件异或）。"""
-    crc = 0
-    for b in data:
-        crc ^= (b << 8)
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x8005) & 0xFFFF if (crc & 0x8000) else ((crc << 1) & 0xFFFF)
-    return crc
+def crc16_anchors_check():
+    """外部锚点自查：**另一方产出的真实字节**（比任何目录校验值都硬 ✓）。"""
+    for data, want in CRC16_ATCA_ANCHORS:
+        got = py_crc16(data)
+        assert got == want, ("CRC 外部锚点不符：%s 算 %04X 期望 %04X"
+                             % (data.hex(), got, want))
 
 
-def py_crc16(data):
-    a = py_crc16_bits(data)
-    b = py_crc16_std(data)
-    assert a == b, "两种 CRC 写法不一致：%04X vs %04X" % (a, b)
-    return a
+crc16_anchors_check()      # ★ import 时就验：锚点不对，整份 Python 参考都不许用 ✓
 
 
 def py_atecc_cmd_random(mode, with_crc):
@@ -1584,7 +1606,7 @@ def main():
           ("C nonce-selftest（nonce 向量）", ["nonce-selftest", VEC_ID_NONCE]),
           ("C frame-selftest（整帧向量）", ["frame-selftest", VEC_ID_FRAME])]),
         ("ATECC608B 报文层", "atecc_cli", ["atecc_msg.c", "crc16.c", "atecc_cli.c"],
-         [("C selfcheck（CRC 外部校验值 + Random 包 + 响应解析）", ["selfcheck"]),
+         [("C selfcheck（CRC 外部锚点 + Random 包 + 响应解析）", ["selfcheck"]),
           ("C crc-selftest（CRC16 向量）", ["crc-selftest", VEC_CRC16]),
           ("C msg-selftest（Random 包/响应向量）", ["msg-selftest", VEC_ATECC])]),
     ]
@@ -1744,7 +1766,7 @@ def main():
           "下行解码 / SHA-256 / HMAC / 已签报文 / HGIC 帧构造 / HGIC 流解析 / HGIC 控制面 / "
           "P-256 公钥派生 / ECDSA 签名（RFC 6979，含 RFC §A.2.5 官方向量）/ "
           "ID 流水线（§8.2 选级 + 演示密钥 + nonce + 整帧）/ ATECC608B 报文层"
-          "（CRC-16/BUYPASS + Random 包）十六组）")
+          "（★ 原厂 atCRC 口径的 CRC + Random 包）十六组）")
     return 0
 
 

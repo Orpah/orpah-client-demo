@@ -70,13 +70,14 @@ PC 窗口靠一根外接串口，**不进 I²C**）—— 接线表在该 README
 | 返回数据长度 | 32 B | 同上（`RANDOM_NUM_SIZE`） |
 | 无数据命令包长 | `ATCA_CMD_SIZE_MIN` = count+opcode+param1+param2+CRC = **7**（不挂 CRC 时 5） | 同上 + `lib/calib/calib_command.c` 的 `atCalcCrc()` |
 | 命令最多耗时 | 23 ms（另一张表 50 ms） | `lib/calib/calib_execution.c` |
-| CRC 算法 | poly `0x8005`、初值 0、**MSB-first** | `calib_command.c` 的 `atCRC()`：`crc_bit = crc_register >> 15; crc_register <<= 1` |
+| CRC 算法 | ~~poly `0x8005`、初值 0、**MSB-first**~~ ✗ **（2026-10-10 已纠正，见 §8.2 第四段）** 实为：**数据位低位先喂 + 寄存器左移** | `calib_command.c` 的 `atCRC()`：`crc_bit = crc_register >> 15; crc_register <<= 1` 且 `data_bit = (data[counter] & shift_register)`，`shift_register` 从 **0x01** 递增 |
 | CRC 线上字节序 | **小端**（低字节在前） | 同上：`crc_le[0] = crc & 0xFF` |
 | 响应 count | 32 B 数据的响应 = `ATCA_RSP_SIZE_32` = **35**（这是 CryptoAuthLib 内部计数口径） | `lib/calib/calib_command.h` |
 | **I²C 字地址四元表** | `0x00` = **响应（读）**、`0x01` = sleep、`0x02` = idle、`0x03` = **命令（写）** | 见下面 ★★ |
 
-★ 上面那个 CRC 就是 **CRC-16/BUYPASS**（CRC 目录里的标准项）⇒ 它的**目录校验值**
-`"123456789" → 0xFEE8` 被我们当作**外部黄金向量**钉在 `proto/crc16.c` 与
+★ 上面那个 CRC ✗ —— **2026-10-10 推翻**：原厂 atCRC 是“数据位低位先喂 + 寄存器左移”的**混合口径**，
+**不是** CRC-16/BUYPASS ⇒ 原来那个 “目录校验值 `"123456789" → 0xFEE8`” 的说法**不成立** ✗
+（详见 §8.2 第四段；新锚点 = 器件/原厂实回的字节对）
 `proto/atecc_cli.c selfcheck` 里 —— 不是"我们自己算的、自己验的"。
 
 ## 3b. ★★ 字地址：**命令写 `0x03`、响应读 `0x00`**（2026-09-23 修，真 bug）
@@ -122,7 +123,7 @@ PC 窗口靠一根外接串口，**不进 I²C**）—— 接线表在该 README
 
 | 文件 | 管什么 | 能否在 PC 上跑 |
 |---|---|---|
-| `proto/crc16.c` | CRC-16/BUYPASS（纯函数） | ✅ 交叉测试 |
+| `proto/crc16.c` | 原厂 `atCRC()` 口径的 CRC（纯函数）★ 2026-10-10 改正 | ✅ 交叉测试 |
 | `proto/atecc_msg.c` | Random 命令包 / 响应解析（纯函数） | ✅ 交叉测试 |
 | `Periph/i2c.c` | 硬件 I2C1 主机（含**有上限**的等待） | ❌ 硬件 |
 | `Periph/atecc.c` | 唤醒脉冲 + 事务 + 自检 + 给 `id_build` 的 nonce provider | ❌ 硬件 |

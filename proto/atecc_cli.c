@@ -3,7 +3,7 @@
  * 为什么要有它：这两份代码在固件里跑，但**CRC 或包格式错了只会在台架上表现为
  * "SE 没应答"** —— 那时根本分不清是线没接对还是字节算错了。所以按本仓口径
  * （AGENTS §4：CRC 与报文编解码不许只靠人眼对着文档写）先在 PC 上对拍：
- *   ① `selfcheck`      —— 内建不变量（含**外部校验值** CRC-16/BUYPASS("123456789")=0xFEE8）
+ *   ① `selfcheck`      —— 内建不变量（含**外部锚点**：器件/原厂实回的字节对，见 docs/atecc608b-se.md §8.2）
  *   ② `crc-selftest`   —— CRC 向量表（与 `run_cross_test.py` 的 Python 参考零偏差）
  *   ③ `msg-selftest`   —— 命令包 / 响应解析向量表
  *
@@ -185,7 +185,7 @@ static int selftest(const char *path)
             int n = hex_to_bin(cols[1], g_bin, sizeof(g_bin));
 
             if (n < 0) { snprintf(g_got, sizeof(g_got), "(非法 hex)"); }
-            else { snprintf(g_got, sizeof(g_got), "%04X", crc16_bypass(g_bin, (size_t)n)); }
+            else { snprintf(g_got, sizeof(g_got), "%04X", crc16_atca(g_bin, (size_t)n)); }
         } else if (strcmp(cols[0], "cmd") == 0) {
             uint8_t pkt[ATECC_CMD_LEN_CRC];
             size_t n = atecc_msg_random(pkt, sizeof(pkt), (uint8_t)atoi(cols[1]),
@@ -267,21 +267,36 @@ static int selfcheck(void)
     uint8_t resp[ATECC_RESP_LEN_CRC];
     uint8_t d[ATECC_RANDOM_BYTES];
     static const uint8_t cat[9] = { '1', '2', '3', '4', '5', '6', '7', '8', '9' };
+    static const uint8_t wake11[2] = { 0x04u, 0x11u };
+    static const uint8_t errff[2]  = { 0x04u, 0xFFu };
+    static const uint8_t rand5[5]  = { 0x07u, 0x1Bu, 0x00u, 0x00u, 0x00u };
+    static const uint8_t info5[5]  = { 0x07u, 0x30u, 0x00u, 0x00u, 0x00u };
     size_t n, i;
     int rc;
 
     sc_bad = 0;
-    /* ① 外部校验值：CRC-16/BUYPASS 对 "123456789" = 0xFEE8（CRC 目录给的，不是我们自己算的）*/
-    ck("CRC-16/BUYPASS 外部校验值 (\"123456789\" -> 0xFEE8)",
-       crc16_bypass(cat, sizeof(cat)) == CRC16_BYPASS_CHECK);
+    /* ① ★ 外部锚点 = **另一方产出的真实字节**（不是目录校验值：原厂 atCRC 不是标准变体 ✗）
+     *    四条全部来自实测（器件实回 + 原厂库实发），见 docs/atecc608b-se.md §8.2 第四段 */
+    ck("外部锚点：器件实回 04 11 -> CRC 33 43",
+       crc16_atca(wake11, 2u) == CRC16_ATCA_WAKE_CRC);
+    ck("外部锚点：器件实回 04 FF -> CRC 01 42",
+       crc16_atca(errff, 2u) == CRC16_ATCA_ERR_CRC);
+    ck("外部锚点：原厂实发 07 1B 00 00 00 -> 24 CD",
+       crc16_atca(rand5, 5u) == CRC16_ATCA_RAND_CRC);
+    ck("外部锚点：原厂实发 07 30 00 00 00 -> 03 5D",
+       crc16_atca(info5, 5u) == CRC16_ATCA_INFO_CRC);
+    /* ①b 向量 "123456789" 的值**由我们自己钉住**（★ 不是目录校验值 —— 这算法目录里没有 ✗）
+     *     值 = 0xBCDD（2026-10-10 照 atCRC() 算）：改实现时这里会红 ⇒ 防悄悄漂 ✗ */
+    ck("CRC(\"123456789\") = 0xBCDD（照 atCRC 算；非目录值）",
+       crc16_atca(cat, sizeof(cat)) == 0xBCDDu);
     /* ② 空输入 = 初值 0 */
-    ck("空输入 -> 0x0000", crc16_bypass(0, 0u) == 0u);
+    ck("空输入 -> 0x0000", crc16_atca(0, 0u) == 0u);
     /* ③ 首字节进/不进（只是形状检查：非 0 且非 0xFFFF）*/
     {
         uint8_t one = 0x00u;
 
         ck("单字节 0x00 的 CRC 确定（可复现）",
-           crc16_bypass(&one, 1u) == crc16_bypass(&one, 1u));
+           crc16_atca(&one, 1u) == crc16_atca(&one, 1u));
     }
     /* ④ 命令包：长度与 count 字段一致 */
     n = atecc_msg_random(pkt, sizeof(pkt), ATECC_MODE_SEED_UPDATE, 0);
@@ -291,8 +306,8 @@ static int selfcheck(void)
     n = atecc_msg_random(pkt, sizeof(pkt), ATECC_MODE_SEED_UPDATE, 1);
     ck("Random 带 CRC 包长 = 7、count = 7、包尾 = CRC16(前 5 字节, 小端)",
        n == ATECC_CMD_LEN_CRC && pkt[0] == ATECC_CMD_LEN_CRC &&
-       pkt[5] == (uint8_t)(crc16_bypass(pkt, 5u) & 0xFFu) &&
-       pkt[6] == (uint8_t)(crc16_bypass(pkt, 5u) >> 8));
+       pkt[5] == (uint8_t)(crc16_atca(pkt, 5u) & 0xFFu) &&
+       pkt[6] == (uint8_t)(crc16_atca(pkt, 5u) >> 8));
     /* ⑤ 响应解析：33 字节（无 CRC）应过 —— count **只占 1 字节**（2026-10-10 改正）*/
     for (i = 0; i < sizeof(resp); i++) { resp[i] = 0u; }
     resp[0] = ATECC_RESP_LEN_NOCRC;
@@ -304,7 +319,7 @@ static int selfcheck(void)
         uint8_t crc[2];
 
         resp[0] = ATECC_RESP_LEN_CRC;
-        crc16_bypass_le(resp, ATECC_RESP_LEN_NOCRC, crc);
+        crc16_atca_le(resp, ATECC_RESP_LEN_NOCRC, crc);
         resp[ATECC_RESP_LEN_NOCRC] = crc[0];
         resp[ATECC_RESP_LEN_NOCRC + 1u] = crc[1];
         rc = atecc_msg_resp_random(resp, ATECC_RESP_LEN_CRC, d);
@@ -344,8 +359,8 @@ static int selfcheck(void)
     n = atecc_msg_info(pkt, sizeof(pkt), 0x00u, 1);
     ck("Info 带 CRC：长 7 / count 7 / 包尾 = CRC16(前 5 B, 小端)",
        n == ATECC_CMD_LEN_CRC && pkt[0] == 7u &&
-       pkt[5] == (uint8_t)(crc16_bypass(pkt, 5u) & 0xFFu) &&
-       pkt[6] == (uint8_t)(crc16_bypass(pkt, 5u) >> 8));
+       pkt[5] == (uint8_t)(crc16_atca(pkt, 5u) & 0xFFu) &&
+       pkt[6] == (uint8_t)(crc16_atca(pkt, 5u) >> 8));
     n = atecc_msg_read(pkt, sizeof(pkt), ATECC_ZONE_CONFIG, ATECC_CFG_ADDR_LOCK, 0);
     ck("Read 配置区 @0x54 无 CRC：op 0x02 / param1=zone 0x00 / 地址大端 00 54",
        n == ATECC_CMD_LEN_NOCRC && pkt[1] == ATECC_OP_READ && pkt[2] == ATECC_ZONE_CONFIG &&
@@ -376,7 +391,7 @@ static int selfcheck(void)
         {
             uint8_t crc[2];
 
-            crc16_bypass_le(resp, ATECC_RESP4_LEN_NOCRC, crc);
+            crc16_atca_le(resp, ATECC_RESP4_LEN_NOCRC, crc);
             resp[ATECC_RESP4_LEN_NOCRC] = crc[0];
             resp[ATECC_RESP4_LEN_NOCRC + 1u] = crc[1];
             ck("resp4 7 B（带 CRC）且首字节 = 0x55（未锁）",
@@ -391,7 +406,8 @@ static int selfcheck(void)
         printf("FAIL ATECC608B 报文层自检（%d 项不符）\n", sc_bad);
         return 2;
     }
-    printf("PASS ATECC608B 报文层自检（CRC16/BUYPASS + Random/Info/Read 包 + 响应解析 9 类）\n");
+    printf("PASS ATECC608B 报文层自检（★ 原厂 atCRC 口径的 CRC + Random/Info/Read 包"
+           " + 响应解析 9 类）\n");
     return 0;
 }
 

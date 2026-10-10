@@ -1,13 +1,16 @@
 # proto/test_vectors_crc16.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**
 # 来源（单一源）：Microchip CryptoAuthLib `lib/calib/calib_command.c` 的 atCRC()
-#   poly 0x8005 / 初值 0 / **MSB-first**（`crc_bit = crc_register >> 15; crc_register <<= 1`）
-#   ⇒ CRC 目录里就是 CRC-16/BUYPASS：check("123456789") = 0xFEE8（**外部校验值**）
-#   C 实现 = proto/crc16.c（固件与 PC 侧同一份源码）；Python 参考有两份写法互相印证
+# 来源（单一源）：Microchip CryptoAuthLib `lib/calib/calib_command.c` 的 atCRC()
+#   poly 0x8005 / 初值 0 / ★ **数据位低位先喂 + 寄存器左移**（★ 不是标准 CRC 变体 ✗）
+#   ⚠ 旧版写成 CRC-16/BUYPASS 并对目录校验值 0xFEE8 —— **那条是错的** ✗
+#     （器件因此把每条命令都判成 bad crc、从不执行；见 docs/atecc608b-se.md §8.2 第四段）
+#   锚点 = 另一方产出的真实字节：04 11→3343 / 04 FF→0142 / 07 1B 00 00 00→24CD / 07 30 00 00 00→035D
+#   C 实现 = proto/crc16.c（固件与 PC 侧同一份源码）；import 时会 assert 这四条锚点 ✓
 # 列：<kind><TAB><输入-hex|-><TAB><-><TAB><CRC 4 位大写>
 crc	-	-	0000
 crc	00	-	0000
 crc	ff	-	0202
-crc	000102030405060708090a0b0c0d0e0f	-	7F43
-crc	313233343536373839	-	FEE8
-crc	051b000000	-	5D9D
-crc	071b0000006edd	-	A9A0
+crc	000102030405060708090a0b0c0d0e0f	-	50E8
+crc	313233343536373839	-	BCDD
+crc	051b000000	-	5327
+crc	071b00000024cd	-	F57D

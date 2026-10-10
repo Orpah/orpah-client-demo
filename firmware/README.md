@@ -199,12 +199,12 @@ WCHISPTool 流程：按住 `BOOT` → 按/放 `RST` → 松 `BOOT` → 选 `buil
   · **c4-γ-2（2026-09-22，已写代码；★上机未做）**：nonce 后端换成 **ATECC608B 的 `Random(0x1B)`**。
     新增 `Periph/i2c.c`（硬件 I2C1 = `PB6/PB7`、100 kHz、**每个等待都有超时**）+
     `Periph/atecc.c`（唤醒脉冲 + 事务 + 自检 + `atecc_nonce_hex()`）+
-    `proto/crc16.c`（CRC-16/BUYPASS）与 `proto/atecc_msg.c`（命令包/响应解析，**纯函数**）；
+    `proto/crc16.c`（**原厂 `atCRC()` 口径**的 CRC）与 `proto/atecc_msg.c`（命令包/响应解析，**纯函数**）；
     `proto/id_build.c` 加了 **nonce provider 注入点**（`idb_set_nonce_fn`）—— 不注入就是软熵
     （PC 侧交叉测试走这条 ⇒ 结果可复现）。
     · 判据（PC）：`python ../proto\run_cross_test.py` → exit 0，**16 组**；其中新增的
       `crc-selftest`（7 行）/ `msg-selftest`（9 行）与 Python 参考**零偏差**，
-      且 `atecc_cli selfcheck` 钉住了**外部校验值** CRC-16/BUYPASS("123456789") = `0xFEE8`。
+      且 `atecc_cli selfcheck` 钉住了**外部锚点**（器件/原厂实回的字节对，见 `docs/atecc608b-se.md` §8.2）。
     · 上机判据：控制台 **`se`**（唤醒 ACK + 一条 `Random` + 打印 CRC 模式/前 16 B），
       再看 `id` 的 `nonce_src=se|soft`；接线/命令来源/待确认的两个假设见
       `../docs/atecc608b-se.md`。

@@ -48,7 +48,7 @@ import ch347_spi as cs          # noqa: E402  复用同一把 DLL 的加载/错�
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "proto"))
 try:
-    import run_cross_test as rct        # noqa: E402  CRC-16/BUYPASS 的**单一源**（Python 参考）
+    import run_cross_test as rct        # noqa: E402  CRC 的**单一源**（Python 参考：原厂 atCRC 口径）
     HAVE_RCT = True
 except Exception:                       # noqa: BLE001  没有参考实现也不该让工具不能跑
     HAVE_RCT = False
@@ -368,7 +368,7 @@ def main():
     p.add_argument("--op", default="random", choices=["random", "info"])
     p.add_argument("--waddr", default="%02x" % WADDR_CMD, help="命令字地址（hex，缺省 03）")
     p.add_argument("--resp-waddr", default="%02x" % WADDR_RESP, help="响应字地址（hex，缺省 00）")
-    p.add_argument("--crc", action="store_true", help="命令包挂 CRC-16/BUYPASS")
+    p.add_argument("--crc", action="store_true", help="命令包挂 CRC（原厂 atCRC 口径）")
 
     args = ap.parse_args()
     fn = {"list": dev_list, "selftest": cmd_selftest, "scan": cmd_scan, "health": cmd_health,

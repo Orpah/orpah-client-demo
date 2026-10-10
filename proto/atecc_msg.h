@@ -9,7 +9,8 @@
  *     返回 **32 B** —— `lib/calib/calib_command.h`（`ATCA_RANDOM`、`RANDOM_SEED_UPDATE`…）
  *   · 无数据命令的包长 = `ATCA_CMD_SIZE_MIN`（**count(1)+opcode(1)+param1(1)+param2(2)
  *     +CRC(2) = 7**；不挂 CRC 时 5）
- *   · CRC = CRC-16/BUYPASS（见 `crc16.h` 的出处），**覆盖 count..数据、不含 CRC 自身**；
+ *   · CRC = 原厂 `atCRC()` 口径（**低位先喂数据 + 寄存器左移**，poly 0x8005，见 `crc16.h` 的出处），
+ *     **覆盖 count..数据、不含 CRC 自身**；
  *     挂在包尾是**小端**（`crc_le[0]` 是低字节）
  *
  * ★★ **响应形状已定案（2026-10-10 上机改正）**：I²C 上 **count 只占 1 字节**、数据从

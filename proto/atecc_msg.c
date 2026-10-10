@@ -19,7 +19,7 @@ static size_t cmd5(uint8_t *out, size_t cap, uint8_t op, uint8_t p1, uint16_t p2
     out[4] = (uint8_t)(p2 & 0xFFu);      /* param2 低 */
     if (with_crc) {
         /* CRC 覆盖 count..param2（即前 5 字节），不含 CRC 自身 */
-        crc16_bypass_le(out, ATECC_CMD_LEN_NOCRC, &out[5]);
+        crc16_atca_le(out, ATECC_CMD_LEN_NOCRC, &out[5]);
     }
     return n;
 }
@@ -92,7 +92,7 @@ int atecc_msg_resp_get4(const uint8_t *resp, size_t n, uint8_t out4[4])
     if (n == ATECC_RESP4_LEN_CRC) {
         uint8_t crc[2];
 
-        crc16_bypass_le(resp, ATECC_RESP4_LEN_NOCRC, crc);
+        crc16_atca_le(resp, ATECC_RESP4_LEN_NOCRC, crc);
         if (crc[0] != resp[ATECC_RESP4_LEN_NOCRC] ||
             crc[1] != resp[ATECC_RESP4_LEN_NOCRC + 1u]) {
             return ATECC_MSG_E_CRC;
@@ -120,7 +120,7 @@ int atecc_msg_resp_random(const uint8_t *resp, size_t n, uint8_t out32[ATECC_RAN
     if (n == ATECC_RESP_LEN_CRC) {
         uint8_t crc[2];
 
-        crc16_bypass_le(resp, ATECC_RESP_LEN_NOCRC, crc);
+        crc16_atca_le(resp, ATECC_RESP_LEN_NOCRC, crc);
         if (crc[0] != resp[ATECC_RESP_LEN_NOCRC] ||
             crc[1] != resp[ATECC_RESP_LEN_NOCRC + 1u]) {
             return ATECC_MSG_E_CRC;
