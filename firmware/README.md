@@ -212,6 +212,16 @@ WCHISPTool 流程：按住 `BOOT` → 按/放 `RST` → 松 `BOOT` → 选 `buil
       ② 线上要不要挂 CRC、响应 count 到底 36 还是 38 —— **两条都是待上机确认的假设**，
       不猜：代码把两种都试一遍并**记住哪种通**，失败时把原始字节打出来；
       ③ 唤醒脉冲宽度靠忙等（近似），**没上示波器**；④ I²C 时钟假设 APB1 = 8 MHz。
+  · **c4-γ-3（2026-10-11，★ 上机全绿 ✓）**：**nonce 与 ES256 签名都交给 ATECC608B**。
+    新增 `atecc_sign_digest()`（`Nonce(0x16)` 装摘要 + `Sign(0x41)` 用 Slot 0 签）与
+    `atecc_sign_pre()`（**预像 → SHA-256 → Sign**）；`proto/id_report.c` 加了**签名器注入点**
+    （`idr_sign_fn`）⇒ 注入后 `ec_priv` **不需要给**、**私钥不进 MCU** ✓；`id_build` 这边是
+    `idb_set_sign_fn()` + `last_sign_src`（与 nonce provider 同一套路）。
+    · 判据（上机，`tools/check_c4g2_bench.py`）：`[se] Sign(slot 0) ok; r=…` ✓、
+      `[id] sign_src=se` ✓、**板上那条签名被 Slot 0 公钥独立验过** ✓、整帧被
+      **上游 `verify_report` 接受**（level=0 / trust=high）✓；`build_ms` ~9 s → **1031 ms** ✓。
+    · ★ 台架抓出的两条真 bug（已修）：传输层还按“命令最多 7 B”算（39 B 的 `Nonce` 包被守卫拦下 + 包缓冲会栈溢出 ✗）；
+      失败分支 `continue` 时**不打一行** ⇒ 现场只看到“装摘要失败”、看不到原因 ✗。
 - **c3 剩**：`send <hex>` 已在控制台可用（把 hex 解成以太帧走数据口）；
   模组收上来的帧现在只打摘要，**还没交给协议栈**（c4 才接）。
 - **d 步**：ATECC608B 驱动（Slot 0 私钥不可导出）+ 产线烧录流程。

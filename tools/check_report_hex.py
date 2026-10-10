@@ -71,7 +71,11 @@ def strip_hex(text):
     return "".join(out)
 
 
-def judge(o, proto, frame, nonce_cache=None):
+def judge(o, proto, frame, nonce_cache=None, pubkey_hex=None):
+    """`pubkey_hex` = 64 B hex（X||Y）：**用这把公钥验**（= 产线该登记的那把，见 §6.2）。
+    ★ 为什要它：d 步起报文是 **SE 里签的**，而演示密钥库里那把（`Device(demo_key=True)`）
+      是从 SN **派生**出来的**另一把** ✗ ⇒ 不换钥必然 `signature_invalid` ✗（那不是 bug，
+      是“密钥库还没登记这颗芯片的公钥”）。给上它 = 把产线那一步补上 ✓。"""
     got = proto.parse_eth_frame(frame)
     if got is None:
         print("FAIL 不是一条合法的 ORPAH 以太帧（长度要 ≥14 且 ethertype=0x88B5）")
@@ -96,8 +100,25 @@ def judge(o, proto, frame, nonce_cache=None):
              pay.get("seen_routers")))
 
     ks = o.KeyStore()
-    ks.register(o.Device(sn=pay.get("sn") or DEMO_SN, gen=DEMO_GEN),
-                model="bench-c4g1", firmware="c4g1")
+    if pubkey_hex:
+        # ★ 把**这颗芯片的公钥**登记进去（等价于产线烧录那一步；见 `docs/atecc608b-se.md` §6.2/§8.10）
+        try:
+            from cryptography.hazmat.primitives.asymmetric import ec as _ec   # noqa: PLC0415
+
+            raw = bytes.fromhex(pubkey_hex)
+            if len(raw) != 64:
+                print("FAIL --se-pubkey 需要 64 B hex（X||Y），给了 %d B" % len(raw))
+                return 2
+            dev = o.Device(sn=pay.get("sn") or DEMO_SN, gen=DEMO_GEN, demo_key=False)
+            dev.pubkey = _ec.EllipticCurvePublicKey.from_encoded_point(
+                _ec.SECP256R1(), b"\x04" + raw)
+            print("密钥库：登记的是**给的那把公钥**（Slot 0 / 产线登记），不是 demo 派生钥 ✓")
+        except ImportError:
+            print("FAIL 本机没装 `cryptography` ⇒ 没法用 --se-pubkey")
+            return 1
+    else:
+        dev = o.Device(sn=pay.get("sn") or DEMO_SN, gen=DEMO_GEN)
+    ks.register(dev, model="bench-c4g1", firmware="c4g1")
     v = o.verify_report(rep, ks, used_nonces=(nonce_cache or o.NonceCache()))
     print("服务端判定：accepted=%s level=%s trust=%s coverage_only=%s error=%s"
           % (v.get("accepted"), v.get("level"), v.get("trust"), v.get("coverage_only"),
@@ -138,6 +159,9 @@ def main():
     ap.add_argument("hex", nargs="?", help="十六进制帧（或用 - 从 stdin 读）")
     ap.add_argument("--file", help="从文件读 hex")
     ap.add_argument("--selftest", action="store_true", help="用 proto/test_vectors_id_frame.txt 自检")
+    ap.add_argument("--se-pubkey", metavar="HEX",
+                    help="用这把公钥验（64 B hex = X||Y）—— d 步起帧是 SE 里签的，"
+                         "密钥库里应当登记这颗芯片的公钥（= 产线那一步）")
     ap.add_argument("--upstream", help="orpah-over-halow 目录（默认自动找）")
     args = ap.parse_args()
 
@@ -170,7 +194,7 @@ def main():
     except ValueError as e:
         print("FAIL hex 解不开：%r" % (e,))
         return 1
-    return judge(o, proto, frame)
+    return judge(o, proto, frame, pubkey_hex=args.se_pubkey)
 
 
 if __name__ == "__main__":

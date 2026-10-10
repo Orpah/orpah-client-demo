@@ -415,7 +415,16 @@ def main():
             o, proto = load_upstream(args.upstream)
             if o is None:
                 return 1
-            if judge(o, proto, bytes.fromhex(h)) != 0:
+            # ★★ d 步：板上这条帧是 **SE 里签的** ⇒ 密钥库里要登记**这颗芯片的公钥**
+            #   （= 产线烧录/登记那一步，见 `docs/atecc608b-se.md` §6.2/§8.10 ✓）；
+            #   演示密钥库里那把是从 SN 派生的**另一把** ✗ ⇒ 不换钥必然 `signature_invalid`
+            #   （那不是 bug，是"密钥库还没登记这颗芯片"）。
+            pk_hex = (SLOT0_PUB_X + SLOT0_PUB_Y).hex()
+            if d_step:
+                print("info 用 **Slot 0 的公钥**验这条帧（产线该登记的那把 ✓），"
+                      "不是 demo 派生钥")
+            if judge(o, proto, bytes.fromhex(h),
+                     pubkey_hex=(pk_hex if d_step else None)) != 0:
                 fails.append("上游不接受帧")
             if mod_buf or (args.mod_port and not args.no_mod_port):
                 want = "%d byte(s)" % (len(h) // 2 + 8)
