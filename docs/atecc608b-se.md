@@ -668,7 +668,40 @@ cfg[112] 3C 00 3C 00 3C 00 3C 00 3C 00 3C 00 3C 00 1C 00
 `test/api_calib/test_calib_config.c` 里，**签名/GenKey 用 slot 2、HMAC 用 slot 4**
 （`{TEST_TYPE_ECC_SIGN,2}` / `{TEST_TYPE_HMAC,4}` ✓）—— 只作对照 ✓。
 
-### 8.6 采购与验收（买回来先跑哪几条）
+### 8.7 ★★ 打通：槽位表 → 锁定 Config → 真随机数 → 私钥生成（2026-10-11）
+
+**解码器 = 原厂自带的结构体** ✓（`cryptoauthlib/device.py::Atecc608Config` + 位域 ✓；
+布局出处 = `lib/calib/calib_device.h::atecc608_config_s` ✓）。解我们这颗件的**出厂** 128 B：
+
+| 槽 | `IsSecret` | `Private` | `KeyType` | `Lockable` | 判读 |
+|---|---|---|---|---|---|
+| **0 / 1 / 2** | 1 | **1** | **4**（P-256） | **1** | **ECDSA 私钥槽** ✓ |
+| 3 / 4 | 1 | 0 | **7**（SHA/HMAC） | 0 | **HMAC 槽** ✓ |
+
+其余顶层字段：`I2C_Enable=1`、地址 `0x60` ✓；`AES_Enable=1`；`CountMatch/ChipMode=0`；
+`SlotLocked=0xFFFF`（出厂默认 ✓ 与原厂测试向量一致 ✓）；**`LockValue/LockConfig = 55 55`** ✓（未锁 ✓）。
+
+★★ **结论：这颗件的出厂配置本来就是我们要的** ✓ —— **Slot 0 = ECDSA P-256 私钥槽** ✓
+（`IsSecret=1` ⇒ 私钥读不出 ✓，`Lockable=1` ✓），与 Protocol §6 逐字对得上 ✓
+⇒ **一个字都不用改** ✗✓（先前"它不等于通用默认 ⇒ 要重写"的担心，改成"不同但正好合适" ✓）。
+
+**做了三件事（PC 侧，原厂库 API + 我们那条修好的传输；命令字地址强制 `0x03` ✓）**：
+
+| 步 | 动作 | 实测 |
+|---|---|---|
+| ① | `atcab_read_config_zone()` | `LockValue/LockConfig = 55 55`（未锁 ✓） |
+| ② | **`atcab_lock_config_zone()`** ← **不可逆** ✗ | 发 `07 17 80 00 00 39 8D` ✓ |
+| ③ | 再读 | `55 **00**` ⇒ **Config 已锁** ✓；`LockValue` 仍 `55` ⇒ **数据区未锁** ✓（故意留 ✓） |
+| ④ | `atcab_random()` ×3 | 三次各不相同、**不是 `FFFF0000` 模式** ✓✓ ⇒ **真随机数** ✓ |
+| ⑤ | `atcab_genkey(slot 0)` | 回 **67 B**（`43` + 64 B 公钥 + CRC）✓ ⇒ **私钥在器件里生成、永不导出** ✓ |
+
+★ **教训（对我们固件也适用）**：`GenKey`/ECDH 这类命令要**几十毫秒**才算完 ✓，在那之前器件的
+**地址是不 ACK 的** ✓ ⇒ 传输层必须**把 NACK 当"还没好"来重试** ✓（原厂 HAL 就是按 `rx_retries` 轮询 ✓）。
+我们第一版 `cb_recv` 一次性读 ⇒ `GenKey` 当场失败（`st=-27` ✗）；**加"失败即重试（40×5 ms）"后
+第 11 次读到** ✓（≈50 ms ✓）—— 这也**顺带证实**了"读得太急"这个诊断 ✓。
+⇒ 固件侧同样口径：`Periph/atecc.c` 读响应那一处要按这个重试（`wait_ready()` 已有 60 ms 轮询 ✓）。
+
+### 8.8 采购与验收（买回来先跑哪几条）
 
 拆机 / 散新件最常见的三种"还能用但不像新的"：
 
