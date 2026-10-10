@@ -663,7 +663,7 @@ def gen_id_frame_rows(o, proto):
 # ATECC608B 报文层（c4-γ-2）：CRC（★ 原厂 `atCRC()` 口径，2026-10-10 改正）+ Random 包/响应解析
 #   单一源 = Microchip CryptoAuthLib（出处见 HEADER_CRC16 / HEADER_ATECC）。
 #   ⚠ **本段是历史遗留、已被下面同名的一段覆盖**（Python 后定义覆盖前者）⇒ 改这边**不生效** ✗；
-#     两段一起改是为了不在文件里留下**错的算法** ✗（去重留作单独一步）。
+#   ★ 2026-10-11：因此本段**不再跟改**（新东西只加在下面那段）—— 留在这里只为不留**错的算法** ✗。
 # ---------------------------------------------------------------------------
 # ★ 2026-10-10 定案：原厂 `atCRC()` 的数据位是**低位先喂** ⇒ **不是**任何标准 CRC 变体
 #   （不是 BUYPASS/CCITT/ARC/MODBUS ✗）⇒ 没有“目录校验值”可用；
@@ -784,11 +784,27 @@ def gen_atecc_rows(o):
 #     同名定义**以本段为准**（Python 后定义覆盖前者）⇒ 两段现在都已改成新口径 ✓；
 #     去重要把整段重写，留作单独一步。
 # ---------------------------------------------------------------------------
+# ★★ d 步（2026-10-11 台架）：**原厂栈实发 / 器件实回**的字节 —— 这一切的外部真值 ✓
+#   台架 = CH347F 当唯一主机，原厂库驱动这颗已双锁的 608B（Slot 0 = P-256 私钥），
+#   见 docs/atecc608b-se.md §8.10。摘要 = SHA-256(b"ORPAH d-step probe v1")。
+D_DIGEST_HEX = "771c9b947d59500d4a491ee5e3c1d57dcdb7a9d03544964846e2ef42fcdfb6d5"
+# 67 B 签名响应的**逐字节**：43 | r(32) | s(32) | crc(2)（器件在 2026-10-11 实回）
+D_SIGN67_HEX = ("43523a1d9f2cc6b173f2e721fe5134361aa8bd63d1a7b8a4ed826915c1b6c0b4c1"
+                "e2c7cc602f529082c7eee341d0ca8bd1a7105382a5153c22fd1a8cf2a48348588d9c")
+
 # ★ 锚点 = **另一方产出的真实字节**（不是目录校验值 —— 原厂这个算法目录里没有 ✗）
 CRC16_ATCA_ANCHORS = ((bytes([0x04, 0x11]), 0x4333),
                       (bytes([0x04, 0xFF]), 0x4201),
                       (bytes([0x07, 0x1B, 0x00, 0x00, 0x00]), 0xCD24),
-                      (bytes([0x07, 0x30, 0x00, 0x00, 0x00]), 0x5D03))
+                      # ★★ 2026-10-11 d 步台架：**原厂栈实发**的包尾 2 字节
+                      #（Nonce `27 16 43 00 00 <32B 摘要> 30 1A`、Sign `07 41 A0 00 00 7B 85`、
+                      #  GenKey `07 40 00 00 00 00 05`）—— 这三条同时把「我们抄的 `param1` /
+                      #  包长 / 摘要十六进制」钉住 ✓（抄错一个字节，这里 import 就 assert 失败 ✓）
+                      (bytes.fromhex("2716430000" + D_DIGEST_HEX), 0x1A30),
+                      (bytes.fromhex("0741a00000"), 0x857B),
+                      (bytes.fromhex("0740000000"), 0x0500),
+                      # 器件实回的签名响应包尾 8D 9C ⇒ 连**转写的 r||s** 一起锚住 ✓
+                      (bytes.fromhex(D_SIGN67_HEX)[:65], 0x9C8D))
 ATECC_OP_RANDOM = 0x1B
 ATECC_MODE_SEED_UPDATE = 0x00
 ATECC_MODE_NO_SEED_UPDATE = 0x01
@@ -804,6 +820,36 @@ ATECC_ERR_PKT_LEN = 4
 ATECC_MSG_E_ARG = -1
 ATECC_MSG_E_LEN = -2
 ATECC_MSG_E_CRC = -3
+
+# ★ d 步（2026-10-11）：opcode / 模式位 / 包长 —— 字节来自台架**实测**（见上面 D_* 常量）
+ATECC_OP_NONCE = 0x16
+ATECC_OP_SIGN = 0x41
+ATECC_OP_GENKEY = 0x40
+ATECC_NONCE_MODE_MSGDIGBUF = 0x43
+ATECC_SIGN_MODE_EXTERNAL = 0xA0
+ATECC_SIGN_BYTES = 64
+ATECC_CMD_LEN_NONCE_NOCRC = ATECC_CMD_LEN_NOCRC + 32          # 37
+ATECC_CMD_LEN_NONCE_CRC = ATECC_CMD_LEN_CRC + 32              # 39 = 0x27 ✓
+ATECC_RESP_LEN_SIG_NOCRC = ATECC_RESP_DATA_IDX + ATECC_SIGN_BYTES        # 65
+ATECC_RESP_LEN_SIG_CRC = ATECC_RESP_DATA_IDX + ATECC_SIGN_BYTES + 2      # 67 = 0x43 ✓
+
+# ★★ d 步（2026-10-11 台架）：**原厂栈实发 / 器件实回**的字节 —— 这一切的外部真值 ✓
+#   台架 = CH347F 当唯一主机，原厂库驱动这颗已双锁的 608B（Slot 0 = P-256 私钥），
+#   见 docs/atecc608b-se.md §8.10。测试向量「摘要」是 SHA-256(b"ORPAH d-step probe v1")。
+D_DIGEST_HEX = "771c9b947d59500d4a491ee5e3c1d57dcdb7a9d03544964846e2ef42fcdfb6d5"
+# 67 B 签名响应的**逐字节**：43 | r(32) | s(32) | crc(2)（器件在 2026-10-11 实回）
+D_SIGN67_HEX = ("43523a1d9f2cc6b173f2e721fe5134361aa8bd63d1a7b8a4ed826915c1b6c0b4c1"
+                "e2c7cc602f529082c7eee341d0ca8bd1a7105382a5153c22fd1a8cf2a48348588d9c")
+ATECC_OP_NONCE = 0x16
+ATECC_OP_SIGN = 0x41
+ATECC_OP_GENKEY = 0x40
+ATECC_NONCE_MODE_MSGDIGBUF = 0x43
+ATECC_SIGN_MODE_EXTERNAL = 0xA0
+ATECC_SIGN_BYTES = 64
+ATECC_CMD_LEN_NONCE_NOCRC = ATECC_CMD_LEN_NOCRC + 32          # 37
+ATECC_CMD_LEN_NONCE_CRC = ATECC_CMD_LEN_CRC + 32              # 39 = 0x27 ✓
+ATECC_RESP_LEN_SIG_NOCRC = ATECC_RESP_DATA_IDX + ATECC_SIGN_BYTES        # 65
+ATECC_RESP_LEN_SIG_CRC = ATECC_RESP_DATA_IDX + ATECC_SIGN_BYTES + 2      # 67 = 0x43 ✓
 
 
 def _rev8(b):
@@ -888,6 +934,43 @@ def py_atecc_resp_random(resp):
     return resp[ATECC_RESP_DATA_IDX:ATECC_RESP_DATA_IDX + ATECC_RANDOM_BYTES]
 
 
+def py_atecc_cmd_nonce(digest32, with_crc):
+    """★ d 步：`Nonce(0x16)` 的「pass-through 装入 32 B 摘要」。
+    形状 = count + op + param1(0x43) + param2(2B) + **32 B 数据** + [CRC]（同 C 侧一份规则）。"""
+    n = ATECC_CMD_LEN_NONCE_CRC if with_crc else ATECC_CMD_LEN_NONCE_NOCRC
+    pkt = bytearray([n, ATECC_OP_NONCE, ATECC_NONCE_MODE_MSGDIGBUF, 0x00, 0x00])
+    pkt += bytearray(digest32)
+    if with_crc:
+        c = py_crc16(bytes(pkt))
+        pkt += bytes([c & 0xFF, (c >> 8) & 0xFF])
+    return bytes(pkt)
+
+
+def py_atecc_cmd_sign(slot, with_crc):
+    """★ d 步：`Sign(0x41)`（外部消息档）—— param2 = **槽号**。"""
+    pkt = bytearray([ATECC_CMD_LEN_CRC if with_crc else ATECC_CMD_LEN_NOCRC,
+                     ATECC_OP_SIGN, ATECC_SIGN_MODE_EXTERNAL,
+                     (slot >> 8) & 0xFF, slot & 0xFF])
+    if with_crc:
+        c = py_crc16(bytes(pkt))
+        pkt += bytes([c & 0xFF, (c >> 8) & 0xFF])
+    return bytes(pkt)
+
+
+def py_atecc_resp_sign(resp):
+    """★ d 步：签名响应 → `r||s` 64 B（bytes）或错误码（int）。规则同 `resp_random`。"""
+    if len(resp) not in (ATECC_RESP_LEN_SIG_NOCRC, ATECC_RESP_LEN_SIG_CRC):
+        return ATECC_MSG_E_LEN
+    if resp[0] != len(resp):
+        return ATECC_MSG_E_LEN
+    if len(resp) == ATECC_RESP_LEN_SIG_CRC:
+        c = py_crc16(resp[:ATECC_RESP_LEN_SIG_NOCRC])
+        if resp[ATECC_RESP_LEN_SIG_NOCRC] != (c & 0xFF) or \
+           resp[ATECC_RESP_LEN_SIG_NOCRC + 1] != ((c >> 8) & 0xFF):
+            return ATECC_MSG_E_CRC
+    return resp[ATECC_RESP_DATA_IDX:ATECC_RESP_DATA_IDX + ATECC_SIGN_BYTES]
+
+
 def gen_crc16_rows(o):
     rows = []
     cases = [b"", b"\x00", b"\xff", bytes(range(16)), b"123456789",
@@ -925,6 +1008,7 @@ def gen_atecc_rows(o):
         bytes([0x04, 0xFF, 0x01, 0x42]),   # 实测：CRC/通讯错（状态 0xFF）
         bytes([0x04, 0x07, 0xC4, 0x40]),   # 库里记的自检失败应答
         bytes([0x04, 0x00, 0x00, 0x00]),   # 状态 0x00（没错）
+        bytes([0x04, 0x00, 0x03, 0x40]),   # ★ 实测：**Nonce 成功应答**（状态 0x00 = ok，2026-10-11）
         bytes([0x05, 0x11, 0x33, 0x43]),   # count=5 ⇒ 不是错误包
         bytes([0x04, 0x11, 0x33]),         # 长度不是 4 ⇒ 不是错误包
     ]
@@ -932,6 +1016,25 @@ def gen_atecc_rows(o):
         st = py_atecc_err_pkt(p)
         out = "not-errpkt" if st is None else ("0x%02X:%s" % (st, py_atecc_status_name(st)))
         rows.append(("errpkt", p.hex(), "-", "-", out))
+    # ★★ d 步（2026-10-11）：Nonce / Sign 包 + 签名解析。
+    #   前三条的期望值就是**原厂栈实发的字节**（导入时的 CRC 锚点又在 SHA-256 那一层横竖卡一道 ✓）。
+    dg = bytes.fromhex(D_DIGEST_HEX)
+    rows.append(("nonce", D_DIGEST_HEX, "1", "-", py_atecc_cmd_nonce(dg, 1).hex()))
+    rows.append(("nonce", D_DIGEST_HEX, "0", "-", py_atecc_cmd_nonce(dg, 0).hex()))
+    rows.append(("sign", "0", "1", "-", py_atecc_cmd_sign(0, 1).hex()))
+    rows.append(("sign", "0", "0", "-", py_atecc_cmd_sign(0, 0).hex()))
+    rows.append(("sign", "2", "1", "-", py_atecc_cmd_sign(2, 1).hex()))
+    rows.append(("sign", "15", "1", "-", py_atecc_cmd_sign(15, 1).hex()))
+    sig67 = bytes.fromhex(D_SIGN67_HEX)
+    badcrc = bytearray(sig67)
+    badcrc[ATECC_RESP_LEN_SIG_NOCRC] ^= 0x01
+    badcnt = bytearray(sig67)
+    badcnt[0] = ATECC_RESP_LEN_SIG_CRC + 1
+    for resp in (sig67, sig67[:ATECC_RESP_LEN_SIG_NOCRC], bytes(badcrc),
+                 sig67[:-1], bytes(badcnt), sig67[1:], bytes([0x04, 0x00, 0x03, 0x40])):
+        r = py_atecc_resp_sign(resp)
+        out = ("OK:" + r.hex()) if isinstance(r, (bytes, bytearray)) else ("ERR:%d" % r)
+        rows.append(("respsig", resp.hex(), "-", "-", out))
     return rows
 
 
@@ -1768,7 +1871,8 @@ def main():
           "下行解码 / SHA-256 / HMAC / 已签报文 / HGIC 帧构造 / HGIC 流解析 / HGIC 控制面 / "
           "P-256 公钥派生 / ECDSA 签名（RFC 6979，含 RFC §A.2.5 官方向量）/ "
           "ID 流水线（§8.2 选级 + 演示密钥 + nonce + 整帧）/ ATECC608B 报文层"
-          "（★ 原厂 atCRC 口径的 CRC + Random 包）十六组）")
+          "（★ 原厂 atCRC 口径的 CRC + Random/Info/Read + Nonce/Sign 包 + "
+          "签名 r||s 解析）十六组）")
     return 0
 
 

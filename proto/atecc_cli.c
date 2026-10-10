@@ -17,6 +17,9 @@
  *   info <mode>           <with_crc 0/1> <->            <包hex>          （工装，2026-09-23）
  *   read <zone> <addr(hex)> <with_crc 0/1>               <包hex>          （工装，2026-09-23）
  *   resp4 <完整响应hex>   <->            <->            OK:<4B hex> | ERR:<码>
+ *   nonce <32B摘要hex>    <with_crc 0/1> <->            <包hex>          （★ d 步，2026-10-11）
+ *   sign  <槽号>          <with_crc 0/1> <->            <包hex>          （★ d 步，2026-10-11）
+ *   respsig <完整响应hex> <->            <->            OK:<r||s 64B hex> | ERR:<码>  （★ d 步）
  *   errpkt <4字节包hex>   <->            <->            0x<状态>:<名字> | not-errpkt
  *     （`errpkt` 用 `atecc_msg_err_pkt_status()` + `atecc_msg_status_name()`；
  *       措辞照 CryptoAuthLib 原话，例：0x11 唤醒应答、0xFF CRC/通讯错）
@@ -44,6 +47,9 @@ static void usage(void)
             "  info <mode> <with_crc 0|1>          -> 命令包-hex（工装）\n"
             "  read <zone> <addr-hex> <with_crc>   -> 命令包-hex（工装）\n"
             "  resp4 <响应-hex>                    -> OK:<4B hex> | ERR:<码>（工装）\n"
+            "  nonce <32B摘要-hex> <with_crc 0|1>  -> Nonce 包-hex（★ d 步）\n"
+            "  sign <槽号> <with_crc 0|1>          -> Sign 包-hex（★ d 步）\n"
+            "  respsig <响应-hex>                  -> OK:<r||s 64B> | ERR:<码>（★ d 步）\n"
             "  selfcheck\n"
             "  crc-selftest <vector-file>\n"
             "  msg-selftest <vector-file>\n");
@@ -163,6 +169,53 @@ static int cmd_random(int mode, int with_crc)
     return 0;
 }
 
+/* ★ d 步：`nonce`/`sign` 与 `random` 同一个形状（打一行包 hex）*/
+static int cmd_nonce(const char *digest_hex, int with_crc)
+{
+    uint8_t pkt[ATECC_CMD_LEN_NONCE_CRC];
+    uint8_t d32[ATECC_NONCE_DIGEST_BYTES];
+    char hex[ATECC_CMD_LEN_NONCE_CRC * 2 + 1];
+    size_t n;
+
+    if (hex_to_bin(digest_hex, d32, sizeof(d32)) != (int)ATECC_NONCE_DIGEST_BYTES) {
+        fprintf(stderr, "digest 必须是 32 字节 hex\n");
+        return 1;
+    }
+    n = atecc_msg_nonce_load(pkt, sizeof(pkt), d32, with_crc);
+    if (n == 0u) { return 1; }
+    bin_to_hex(pkt, n, hex);
+    printf("%s\n", hex);
+    return 0;
+}
+
+static int cmd_sign(int slot, int with_crc)
+{
+    uint8_t pkt[ATECC_CMD_LEN_CRC];
+    size_t n = atecc_msg_sign(pkt, sizeof(pkt), (uint16_t)slot, with_crc);
+    char hex[ATECC_CMD_LEN_CRC * 2 + 1];
+
+    if (n == 0u) { return 1; }
+    bin_to_hex(pkt, n, hex);
+    printf("%s\n", hex);
+    return 0;
+}
+
+/* 一行 `respsig`：完整响应 → OK:<r||s 64B hex> | ERR:<码> */
+static void respsig_line(const uint8_t *resp, size_t n, char *out, size_t cap)
+{
+    uint8_t sig[ATECC_SIGN_BYTES];
+    int rc = atecc_msg_resp_sign(resp, n, sig);
+
+    if (rc == 0) {
+        char hex[ATECC_SIGN_BYTES * 2 + 1];
+
+        bin_to_hex(sig, ATECC_SIGN_BYTES, hex);
+        snprintf(out, cap, "OK:%s", hex);
+    } else {
+        snprintf(out, cap, "ERR:%d", rc);
+    }
+}
+
 static int selftest(const char *path)
 {
     FILE *fp = fopen(path, "r");
@@ -208,6 +261,30 @@ static int selftest(const char *path)
 
             if (n == 0u) { snprintf(g_got, sizeof(g_got), "(组包失败)"); }
             else { bin_to_hex(pkt, n, g_got); }
+        } else if (strcmp(cols[0], "nonce") == 0) {
+            uint8_t pkt[ATECC_CMD_LEN_NONCE_CRC];
+            uint8_t d32[ATECC_NONCE_DIGEST_BYTES];
+            size_t n;
+
+            if (hex_to_bin(cols[1], d32, sizeof(d32)) != (int)ATECC_NONCE_DIGEST_BYTES) {
+                snprintf(g_got, sizeof(g_got), "(摘要不是 32 B)");
+            } else {
+                n = atecc_msg_nonce_load(pkt, sizeof(pkt), d32, atoi(cols[2]) != 0);
+                if (n == 0u) { snprintf(g_got, sizeof(g_got), "(组包失败)"); }
+                else { bin_to_hex(pkt, n, g_got); }
+            }
+        } else if (strcmp(cols[0], "sign") == 0) {
+            uint8_t pkt[ATECC_CMD_LEN_CRC];
+            size_t n = atecc_msg_sign(pkt, sizeof(pkt), (uint16_t)atoi(cols[1]),
+                                      atoi(cols[2]) != 0);
+
+            if (n == 0u) { snprintf(g_got, sizeof(g_got), "(组包失败)"); }
+            else { bin_to_hex(pkt, n, g_got); }
+        } else if (strcmp(cols[0], "respsig") == 0) {
+            int n = hex_to_bin(cols[1], g_bin, sizeof(g_bin));
+
+            if (n < 0) { snprintf(g_got, sizeof(g_got), "(非法 hex)"); }
+            else { respsig_line(g_bin, (size_t)n, g_got, sizeof(g_got)); }
         } else if (strcmp(cols[0], "errpkt") == 0) {
             int n = hex_to_bin(cols[1], g_bin, sizeof(g_bin));
             uint8_t st = 0u;
@@ -402,12 +479,52 @@ static int selfcheck(void)
         }
     }
 
+    /* ⑩ ★★ d 步的外部锚点（2026-10-11 台架）：**原厂栈实发**的字节 ——
+     *    Nonce `27 16 43 00 00 <32B 摘要> 30 1A`、Sign `07 41 A0 00 00 7B 85`、
+     *    器件实回的签名响应 `43 | r(32) | s(32) | 8D 9C`（见 docs/atecc608b-se.md §8.10）。
+     *  ★ 为什么整串十六进制地比：**包尾那 2 字节 CRC 就是这串数据的校验和** ⇒
+     *    我抄错任何一个字节，这一条当场就红 ✓（比自己跟自己对拍硬得多 ✓）。
+     *  ⚠ 只引口径/行为，不搬原厂代码（见 §8.3）。*/
+    {
+        static const char dg[]    = "771c9b947d59500d4a491ee5e3c1d57dcdb7a9d03544964846e2ef42fcdfb6d5";
+        static const char nwant[] = "2716430000"
+            "771c9b947d59500d4a491ee5e3c1d57dcdb7a9d03544964846e2ef42fcdfb6d5" "301a";
+        static const char swant[] = "0741a000007b85";
+        static const char rwant[] = "43523a1d9f2cc6b173f2e721fe5134361aa8bd63d1a7b8a4ed826915c1b6c0b4c1"
+            "e2c7cc602f529082c7eee341d0ca8bd1a7105382a5153c22fd1a8cf2a48348588d9c";
+        uint8_t d32[ATECC_NONCE_DIGEST_BYTES];
+        uint8_t pkt39[ATECC_CMD_LEN_NONCE_CRC];
+        uint8_t resp67[ATECC_RESP_LEN_SIG_CRC];
+        uint8_t sig[ATECC_SIGN_BYTES];
+        char hex[ATECC_RESP_LEN_SIG_CRC * 2 + 1];
+
+        ck("摘要 / Nonce 包 / 签名响应三串 hex 长度都对（32 / 39 / 67）",
+           hex_to_bin(dg, d32, sizeof(d32)) == (int)ATECC_NONCE_DIGEST_BYTES &&
+           hex_to_bin(nwant, pkt39, sizeof(pkt39)) == (int)ATECC_CMD_LEN_NONCE_CRC &&
+           hex_to_bin(rwant, resp67, sizeof(resp67)) == (int)ATECC_RESP_LEN_SIG_CRC);
+        n = atecc_msg_nonce_load(pkt39, sizeof(pkt39), d32, 1);
+        bin_to_hex(pkt39, n, hex);
+        ck("外部锚点：Nonce 包 = 原厂实发的 27 16 43 00 00 <摘要> 30 1A",
+           n == ATECC_CMD_LEN_NONCE_CRC && strcmp(hex, nwant) == 0);
+        n = atecc_msg_sign(pkt, sizeof(pkt), 0u, 1);
+        bin_to_hex(pkt, n, hex);
+        ck("外部锚点：Sign(slot 0) 包 = 原厂实发的 07 41 A0 00 00 7B 85",
+           n == ATECC_CMD_LEN_CRC && strcmp(hex, swant) == 0);
+        ck("器件实回的 67 B 签名响应 -> 解析出 r||s（count 0x43=67 与 CRC 都对得上）",
+           atecc_msg_resp_sign(resp67, ATECC_RESP_LEN_SIG_CRC, sig) == 0);
+        ck("签名布局 = r 在前（第 1 字节 0x52、第 33 字节 0xE2，即 r||s 各 32 B）",
+           sig[0] == 0x52u && sig[32] == 0xE2u);
+        resp67[ATECC_RESP_LEN_SIG_NOCRC] ^= 0x01u;
+        ck("签名响应改一位 CRC -> -3",
+           atecc_msg_resp_sign(resp67, ATECC_RESP_LEN_SIG_CRC, sig) == ATECC_MSG_E_CRC);
+    }
+
     if (sc_bad != 0) {
         printf("FAIL ATECC608B 报文层自检（%d 项不符）\n", sc_bad);
         return 2;
     }
-    printf("PASS ATECC608B 报文层自检（★ 原厂 atCRC 口径的 CRC + Random/Info/Read 包"
-           " + 响应解析 9 类）\n");
+    printf("PASS ATECC608B 报文层自检（★ 原厂 atCRC 口径的 CRC + Random/Info/Read + Nonce/Sign"
+           " 包 + 响应解析（含签名 r||s），共 10 类）\n");
     return 0;
 }
 
@@ -450,6 +567,20 @@ int main(int argc, char **argv)
 
         if (n < 0) { fprintf(stderr, "bad hex\n"); return 1; }
         resp4_line(g_bin, (size_t)n, g_got, sizeof(g_got));
+        printf("%s\n", g_got);
+        return 0;
+    }
+    if (strcmp(argv[1], "nonce") == 0 && argc >= 4) {
+        return cmd_nonce(argv[2], atoi(argv[3]) != 0);
+    }
+    if (strcmp(argv[1], "sign") == 0 && argc >= 4) {
+        return cmd_sign(atoi(argv[2]), atoi(argv[3]) != 0);
+    }
+    if (strcmp(argv[1], "respsig") == 0 && argc >= 3) {
+        int n = hex_to_bin(argv[2], g_bin, sizeof(g_bin));
+
+        if (n < 0) { fprintf(stderr, "bad hex\n"); return 1; }
+        respsig_line(g_bin, (size_t)n, g_got, sizeof(g_got));
         printf("%s\n", g_got);
         return 0;
     }

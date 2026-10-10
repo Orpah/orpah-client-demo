@@ -48,6 +48,9 @@
 #define ATECC_OP_RANDOM          0x1Bu
 #define ATECC_OP_INFO            0x30u   /* 工装：读器件版本（响应 4 B）*/
 #define ATECC_OP_READ            0x02u   /* 工装：读配置区某处（响应 4 B）*/
+#define ATECC_OP_NONCE           0x16u   /* ★ d 步：把 32 B 摘要装进器件缓冲 */
+#define ATECC_OP_GENKEY          0x40u   /* ★ d 步：由已有私钥算公钥（工装/产线自检）*/
+#define ATECC_OP_SIGN            0x41u   /* ★ d 步：用槽里的私钥签名 */
 #define ATECC_MODE_SEED_UPDATE   0x00u
 #define ATECC_MODE_NO_SEED_UPDATE 0x01u
 
@@ -71,6 +74,31 @@
  * `ATCA_RSP_SIZE_MIN` = 4；`calib_execution.c` 里 `if (rxsize < 4u) ATCA_RX_FAIL`）*/
 #define ATECC_ERR_PKT_LEN        4u
 #define ATECC_RSP_SIZE_MIN       4u
+
+/* ------------------------------------------------------------------ */
+/* ★ d 步：Nonce(0x16) / Sign(0x41) —— **字节全部来自实测**（2026-10-11 台架）           */
+/* ------------------------------------------------------------------ */
+/* 台架：CH347F 当唯一主机，用**原厂库**驱动这颗已配好并双锁的 608B（Slot 0 = P-256 私钥），
+ *   HAL 打出的 `send(0x03)` 就是下面这两条包（见 `docs/atecc608b-se.md` §8.10）：
+ *     Nonce：`27 16 43 00 00 <32 B 摘要> 30 1A`   （count = 0x27 = 39 ✓）
+ *     Sign ：`07 41 A0 00 00 7B 85`              （count = 0x07 ✓、param2 = 槽号 ✓）
+ *     GenKey：`07 40 00 00 00 00 05`               （由已有私钥算公钥 ✓）
+ *   ⇒ 数值以**实测**为准；名字只引原厂 API 说明里给得出的那些（`atcab_nonce_load()` 的
+ *     docstring 列了目标 `TEMPKEY`/`MSGDIGBUF`/`ALTKEYBUF`）——**名↔值的对应是按字节反推的** ✓。*/
+#define ATECC_NONCE_DIGEST_BYTES 32u
+/* Nonce 的 param1 = 实测 `0x43`：原厂栈用它是「pass-through 模式 + 目标 = Message Digest Buffer」
+ * （608 的这一档 = 把外部给的 32 B **当成摘要**直接装进消息摘要缓冲，不再自己哈希 ✓）*/
+#define ATECC_NONCE_MODE_MSGDIGBUF  0x43u
+/* Sign 的 param1 = 实测 `0xA0`（原厂栈的「外部消息」那一档）；param2 = **槽号**（Slot 0 ⇒ 0x0000）*/
+#define ATECC_SIGN_MODE_EXTERNAL    0xA0u
+#define ATECC_SIGN_BYTES         64u   /* r||s 各 32 B 大端（与原厂 `atcab_sign()` 的说明一致 ✓）*/
+/* 包长：Nonce 多带 32 B 数据；响应多带 64 B 签名
+ * （`27 16 …` = 39 = 1 count + 1 op + 1 p1 + 2 p2 + 32 数据 + 2 CRC ✓；
+ *   签名响应 `43 …` = 67 = 1 count + 64 签名 + 2 CRC ✓）*/
+#define ATECC_CMD_LEN_NONCE_NOCRC  (ATECC_CMD_LEN_NOCRC + ATECC_NONCE_DIGEST_BYTES)
+#define ATECC_CMD_LEN_NONCE_CRC    (ATECC_CMD_LEN_CRC + ATECC_NONCE_DIGEST_BYTES)
+#define ATECC_RESP_LEN_SIG_NOCRC   (ATECC_RESP_DATA_IDX + ATECC_SIGN_BYTES)
+#define ATECC_RESP_LEN_SIG_CRC     (ATECC_RESP_DATA_IDX + ATECC_SIGN_BYTES + 2u)
 /* 状态码：出处 `lib/calib/calib_command.h` 的 `CMD_STATUS_*` 与
  * `lib/calib/calib_command.c::isATCAError()` 的 switch（**照它的语义，不改写**）*/
 #define ATECC_STATUS_OK          0x00u  /* 没错误（安全器件在 isATCAError 里也是这条）*/
@@ -94,6 +122,20 @@ size_t atecc_msg_random(uint8_t *out, size_t cap, uint8_t mode, int with_crc);
  *   d 步做正式命令层时会连同向量一起补）。返回包长（5/7），0 = 容量不够。*/
 size_t atecc_msg_info(uint8_t *out, size_t cap, uint8_t mode, int with_crc);
 size_t atecc_msg_read(uint8_t *out, size_t cap, uint8_t zone, uint16_t addr, int with_crc);
+
+/* ★ d 步：`Nonce(0x16)` 的「pass-through 装入 32 B 摘要」那一档。
+ * 形状 = count + op + param1(`0x43`) + param2(2 B) + **32 B 数据** + [CRC]。
+ * 返回包长（`ATECC_CMD_LEN_NONCE_*`，37/39），0 = 容量不够。*/
+size_t atecc_msg_nonce_load(uint8_t *out, size_t cap,
+                            const uint8_t digest32[ATECC_NONCE_DIGEST_BYTES], int with_crc);
+
+/* ★ d 步：`Sign(0x41)` 的「对外部消息（= 上面那条 Nonce 装进去的摘要）签名」。
+ * 形状 = count + op + param1(`0xA0`) + **槽号**(2 B) + [CRC]。返回包长（5/7），0 = 容量不够。*/
+size_t atecc_msg_sign(uint8_t *out, size_t cap, uint16_t slot, int with_crc);
+
+/* ★ d 步：校验并取出**签名**（`r||s` 64 B）。`n` 必须 ∈ {65, 67}（67 时**真验** CRC）。
+ * 返回 0 = OK；<0 同下（`ATECC_MSG_E_*`）。*/
+int atecc_msg_resp_sign(const uint8_t *resp, size_t n, uint8_t out64[ATECC_SIGN_BYTES]);
 
 /* 取出"4 字节数据"类响应（Info/Read）：`resp` = 完整响应（含 1 B count）。
  * `n` 必须 ∈ {5, 7}（7 时**真验** CRC）。返回 0 = OK。*/
