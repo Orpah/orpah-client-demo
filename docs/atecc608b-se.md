@@ -515,6 +515,64 @@ sewake
 2. **确认这颗到底是什么**（丝印/购买来源/是否 TrustCustom 预配置件 ✓）；
 3. 有示波器/逻辑分析仪的话，看**包尾那两个 CRC 字节后器件有没有再动作** ✓（黑盒到此为止的补刀 ✓）。
 
+★★★ **2026-10-10 深夜（第四段）：★ 根因定案 —— 我们的 CRC 算法是错的 ✗**
+
+**怎么找到的（用户要求"尽快试试原厂的代码" ⇒ 用 Microchip 官方库当参照）**：
+1. `pip install cryptoauthlib`（官方包，win_amd64 二进制 wheel，含 `cryptoauth.dll` + 纯 Python 绑定 ✓）。
+2. 该 DLL **没编 CUSTOM HAL**（`hal_custom` 符号 0 次、`hal_iface_init(6)` 回 `0x1F` ✗），
+   也没有 I2C/SPI/SWI/GPIO（只编了 **UART/HID/KIT** ✓）。但 `atca_hal.c` 的
+   `hal_iface_register_hal()` **允许顶掉已有槽位** ✓ ⇒ 我们把自定义 HAL（6 个函数指针，
+   照 `atca_iface.h` 的 `ATCAHAL_t` 字段顺序）注册到 **HID(4)** 槽位 ✓，
+   再用 `iface_type=4` 调 `atcab_init` ⇒ **原厂栈真的调到了我们的 `halinit/halsend/halreceive`** ✓✓。
+   ⇒ 此后 **组包 / CRC / 重试 / 响应解析全由原厂负责**，我们只搬字节（CH347F 当主机）✓。
+3. 唤醒：`control(0)` 里发**"向地址 0x00 写 0 字节"**（我们固件早已实测这就是唤醒令牌 ✓），
+   再读 4 字节 ⇒ 实回 `04 11 33 43` ✓ —— 原厂栈的 `hal_check_wake` 判据也过 ✓。
+4. 原厂**自己组的两条命令**（实测发送日志）：
+   `07 30 00 00 00 03 5D`（`atcab_info`）、`07 1B 00 00 00 24 CD`（`atcab_random`）✓
+   —— 前 5 字节与我们固件**逐字节相同** ✓，**只有 CRC 两字节不同** ✗
+   （我们算 `6E DD`，原厂算 `24 CD`）⇒ **根因** ✓。
+
+**原厂的算法**（`lib/calib/calib_command.c::atCRC()`，逐行照抄）：
+```c
+crc_register = 0;  polynom = 0x8005;
+for (counter = 0; counter < length; counter++)
+    for (shift_register = 0x01; shift_register > 0x00; shift_register <<= 1) {
+        data_bit = (data[counter] & shift_register) ? 1 : 0;   /* 数据位 **低位先喂** */
+        crc_bit  = crc_register >> 15;
+        crc_register <<= 1;                                    /* 寄存器却是 **左移** */
+        if (data_bit != crc_bit) crc_register ^= polynom;
+    }
+/* 输出：低字节在前；覆盖范围 = 从 count 到第二个 CRC 字节之前（atCalcCrc: txsize-2）*/
+```
+⇒ 这是**"低位先入数据 + 高位移出寄存器"的混合口径** ✓ —— **不是任何标准 CRC 变体**
+（不是 BUYPASS / CCITT / ARC / MODBUS…）✗ ⇒ 我们一直用的 **CRC-16/BUYPASS 是错的** ✗。
+
+**四个样本全中（都是器件/原厂实回的字节）** ⇒ 算法钉死 ✓：
+
+| 数据 | 原厂 `atCRC()` | 实测 |
+|---|---|---|
+| `04 11`（唤醒包） | `33 43` | `33 43` ✓ |
+| `04 FF`（状态包） | `01 42` | `01 42` ✓ |
+| `07 1B 00 00 00` | `24 CD` | `24 CD` ✓（原厂实发） |
+| `07 30 00 00 00` | `03 5D` | `03 5D` ✓（原厂实发） |
+
+**★ 顺带纠正我前两段里的一条错判 ✗**：我曾用"标准变体穷举"（1048560 组参数）得出结论
+"`04 11 33 43` 不是 CRC 而是固定 magic" ✗ —— 那是**穷举空间选错**（只覆盖了标准反射/不反射
+两种，漏了原厂这种混合口径）⇒ **穷举错的空间也会给出很自信的错答案** ✓。
+按 `isATCAError()`：`0x11` = **"chip was successfully woken up"** ✓、`0xFF` = **"bad crc found
+(command not properly received by device)"** ✓ —— 所以 `04 FF 01 42` 一直就是它在说
+**"你这包的 CRC 不对"** ✓，而我们把这句话错读成了"不执行" ✗。
+
+**⇒ 结论（一句话）**：器件没问题、协议没问题、我们的组包也没问题 ✓ ——
+**错的是我们那个 CRC 算法** ✗ ⇒ 修掉它，`Random(0x1B)` 就该出 32 字节 ✓。
+
+**要改的地方（下一步，逐处）**：
+`proto/atecc_msg.c`（算法本体）＋ `proto/run_cross_test.py` 的 `py_crc16`（参照实现）＋
+`proto/test_vectors_crc16.txt`（向量要按新算法重生成 ✗ 旧的检验值 `0xFEE8` 属于标准 BUYPASS）＋
+`tools/ch347_i2c.py` 的 `crc_ok/atecc_pkt`（复用同一份）＋ 固件里所有 CRC 调用点；
+`docs/*` 里凡写 "CRC-16/BUYPASS" 的地方都要改成这个口径 ✓；改完必须**重跑交叉测试**并用
+**原厂那两条实发包**当新向量（它们是最好的真值 ✓）。
+
 ### 8.3 采购与验收（买回来先跑哪几条）
 
 拆机 / 散新件最常见的三种"还能用但不像新的"：
