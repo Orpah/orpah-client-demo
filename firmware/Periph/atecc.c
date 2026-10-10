@@ -531,10 +531,26 @@ int atecc_selftest(void)
                 (unsigned)s_st.last_wake_tries, (unsigned)ATECC_WAKE_TRIES);
     if (rc != 0) {
         uart_printf(CONSOLE_UART,
-                    "[se] 最后一轮读到：%02x %02x %02x %02x（≠04 11 33 43）"
-                    "⇒ 查 3V3 供电 / SDA(PB7)-SCL(PB6) 接线 / 4.7k 上拉\r\n",
+                    "[se] 最后一轮读到：%02x %02x %02x %02x（≠04 11 33 43）\r\n",
                     (unsigned)s_st.last_resp[0], (unsigned)s_st.last_resp[1],
                     (unsigned)s_st.last_resp[2], (unsigned)s_st.last_resp[3]);
+        /* ★★ 2026-10-11 实测（同一颗已通的芯片，连按两次 `se`）：第 1 次 `是 ✓`；
+         *   第 2 次这一行读到 **`23 00 00 00`** —— 那正是**上一条 `Random` 响应的 count**
+         *   （`0x23` = 35 = 1 count + 32 数据 + 2 CRC）✓。
+         *   机制：唤醒应答**只在“器件真的从睡眠被叫醒”时**才产生 ✓；器件本来就醒着时
+         *   它不重新产生，于是我们读到的是**输出缓冲里的旧内容** ✗（不是电气故障 ✗）。
+         *   ⇒ 原来那句 `⇒ 查 3V3 供电 / 接线 / 上拉` **会把人带偏** ✗（实测：报“不是”的
+         *     同一次里，紧接着的 `Random` 是**成功**的 ✓）⇒ 判据改口径，只有两处算数：
+         *     ① **随后那条命令的结果** ✓；② 下面 `i2c:` 行里的 **`rx` 有没有涨** ✓
+         *     （`rx` 不涨 + `nack` 在涨 = 连地址都没人答 ⇒ 才轮到查供电/接线/上拉 ✓）。*/
+        uart_printf(CONSOLE_UART,
+                    "[se] ⚠ 这一行**只在「器件从睡眠里被叫醒」时才有意义**：它本来就醒着时，"
+                    "读到的是输出缓冲里的旧内容（如上面的 `23 …` = 上一条响应的 count）"
+                    "⇒ **不要据此查接线/供电** ✗\r\n");
+        uart_printf(CONSOLE_UART,
+                    "[se]    要看两处：① 随后那条命令**成不成功** ✓；② `i2c:` 行的 `rx` 有没有涨"
+                    "（`rx` 不涨 + `nack` 涨 = 地址没人答 ⇒ 才查 3V3 供电 / SDA(PB7)-SCL(PB6) "
+                    "接线 / 4.7k 上拉）\r\n");
         uart_printf(CONSOLE_UART,
                     "[se] 注：对地址 0x00 写 0 字节**本来就不会 ACK**（库里原话 "
                     "\"part will NACK, so don't check for status\"）⇒ 别拿它当\"器件不在\"✗\r\n");

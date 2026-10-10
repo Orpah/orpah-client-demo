@@ -5,7 +5,9 @@
   1. 打开 nano 的**控制台串口**（默认 COM23，115200 8N1）；
   2. 探活：`AT` → `OK`（不靠横幅 —— 板子已跑一会儿的话横幅早过去了，同 γ-1 口径）；
   3. 发 `se`（固件里的 `atecc_selftest()`）⇒ 看四件事：
-       · `[se] wake: ACK`            —— 唤醒拿到了 ACK（= 供电/接线/上拉都对）
+       · `[se] 唤醒判据 … ：是 ✓`     —— 读回 4 字节 = `04 11 33 43`
+         ⚠ 报 `不是 ✗` **不等于**硬件坏：器件**本来就醒着**时它必然不是
+         （读到的是上一条响应的 count），以**随后的命令结果**为准 —— 见下面的判据 1
        · `[se] cmd=… crc_mode=…`     —— ★ **本轮实测**：线上要不要挂 CRC（两条待确认假设之一）
        · `[se] Random(0x1B) 32 B ok; 前 16 B = <32hex>`
        · 失败时把 `rc / last_resp_len / raw=` 原样带出来（是 `count` 口径不对还是别的问题）
@@ -44,9 +46,14 @@ sys.path.insert(0, HERE)
 from check_report_hex import load_upstream, judge, strip_hex      # noqa: E402  （单一源：解析/判定）
 
 BAUD = 115200
-# ⚠ `crc_mode=` 后面那串**含空格**（`no-crc(响应 36 B)`）⇒ 不能用 \S+
-RE_WAKE = re.compile(r"\[se\]\s+wake:\s*(ACK|NO ACK)")
-RE_STATS = re.compile(r"\[se\]\s+cmd=(\d+)\s+ok=(\d+)\s+fail=(\d+)\s+crc_mode=(.*)")
+# ⚠ `crc_mode=` 后面那串**含空格**（`crc(响应 35 B)`）⇒ 不能用 \S+
+# ★ 2026-10-11：唤醒判据**两种格式都要认** —— 固件 `e0c1483` 起改成"读 4 字节比对"
+#   （照 CryptoAuthLib `hal_check_wake()`）⇒ 打印格式也变了；只认旧格式会把"全过"
+#   误报成 `FAIL … `se` 未输出` ✗（2026-10-11 实测踩过：五条判据全过、却被旧正则判失败）。
+RE_WAKE = re.compile(r"\[se\]\s*唤醒判据\s*=[^：]*：\s*(是|不是)")
+RE_WAKE_OLD = re.compile(r"\[se\]\s+wake:\s*(ACK|NO ACK)")
+RE_STATS = re.compile(r"\[se\]\s+cmd=(\d+)\s+ok=(\d+)\s+fail=(\d+)\s+crc_mode=(.*?)"
+                      r"(?:\s+resp_waddr=(\S+))?\s*$")
 RE_RAND = re.compile(r"\[se\]\s+Random\(0x1B\)\s+32\s*B\s*ok;\s*前\s*16\s*B\s*=\s*([0-9a-fA-F]{32})")
 RE_SEFAIL = re.compile(r"\[se\]\s+Random FAILED\s+rc=(-?\d+)\s+last_resp_len=(\d+)\s+raw=([0-9a-fA-F]*)")
 RE_SENORES = re.compile(r"\[se\]\s*没应答")
@@ -65,13 +72,19 @@ def parse_se_log(text):
         s = ln.strip()
         m = RE_WAKE.search(s)
         if m:
-            out["wake"] = m.group(1)
+            out["wake"] = m.group(1)            # 是 / 不是（2026-10-11 起的新口径）
+        m = RE_WAKE_OLD.search(s)
+        if m:
+            out["wake"] = m.group(1)            # ACK / NO ACK（旧固件）
         if RE_SENORES.search(s):
             out["nores"] = True
         m = RE_STATS.search(s)
         if m:
+            # ★ 2026-10-11：`crc_mode=` 后面同一行还有 ` resp_waddr=0x00` ⇒ **必须非贪婪**
+            #   （原来 `(.*)` 一口吞到行尾，把 `resp_waddr` 也算进 crc_mode ⇒ 判据 2 误报 ✗）。
             out["stats"] = {"cmd": int(m.group(1)), "ok": int(m.group(2)),
-                            "fail": int(m.group(3)), "crc_mode": m.group(4).strip()}
+                            "fail": int(m.group(3)), "crc_mode": m.group(4).strip(),
+                            "resp_waddr": m.group(5)}
         m = RE_RAND.search(s)
         if m:
             out["rands"].append(m.group(1).upper())
@@ -228,17 +241,28 @@ def main():
     got = parse_se_log(t)
 
     # ---- 判据 1：唤醒 ----
+    # ★★ 2026-10-11 改口径：这一条**不再单独定罪** ✗。器件**本来就醒着**时（上一条响应还在
+    #   它的输出缓冲里）唤醒判据必然是 `不是 ✗` —— 实测：`se` 连按两次，第 2 次打印
+    #   `最后一轮读到：23 00 00 00`（`0x23` = 35 = 上一条 `Random` 响应的 count），
+    #   **而紧接着的 `Random` 成功** ✓。⇒ 真正的判据 = 下面那条命令的结果。
+    w = got["wake"]
     if got["nores"]:
         print("FAIL `se` 报「没应答」⇒ 查三件事：SE 的 3V3/GND 供电、"
               "`PB6↔pin6(SCL)`/`PB7↔pin5(SDA)` 接线、**4.7k 上拉**")
         fails.append("SE 无应答")
-    elif got["wake"] == "ACK":
-        print("PASS SE 唤醒拿到 ACK（供电/接线/上拉都对）")
-    elif got["wake"] == "NO ACK":
-        print("FAIL 唤醒没 ACK —— 同上三件事（供电 / 接线 / 上拉）")
-        fails.append("唤醒无 ACK")
+    elif w in ("ACK", "是"):
+        print("PASS 唤醒判据过了（%s）" % ("读回 04 11 33 43" if w == "是" else "ACK"))
+    elif w in ("NO ACK", "不是"):
+        if got["rands"]:
+            print("warn 唤醒判据没过（%s），但随后的 `Random` 成功 ⇒ **器件本来就醒着**"
+                  "（这一条只在「它从睡眠里被叫醒」时才有意义）—— 不算失败" % w)
+        else:
+            print("FAIL 唤醒判据没过（%s）**且**随后也没取到随机数 ⇒ 查 3V3 供电 / "
+                  "`PB6↔pin6(SCL)`/`PB7↔pin5(SDA)` 接线 / 4.7k 上拉" % w)
+            fails.append("唤醒判据不过 + 无随机数")
     else:
-        print("FAIL 控制台里没看到 `[se] wake: …` —— `se` 命令没被识别？看上面原始输出")
+        print("FAIL 控制台里没看到唤醒判据那一行（`[se] 唤醒判据 …`，或旧格式 `[se] wake: …`）"
+              "—— `se` 命令没被识别？看上面原始输出")
         fails.append("`se` 未输出")
 
     # ---- 判据 2：Random + ★ 实测的 CRC 模式 ----
@@ -246,13 +270,22 @@ def main():
     if st:
         print("PASS `se` 统计：cmd=%d ok=%d fail=%d  ★ crc_mode=%s"
               % (st["cmd"], st["ok"], st["fail"], st["crc_mode"]))
-        if st["crc_mode"] not in ("no-crc(响应 36 B)", "crc(响应 38 B)"):
-            print("warn crc_mode 仍是 unknown ⇒ 那条随机数不是一次就取到的，看下面的 FAILED 行")
+        if st.get("resp_waddr"):
+            # ★ `resp_waddr` 也该是 `0x00`（`0x03` = 旧写法兜底通了）—— §6 表第 2b 行。
+            if st["resp_waddr"] == "0x00":
+                print("PASS 响应字地址 resp_waddr=0x00（公开实现里的正确值）")
+            else:
+                print("warn resp_waddr=%s（不是 0x00 ⇒ 看 §3b 那条推断）" % st["resp_waddr"])
+        # ★ 2026-10-11：口径是 `no-crc(响应 33 B)` / `crc(响应 35 B)` —— count 只占 1 字节
+        #   （32 B 数据 + 2 B CRC）⇒ 旧的 36/38 是"4 字节大端 count"那版**已作废** ✗。
+        if st["crc_mode"] not in ("no-crc(响应 33 B)", "crc(响应 35 B)"):
+            print("warn crc_mode 不是 33/35 B 两种之一（=%s）⇒ 看下面的 FAILED 行"
+                  % st["crc_mode"])
     if got["fails"]:
         for f in got["fails"]:
             print("FAIL Random 失败：rc=%d last_resp_len=%d raw=%s"
                   % (f["rc"], f["len"], f["raw"] or "(空)"))
-            print("     ⇒ 若 len 不是 36/38：把 raw 贴进 docs/atecc608b-se.md §4，"
+            print("     ⇒ 若 len 不是 33/35：把 raw 贴进 docs/atecc608b-se.md §4，"
                   "按实测改 `ATECC_RESP_LEN_*`（**就一处**；别连试好几轮）")
         fails.append("Random 失败")
     if len(got["rands"]) >= 1:
