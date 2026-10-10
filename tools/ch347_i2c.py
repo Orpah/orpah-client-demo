@@ -262,10 +262,10 @@ def cmd_atecc(args):
 
         if args.op == "random":
             pkt = atecc_pkt(0x1B, 0x00, 0x0000, args.crc)
-            n = 38 if args.crc else 36
+            n = 35 if args.crc else 33       # ★ 2026-10-10：count **只占 1 字节**（见 atecc_msg.h）
         else:                                   # info / DevRev
             pkt = atecc_pkt(0x30, 0x00, 0x0000, args.crc)
-            n = 10 if args.crc else 8
+            n = 7 if args.crc else 5
         print("命令包（%d 字节）：%s" % (len(pkt), hexs(pkt)))
 
         ack = dev.write_only(args.addr, pkt, waddr, ret_ack=True)
@@ -275,14 +275,19 @@ def cmd_atecc(args):
         rd = dev.read_from(args.addr, int(args.resp_waddr, 16), n)
         print("② 读响应（%d 字节）：%s" % (n, hexs(rd)))
         if rd:
-            cnt = int.from_bytes(rd[:4], "big")
-            print("   count 字段 = %d（大端）；本长度 %d" % (cnt, n))
+            cnt = rd[0]                # ★ count 只占 1 字节（出处见 proto/atecc_msg.h）
+            print("   count = %d（**1 字节**）；本次读了 %d 字节" % (cnt, n))
+            if cnt == 4:
+                # 4 字节错误包（器件“说话”的最小形状）——名字从**单一源**取：
+                # proto/run_cross_test.py 的 py_atecc_status_name（与 C 侧逐字相同）
+                nm = rct.py_atecc_status_name(rd[1]) if HAVE_RCT else "?"
+                print("   ⇒ **4 字节错误包**：状态 0x%02X = %s" % (rd[1], nm))
             ck = crc_ok(rd)
             if ck is not None:
                 print("   CRC：%s" % ("对" if ck else "**不对或器件不挂 CRC**"))
             if rd[:4] == b"\xff\xff\xff\xff":
                 print("   全 0xFF ⇒ **从机一个字节都没驱动**（器件没准备响应/不认这条命令）")
-            elif cnt in (8, 10, 36, 38):
+            elif cnt in (5, 7, 33, 35):
                 print("   ★ count 合法 ⇒ **器件真的回了响应** —— 那就说明我们固件侧还有问题！")
     return 0
 

@@ -5,13 +5,13 @@
  *            → 写"唤醒令牌" = 地址 0x00，收到 ACK 才算醒（这是权威做法：CryptoAuthLib
  *              `hal_check_wake()` 就是发 0x00 看 ACK，不是靠猜时间）
  *   ② 发命令：START + 0xC0 + **字地址 0x03** + 包（5 或 7 字节） + STOP
- *   ③ 收响应：START + 0xC0 + 0x03 + **RESTART** + 0xC1 → 先读 4 字节 count
- *            → 按 count 接着读 count-4 字节（**同一段事务里读完**，中间不能停）
+ *   ③ 收响应：START + 0xC0 + 字地址 + **RESTART** + 0xC1 → 先读 **1 字节** count
+ *            → 按 count 接着读 count-1 字节（**同一段事务里读完**，中间不能停）
  *   ④ 解析：`proto/atecc_msg.c`（长度/count/CRC 三道检查）
  *
  * ★ CRC 模式自动判定（为什么必须自动）：线上要不要挂 CRC 取决于芯片 Config 区
  *   `ChipMode` 的 I2C-CRC 位，而**我们手上只有 NDA 摘要手册、没有 Config 默认值**
- *   ⇒ 不猜：先按"不挂 CRC"发一条，若响应 count 不是 36，再按"挂 CRC"发一条；
+ *   ⇒ 不猜：先按"不挂 CRC"发一条，若响应 count 不是 33，再按"挂 CRC"发一条；
  *   哪一种通就**记住**（`s_st.crc_mode`），后面都用它。判定的结果打在 `se` 命令上。
  */
 #include "atecc.h"
@@ -146,7 +146,7 @@ int atecc_wake(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* 一条命令 → 一条响应（响应长度由前 4 字节 count 决定）                  */
+/* 一条命令 → 一条响应（响应长度由**第 1 字节** count 决定）                      */
 /* ------------------------------------------------------------------ */
 
 /* 只发“字地址 0x03 + 命令包”（不含接收）*/
@@ -162,7 +162,7 @@ static int cmd_write(const uint8_t *pkt, uint32_t pktlen)
     return (i2c_write(s_addr, wbuf, 1u + pktlen) == 0) ? 0 : ATECC_E_IO;
 }
 
-/* 从指定字地址读一条响应（先 4 字节 count，再按 count 读满）*/
+/* 从指定字地址读一条响应（先 1 字节 count，再按 count 读满）*/
 static int resp_read(uint8_t waddr, uint8_t *resp, uint32_t respcap, uint32_t *resplen)
 {
     uint32_t i, count;
@@ -172,31 +172,30 @@ static int resp_read(uint8_t waddr, uint8_t *resp, uint32_t respcap, uint32_t *r
     if (rc != 0) {
         return ATECC_E_IO;
     }
-    for (i = 0u; i < 4u; i++) {
-        rc = i2c_read_byte(&resp[i], 1);
-        if (rc != 0) {
-            i2c_read_end();
-            return ATECC_E_IO;
-        }
+    /* ★ 2026-10-10：**先只读 1 字节** —— I²C 上 count 就是 1 字节（出处见 `atecc_msg.h`）。
+     *   原来一次读 4 字节再按"大端 count"算 ✗：器件回的 4 字节错误包 `04 FF 01 42`
+     *   会被算成 `0x04FF0142` ⇒ 报"长度离谱"，真话（状态 0xFF）反而被吃掉。*/
+    rc = i2c_read_byte(&resp[0], 1);
+    if (rc != 0) {
+        i2c_read_end();
+        return ATECC_E_IO;
     }
     count = atecc_msg_count(resp);
     if (resplen != 0) {
-        *resplen = 4u;                  /* 先记着；读满再改 */
+        *resplen = 1u;                  /* 先记着；读满再改 */
     }
-    if (count < 4u || count > respcap) {
+    if (count < ATECC_RSP_SIZE_MIN || count > respcap) {
         /* 长度离谱：**把实际读到的前几字节留下来**（现场一眼看出是哪一步不对）。
          * 这里必须收尾（NACK + STOP），否则总线会一直被占着。*/
-        s_st.last_resp_len = 4u;
-        for (i = 0u; i < 4u && i < sizeof(s_st.last_resp); i++) {
-            s_st.last_resp[i] = resp[i];
-        }
-        for (i = 4u; i < sizeof(s_st.last_resp); i++) {
+        s_st.last_resp_len = 1u;
+        s_st.last_resp[0] = resp[0];
+        for (i = 1u; i < sizeof(s_st.last_resp); i++) {
             s_st.last_resp[i] = 0u;
         }
         i2c_read_end();
         return ATECC_E_RESP;
     }
-    for (i = 4u; i < count; i++) {
+    for (i = 1u; i < count; i++) {
         rc = i2c_read_byte(&resp[i], (i + 1u < count) ? 1 : 0);
         if (rc != 0) {
             i2c_read_end();
@@ -227,6 +226,25 @@ static void wait_ready(uint32_t ms)
     } while ((int32_t)(g_tick_ms - deadline) < 0);
 }
 
+/* ★ 2026-10-10：读响应**之前**看两条线有没有被器件放开。
+ *   为什么：带 CRC 的那几次都以 **BERR（总线错位）**收场 ✗，而"器件还在忙/还按着线"
+ *   正是 BERR 的典型成因；而 `wait_ready()` 的"探地址 ACK"会被**假 ACK 骗过** ✗
+ *   （2026-10-10 那个假 `0x08` 就骗过了探针 ✓）。
+ *   做法同 `diag_levels()`：两脚放开成**开漏写 1** 再读回（**不是内部上拉** ✓），读完恢复外设。*/
+static int lines_free(uint8_t *scl, uint8_t *sda)
+{
+    i2c_disable();
+    gpio_set_mode(SE_I2C_PORT, SE_SCL_PIN, GPIO_MODE_OUT_OD_2MHZ);
+    gpio_set_mode(SE_I2C_PORT, SE_SDA_PIN, GPIO_MODE_OUT_OD_2MHZ);
+    gpio_set_pin(SE_I2C_PORT, SE_SCL_PIN, 1u);
+    gpio_set_pin(SE_I2C_PORT, SE_SDA_PIN, 1u);
+    i2c_delay_us(50u);                  /* 给上拉一点时间（4.7 k × 线容 ≈ µs 级）*/
+    *scl = gpio_get_pin(SE_I2C_PORT, SE_SCL_PIN);
+    *sda = gpio_get_pin(SE_I2C_PORT, SE_SDA_PIN);
+    i2c_init();                         /* 恢复复用开漏（单一源在 i2c.c）*/
+    return (*scl != 0u && *sda != 0u) ? 1 : 0;
+}
+
 /* 发一条命令再读回响应。★ **响应字地址两种都试**（0x00 优先，见上面的长注释）：
  * 第一种读不通时**把命令重发一次**再用 0x03 读 —— 因为读失败的那次可能已经把命令取走了。*/
 static int transact(const uint8_t *pkt, uint32_t pktlen,
@@ -244,11 +262,21 @@ static int transact(const uint8_t *pkt, uint32_t pktlen,
     s_st.cmd++;
 
     for (k = 0u; k < ATECC_WORD_ADDR_TRY_N; k++) {
+        uint8_t lv_scl = 0u, lv_sda = 0u;
+
         rc = cmd_write(pkt, pktlen);
         if (rc != 0) {
             return rc;
         }
-        wait_ready(ATECC_READY_POLL_MS);   /* ★ 新增：等它备好再读（见上面注释）*/
+        wait_ready(ATECC_READY_POLL_MS);   /* ★ 等它备好（见上面注释）*/
+        /* ★ 读前判据：两线真被放开才读。若有线被按住 ⇒ **不读**（否则必是 BERR）⇒
+         *   返回错误、交给上层 `random_try()` 重试（那里会重做唤醒序列）。*/
+        if (!lines_free(&lv_scl, &lv_sda)) {
+            uart_printf(CONSOLE_UART,
+                        "[se] 读前电平：SCL=%u SDA=%u ✗ 有线被按住 ⇒ 本轮不读（留给重试）\r\n",
+                        (unsigned)lv_scl, (unsigned)lv_sda);
+            return ATECC_E_IO;
+        }
         rc = resp_read(waddr[k], resp, respcap, resplen);
         if (rc == 0) {
             s_st.resp_waddr = k + 1u;                 /* 1 = 读 0x00 通了；2 = 读 0x03 通了 */
@@ -305,6 +333,18 @@ static int random_try(uint8_t *out32, int with_crc)
         if (mrc == 0) {
             return 0;
         }
+        /* ★ 器件"说话"的最小形状 = **4 字节错误包**（count + 状态 + 2）⇒ 把状态
+         *   **翻成文字**打出来。出处 `lib/calib/calib_command.c::isATCAError()`，
+         *   措辞照库里原话（例：0xFF = bad crc / 命令没被正确收到，0x11 = 刚被唤醒）。*/
+        {
+            uint8_t st = 0u;
+
+            if (atecc_msg_err_pkt_status(resp, (size_t)replen, &st) == 0) {
+                uart_printf(CONSOLE_UART,
+                            "[se] 器件回了 4 字节错误包：状态 0x%02x（%s）\r\n",
+                            (unsigned)st, atecc_msg_status_name(st));
+            }
+        }
         /* 长度/count/CRC 对不上 —— 把原始字节留档（现场判据；唤醒响应 `04 11 33 43` 就落这里）*/
         s_st.last_resp_len = replen;
         for (i = 0u; i < sizeof(s_st.last_resp); i++) {
@@ -329,7 +369,7 @@ int atecc_random(uint8_t out32[ATECC_RANDOM_BYTES])
         s_st.last_err = (uint32_t)(-rc);
         return rc;
     }
-    /* 还没判出来：先试不带 CRC，再试带 CRC（判据 = 响应长度 36 / 38）*/
+    /* 还没判出来：先试不带 CRC，再试带 CRC（判据 = 响应长度 33 / 35）*/
     rc = random_try(out32, 0);
     if (rc == 0) {
         s_crc_mode = 0;

@@ -5,13 +5,23 @@
 #   cmd  : a1=mode a2=with_crc(0/1) a3=-        out = 命令包-hex（count 在头、CRC 小端在尾）
 #   resp : a1=完整响应-hex a2=a3=-              out = OK:<32B hex> | ERR:<码>
 #     （ERR 码同 C 侧 ATECC_MSG_E_*：-2 = 长度/ count 不符、-3 = CRC 不符）
-# 覆盖：两种模式 × 带/不带 CRC、响应 36/38 B、CRC 改一位、长度截短、count 与长度矛盾
+#   errpkt: a1=4字节包-hex a2=a3=-              out = 0x<状态>:<名字> | not-errpkt
+#     （状态名 = `atecc_msg_status_name()`；两册逐字相同，措辞照 isATCAError()）
+# 覆盖：两种模式 × 带/不带 CRC、响应 33/35 B（count **只占 1 字节**）、CRC 改一位、
+#       长度截短、count 与长度矛盾、以及 4 字节错误包（含 2026-10-10 台架**实测**的
+#       `04 11 33 43`（唤醒）与 `04 FF 01 42`（CRC/通讯错））
 cmd	0	0	-	051b000000
 cmd	0	1	-	071b0000006edd
 cmd	1	0	-	051b010000
 cmd	1	1	-	071b010000795d
-resp	00000024000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f	-	-	OK:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
-resp	00000024000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f84a9	-	-	ERR:-2
-resp	00000024000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f85a9	-	-	ERR:-2
-resp	00000024000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e	-	-	ERR:-2
-resp	00000025000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f	-	-	ERR:-2
+resp	21000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f	-	-	OK:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+resp	23000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f8328	-	-	OK:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+resp	23000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f8228	-	-	ERR:-3
+resp	21000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e	-	-	ERR:-2
+resp	22000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f	-	-	ERR:-2
+errpkt	04113343	-	-	0x11:woke up
+errpkt	04ff0142	-	-	0xFF:bad crc found (command not properly received) or other comm error
+errpkt	0407c440	-	-	0x07:self test failure mode
+errpkt	04000000	-	-	0x00:ok
+errpkt	05113343	-	-	not-errpkt
+errpkt	041133	-	-	not-errpkt

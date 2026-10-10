@@ -39,13 +39,41 @@ size_t atecc_msg_read(uint8_t *out, size_t cap, uint8_t zone, uint16_t addr, int
     return cmd5(out, cap, ATECC_OP_READ, zone, addr, with_crc);
 }
 
-uint32_t atecc_msg_count(const uint8_t c4[4])
+/* ★ 2026-10-10 改正：I²C 上 count **就是 1 字节**（出处见 atecc_msg.h 的文件头）。
+ *   原来按 4 字节大端读 ✗ —— 那会把器件回的 4 字节错误包 `04 FF 01 42` 算成
+ *   `0x04FF0142`（天文数字）⇒ 直接判"长度离谱"，真话（状态 0xFF）反而被吃掉。*/
+uint32_t atecc_msg_count(const uint8_t *resp)
 {
-    if (c4 == 0) {
-        return 0u;
+    return (resp == 0) ? 0u : (uint32_t)resp[0];
+}
+
+int atecc_msg_err_pkt_status(const uint8_t *resp, size_t n, uint8_t *status)
+{
+    if (resp == 0 || status == 0 || n != ATECC_ERR_PKT_LEN) {
+        return ATECC_MSG_E_LEN;
     }
-    return ((uint32_t)c4[0] << 24) | ((uint32_t)c4[1] << 16) |
-           ((uint32_t)c4[2] << 8) | (uint32_t)c4[3];
+    if (resp[0] != (uint8_t)ATECC_ERR_PKT_LEN) {
+        return ATECC_MSG_E_LEN;         /* count 字段必须是 4 */
+    }
+    *status = resp[1];
+    return 0;
+}
+
+const char *atecc_msg_status_name(uint8_t status)
+{
+    /* 措辞照 `isATCAError()` / `calib_command.h` 的原话（别自己另起说法）。*/
+    switch (status) {
+    case ATECC_STATUS_OK:         return "ok";
+    case ATECC_STATUS_CHECKMAC:   return "checkmac or verify failed";
+    case ATECC_STATUS_PARSE:      return "parse error (bad length/opcode/param)";
+    case ATECC_STATUS_ECC:        return "ecc fault";
+    case ATECC_STATUS_SELFTEST:   return "self test failure mode";
+    case ATECC_STATUS_RNG_HEALTH: return "random number generator health test error";
+    case ATECC_STATUS_EXEC:       return "cannot execute command";
+    case ATECC_STATUS_WAKEUP:     return "woke up";
+    case ATECC_STATUS_COMM:       return "bad crc found (command not properly received) or other comm error";
+    default:                      return "unknown";
+    }
 }
 
 int atecc_msg_resp_get4(const uint8_t *resp, size_t n, uint8_t out4[4])
@@ -71,7 +99,7 @@ int atecc_msg_resp_get4(const uint8_t *resp, size_t n, uint8_t out4[4])
         }
     }
     for (i = 0u; i < 4u; i++) {
-        out4[i] = resp[4u + i];
+        out4[i] = resp[ATECC_RESP_DATA_IDX + i];
     }
     return 0;
 }
@@ -99,7 +127,7 @@ int atecc_msg_resp_random(const uint8_t *resp, size_t n, uint8_t out32[ATECC_RAN
         }
     }
     for (i = 0u; i < ATECC_RANDOM_BYTES; i++) {
-        out32[i] = resp[4u + i];
+        out32[i] = resp[ATECC_RESP_DATA_IDX + i];
     }
     return 0;
 }

@@ -17,6 +17,9 @@
  *   info <mode>           <with_crc 0/1> <->            <包hex>          （工装，2026-09-23）
  *   read <zone> <addr(hex)> <with_crc 0/1>               <包hex>          （工装，2026-09-23）
  *   resp4 <完整响应hex>   <->            <->            OK:<4B hex> | ERR:<码>
+ *   errpkt <4字节包hex>   <->            <->            0x<状态>:<名字> | not-errpkt
+ *     （`errpkt` 用 `atecc_msg_err_pkt_status()` + `atecc_msg_status_name()`；
+ *       措辞照 CryptoAuthLib 原话，例：0x11 唤醒应答、0xFF CRC/通讯错）
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -205,6 +208,18 @@ static int selftest(const char *path)
 
             if (n == 0u) { snprintf(g_got, sizeof(g_got), "(组包失败)"); }
             else { bin_to_hex(pkt, n, g_got); }
+        } else if (strcmp(cols[0], "errpkt") == 0) {
+            int n = hex_to_bin(cols[1], g_bin, sizeof(g_bin));
+            uint8_t st = 0u;
+
+            if (n < 0) {
+                snprintf(g_got, sizeof(g_got), "(非法 hex)");
+            } else if (atecc_msg_err_pkt_status(g_bin, (size_t)n, &st) != 0) {
+                snprintf(g_got, sizeof(g_got), "not-errpkt");
+            } else {
+                snprintf(g_got, sizeof(g_got), "0x%02X:%s", (unsigned)st,
+                         atecc_msg_status_name(st));
+            }
         } else if (strcmp(cols[0], "resp4") == 0) {
             int n = hex_to_bin(cols[1], g_bin, sizeof(g_bin));
 
@@ -278,25 +293,40 @@ static int selfcheck(void)
        n == ATECC_CMD_LEN_CRC && pkt[0] == ATECC_CMD_LEN_CRC &&
        pkt[5] == (uint8_t)(crc16_bypass(pkt, 5u) & 0xFFu) &&
        pkt[6] == (uint8_t)(crc16_bypass(pkt, 5u) >> 8));
-    /* ⑤ 响应解析：36 字节（无 CRC）应过 */
+    /* ⑤ 响应解析：33 字节（无 CRC）应过 —— count **只占 1 字节**（2026-10-10 改正）*/
     for (i = 0; i < sizeof(resp); i++) { resp[i] = 0u; }
-    resp[3] = ATECC_RESP_LEN_NOCRC;                 /* count 大端：0x00 0x00 0x00 0x24 */
-    for (i = 0; i < ATECC_RANDOM_BYTES; i++) { resp[4u + i] = (uint8_t)i; }
+    resp[0] = ATECC_RESP_LEN_NOCRC;
+    for (i = 0; i < ATECC_RANDOM_BYTES; i++) { resp[ATECC_RESP_DATA_IDX + i] = (uint8_t)i; }
     rc = atecc_msg_resp_random(resp, ATECC_RESP_LEN_NOCRC, d);
-    ck("响应 36 B（count=36）解析出 32 B", rc == 0 && d[0] == 0x00u && d[31] == 0x1Fu);
-    /* ⑥ 38 字节 + 正确 CRC 应过；把 CRC 改一位应报 -3 */
+    ck("响应 33 B（count 1 字节）解析出 32 B", rc == 0 && d[0] == 0x00u && d[31] == 0x1Fu);
+    /* ⑥ 35 字节 + 正确 CRC 应过；把 CRC 改一位应报 -3 */
     {
         uint8_t crc[2];
 
-        resp[3] = ATECC_RESP_LEN_CRC;
+        resp[0] = ATECC_RESP_LEN_CRC;
         crc16_bypass_le(resp, ATECC_RESP_LEN_NOCRC, crc);
         resp[ATECC_RESP_LEN_NOCRC] = crc[0];
         resp[ATECC_RESP_LEN_NOCRC + 1u] = crc[1];
         rc = atecc_msg_resp_random(resp, ATECC_RESP_LEN_CRC, d);
-        ck("响应 38 B（带 CRC）解析通过", rc == 0);
+        ck("响应 35 B（带 CRC）解析通过", rc == 0);
         resp[ATECC_RESP_LEN_NOCRC] ^= 0x01u;
         rc = atecc_msg_resp_random(resp, ATECC_RESP_LEN_CRC, d);
         ck("改一位 CRC -> -3（CRC 不符）", rc == ATECC_MSG_E_CRC);
+    }
+    /* ⑦ 4 字节错误包：用 **2026-10-10 台架上真读到的**字节（不是我们自己造的）*/
+    {
+        static const uint8_t errpkt[ATECC_ERR_PKT_LEN] = { 0x04u, 0xFFu, 0x01u, 0x42u };
+        static const uint8_t wake4[ATECC_ERR_PKT_LEN] = { 0x04u, 0x11u, 0x33u, 0x43u };
+        uint8_t st = 0u;
+
+        ck("实测错误包 04 FF 01 42 -> 状态 0xFF（CRC/通讯错）",
+           atecc_msg_err_pkt_status(errpkt, sizeof(errpkt), &st) == 0 &&
+           st == ATECC_STATUS_COMM);
+        ck("实测唤醒应答 04 11 33 43 -> 状态 0x11（刚被唤醒）",
+           atecc_msg_err_pkt_status(wake4, sizeof(wake4), &st) == 0 &&
+           st == ATECC_STATUS_WAKEUP);
+        ck("状态 0xFF 有名字（不是 unknown）",
+           strcmp(atecc_msg_status_name(ATECC_STATUS_COMM), "unknown") != 0);
     }
     /* ⑦ count 与实际长度不一致 -> -2；长度 35 -> -2 */
     resp[3] = ATECC_RESP_LEN_NOCRC;
@@ -326,30 +356,30 @@ static int selfcheck(void)
     ck("容量不够（cap=5 却要带 CRC）-> 0",
        atecc_msg_info(pkt, 5u, 0x00u, 1) == 0u);
 
-    /* ⑨ 工装 resp4：4 字节响应解析（长度 / count / CRC 三道）*/
+    /* ⑨ 工装 resp4：4 字节响应解析（长度 / count / CRC 三道）—— ★ count 只占 1 字节 */
     {
         uint8_t d4[4];
 
         for (i = 0; i < sizeof(resp); i++) { resp[i] = 0u; }
-        resp[3] = ATECC_RESP4_LEN_NOCRC;
-        resp[4] = 0x00u; resp[5] = 0x00u; resp[6] = 0x60u; resp[7] = 0x03u;
-        ck("resp4 8 B（count=8）-> 00 00 60 03",
+        resp[0] = ATECC_RESP4_LEN_NOCRC;
+        resp[1] = 0x00u; resp[2] = 0x00u; resp[3] = 0x60u; resp[4] = 0x03u;
+        ck("resp4 5 B（count=5）-> 00 00 60 03",
            atecc_msg_resp_get4(resp, ATECC_RESP4_LEN_NOCRC, d4) == 0 &&
            d4[0] == 0x00u && d4[1] == 0x00u && d4[2] == 0x60u && d4[3] == 0x03u);
-        resp[3] = ATECC_RESP4_LEN_NOCRC + 1u;
+        resp[0] = ATECC_RESP4_LEN_NOCRC + 1u;
         ck("resp4 count 不符 -> -2",
            atecc_msg_resp_get4(resp, ATECC_RESP4_LEN_NOCRC, d4) == ATECC_MSG_E_LEN);
-        ck("resp4 长度 9 -> -2",
-           atecc_msg_resp_get4(resp, 9u, d4) == ATECC_MSG_E_LEN);
-        resp[3] = ATECC_RESP4_LEN_CRC;
-        resp[4] = 0x55u;
+        ck("resp4 长度 6 -> -2",
+           atecc_msg_resp_get4(resp, 6u, d4) == ATECC_MSG_E_LEN);
+        resp[0] = ATECC_RESP4_LEN_CRC;
+        resp[1] = 0x55u;
         {
             uint8_t crc[2];
 
             crc16_bypass_le(resp, ATECC_RESP4_LEN_NOCRC, crc);
             resp[ATECC_RESP4_LEN_NOCRC] = crc[0];
             resp[ATECC_RESP4_LEN_NOCRC + 1u] = crc[1];
-            ck("resp4 10 B（带 CRC）且首字节 = 0x55（未锁）",
+            ck("resp4 7 B（带 CRC）且首字节 = 0x55（未锁）",
                atecc_msg_resp_get4(resp, ATECC_RESP4_LEN_CRC, d4) == 0 && d4[0] == 0x55u);
             resp[ATECC_RESP4_LEN_NOCRC] ^= 0x01u;
             ck("resp4 改一位 CRC -> -3",

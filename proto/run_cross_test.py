@@ -191,7 +191,11 @@ HEADER_ATECC = (
     "#   cmd  : a1=mode a2=with_crc(0/1) a3=-        out = 命令包-hex（count 在头、CRC 小端在尾）\n"
     "#   resp : a1=完整响应-hex a2=a3=-              out = OK:<32B hex> | ERR:<码>\n"
     "#     （ERR 码同 C 侧 ATECC_MSG_E_*：-2 = 长度/ count 不符、-3 = CRC 不符）\n"
-    "# 覆盖：两种模式 × 带/不带 CRC、响应 36/38 B、CRC 改一位、长度截短、count 与长度矛盾\n"
+    "#   errpkt: a1=4字节包-hex a2=a3=-              out = 0x<状态>:<名字> | not-errpkt\n"
+    "#     （状态名 = `atecc_msg_status_name()`；两册逐字相同，措辞照 isATCAError()）\n"
+    "# 覆盖：两种模式 × 带/不带 CRC、响应 33/35 B（count **只占 1 字节**）、CRC 改一位、\n"
+    "#       长度截短、count 与长度矛盾、以及 4 字节错误包（含 2026-10-10 台架**实测**的\n"
+    "#       `04 11 33 43`（唤醒）与 `04 FF 01 42`（CRC/通讯错））\n"
 )
 HEADER_HGIC = (
     "# proto/test_vectors_hgic.txt —— 由 proto/run_cross_test.py --refresh 生成，**勿手改**\n"
@@ -760,6 +764,9 @@ def gen_atecc_rows(o):
 #   单一源 = Microchip CryptoAuthLib（出处见 HEADER_CRC16 / HEADER_ATECC）。
 #   ⚠ CRC 这里故意写**两种独立写法**并互相印证，再对**目录校验值** 0xFEE8 ——
 #     只抄一种写法时，方向（反射/不反射）抄错了自己看不出来。
+#   ★★ 2026-10-10：**本段在文件里出现过两次**（上面还有一份同名的历史遗留段），
+#     同名定义**以本段为准**（Python 后定义覆盖前者）⇒ **要改就改本段**；
+#     改上面那份**不生效** ✗。（去重要把整段重写，留作单独一步。）
 # ---------------------------------------------------------------------------
 CRC16_BYPASS_CHECK = 0xFEE8
 ATECC_OP_RANDOM = 0x1B
@@ -768,8 +775,12 @@ ATECC_MODE_NO_SEED_UPDATE = 0x01
 ATECC_RANDOM_BYTES = 32
 ATECC_CMD_LEN_NOCRC = 5
 ATECC_CMD_LEN_CRC = 7
-ATECC_RESP_LEN_NOCRC = 36
-ATECC_RESP_LEN_CRC = 38
+# ★ 2026-10-10 改正：I²C 上 count **只占 1 字节**、数据从 resp[1] 起
+#   （出处 = CryptoAuthLib 的 `hal_i2c_receive()`：`read_length = rxdata[0];`）
+ATECC_RESP_DATA_IDX = 1
+ATECC_RESP_LEN_NOCRC = ATECC_RESP_DATA_IDX + ATECC_RANDOM_BYTES        # 33
+ATECC_RESP_LEN_CRC = ATECC_RESP_DATA_IDX + ATECC_RANDOM_BYTES + 2      # 35
+ATECC_ERR_PKT_LEN = 4
 ATECC_MSG_E_ARG = -1
 ATECC_MSG_E_LEN = -2
 ATECC_MSG_E_CRC = -3
@@ -814,18 +825,43 @@ def py_atecc_cmd_random(mode, with_crc):
     return bytes(pkt)
 
 
+def py_atecc_status_name(status):
+    """状态码 → 文字。★ **必须与 C 侧 `atecc_msg_status_name()` 逐字相同**
+    （交叉测试是逐字比字符串的）。措辞照 CryptoAuthLib `isATCAError()` 的原话。"""
+    names = {
+        0x00: "ok",
+        0x01: "checkmac or verify failed",
+        0x03: "parse error (bad length/opcode/param)",
+        0x05: "ecc fault",
+        0x07: "self test failure mode",
+        0x08: "random number generator health test error",
+        0x0F: "cannot execute command",
+        0x11: "woke up",
+        0xFF: "bad crc found (command not properly received) or other comm error",
+    }
+    return names.get(status, "unknown")
+
+
+def py_atecc_err_pkt(resp):
+    """4 字节错误包 → 状态码；不是错误包则回 None（形状与 C 侧同一规则）。"""
+    if len(resp) != ATECC_ERR_PKT_LEN or resp[0] != ATECC_ERR_PKT_LEN:
+        return None
+    return resp[1]
+
+
 def py_atecc_resp_random(resp):
-    """返回 32 B（bytes）或错误码（int）。"""
+    """返回 32 B（bytes）或错误码（int）。
+    ★ 2026-10-10 改正：count **只占 1 字节**、数据从 `resp[1]` 起（见上面常量那段的出处）。"""
     if len(resp) not in (ATECC_RESP_LEN_NOCRC, ATECC_RESP_LEN_CRC):
         return ATECC_MSG_E_LEN
-    if int.from_bytes(resp[0:4], "big") != len(resp):
+    if resp[0] != len(resp):
         return ATECC_MSG_E_LEN
     if len(resp) == ATECC_RESP_LEN_CRC:
         c = py_crc16(resp[:ATECC_RESP_LEN_NOCRC])
         if resp[ATECC_RESP_LEN_NOCRC] != (c & 0xFF) or \
            resp[ATECC_RESP_LEN_NOCRC + 1] != ((c >> 8) & 0xFF):
             return ATECC_MSG_E_CRC
-    return resp[4:36]
+    return resp[ATECC_RESP_DATA_IDX:ATECC_RESP_DATA_IDX + ATECC_RANDOM_BYTES]
 
 
 def gen_crc16_rows(o):
@@ -845,17 +881,33 @@ def gen_atecc_rows(o):
             rows.append(("cmd", str(mode), str(wc), "-",
                          py_atecc_cmd_random(mode, wc).hex()))
     data = bytes(range(32))
-    ok36 = bytes([0, 0, 0, ATECC_RESP_LEN_NOCRC]) + data
-    c38 = py_crc16(ok36)
-    ok38 = ok36 + bytes([c38 & 0xFF, (c38 >> 8) & 0xFF])
-    bad38 = bytearray(ok38)
-    bad38[ATECC_RESP_LEN_NOCRC] ^= 0x01
-    cnt37 = bytearray(ok36)
-    cnt37[3] = ATECC_RESP_LEN_NOCRC + 1
-    for resp in (ok36, ok38, bytes(bad38), ok36[:-1], bytes(cnt37)):
+    ok33 = bytes([ATECC_RESP_LEN_NOCRC]) + data            # count 只占 1 字节
+    # ★ 带 CRC 时 **count 要把 CRC 两字节算进去**（= 35）⇒ 先立 35、再算 CRC（别拿 33 直接挂 CRC ✗）
+    ok35 = bytearray([ATECC_RESP_LEN_CRC]) + bytearray(data)
+    c35 = py_crc16(bytes(ok35))
+    ok35 += bytes([c35 & 0xFF, (c35 >> 8) & 0xFF])
+    ok35 = bytes(ok35)
+    bad35 = bytearray(ok35)
+    bad35[ATECC_RESP_LEN_NOCRC] ^= 0x01                    # CRC 低字节改一位
+    cnt34 = bytearray(ok33)
+    cnt34[0] = ATECC_RESP_LEN_NOCRC + 1                    # count 与实际长度矛盾
+    for resp in (ok33, ok35, bytes(bad35), ok33[:-1], bytes(cnt34)):
         r = py_atecc_resp_random(resp)
         out = ("OK:" + r.hex()) if isinstance(r, (bytes, bytearray)) else ("ERR:%d" % r)
         rows.append(("resp", resp.hex(), "-", "-", out))
+    # 4 字节错误包：器件“说话”的最小形状（前两条是 2026-10-10 台架**实测**字节）
+    errpkts = [
+        bytes([0x04, 0x11, 0x33, 0x43]),   # 实测：唤醒应答（状态 0x11）
+        bytes([0x04, 0xFF, 0x01, 0x42]),   # 实测：CRC/通讯错（状态 0xFF）
+        bytes([0x04, 0x07, 0xC4, 0x40]),   # 库里记的自检失败应答
+        bytes([0x04, 0x00, 0x00, 0x00]),   # 状态 0x00（没错）
+        bytes([0x05, 0x11, 0x33, 0x43]),   # count=5 ⇒ 不是错误包
+        bytes([0x04, 0x11, 0x33]),         # 长度不是 4 ⇒ 不是错误包
+    ]
+    for p in errpkts:
+        st = py_atecc_err_pkt(p)
+        out = "not-errpkt" if st is None else ("0x%02X:%s" % (st, py_atecc_status_name(st)))
+        rows.append(("errpkt", p.hex(), "-", "-", out))
     return rows
 
 
