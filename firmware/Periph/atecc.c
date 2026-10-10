@@ -208,6 +208,25 @@ static int resp_read(uint8_t waddr, uint8_t *resp, uint32_t respcap, uint32_t *r
     return 0;
 }
 
+/* ★ 2026-10-10：写完命令到能读响应之间要**等** —— 器件需要 tEXEC 量级的时间才把响应备好，
+ *   快读会：① 直接 NACK（器件还没准备好）✗；② 读出**唤醒响应** `04 11 33 43`（刚被唤醒 ✓）。
+ *   做法照 CryptoAuthLib 的 I²C HAL：**反复探地址，直到器件 ACK**。
+ *   ⚠ 这两个值是按手册的 tEXEC 量级 + 实测保守取的；若以后实测出更好的数，改这里（只此一处）。*/
+#define ATECC_READY_POLL_MS   8u      /* 轮询上限（ms）*/
+#define ATECC_READY_GAP_US    200u    /* 两次探测之间（µs）*/
+
+static void wait_ready(uint32_t ms)
+{
+    uint32_t deadline = g_tick_ms + ms;
+
+    do {
+        if (i2c_probe(s_addr) == 0) {   /* 0 = 有器件应答 ⇒ 它备好了 */
+            return;
+        }
+        i2c_delay_us(ATECC_READY_GAP_US);
+    } while ((int32_t)(g_tick_ms - deadline) < 0);
+}
+
 /* 发一条命令再读回响应。★ **响应字地址两种都试**（0x00 优先，见上面的长注释）：
  * 第一种读不通时**把命令重发一次**再用 0x03 读 —— 因为读失败的那次可能已经把命令取走了。*/
 static int transact(const uint8_t *pkt, uint32_t pktlen,
@@ -229,6 +248,7 @@ static int transact(const uint8_t *pkt, uint32_t pktlen,
         if (rc != 0) {
             return rc;
         }
+        wait_ready(ATECC_READY_POLL_MS);   /* ★ 新增：等它备好再读（见上面注释）*/
         rc = resp_read(waddr[k], resp, respcap, resplen);
         if (rc == 0) {
             s_st.resp_waddr = k + 1u;                 /* 1 = 读 0x00 通了；2 = 读 0x03 通了 */
@@ -238,38 +258,60 @@ static int transact(const uint8_t *pkt, uint32_t pktlen,
     return rc;
 }
 
+/* ★ 2026-10-10：写通了、读扑空 ⇒ 命令要**重试**。
+ *   实测（见 `docs/atecc608b-se.md` §8.2）：同一颗器件会以**秒级**在醒/睡之间来回
+ *   （循环里"2 轮命中 / 1 轮 NACK"交替），而刚醒时读回来的是**唤醒响应** `04 11 33 43`
+ *   （count 离谱 ⇒ `atecc_msg_resp_random()` 直接判不合格）。
+ *   ⇒ 一次不成就**重发命令**（每次都重做唤醒序列），别把"它刚好睡着"当成坏件。*/
+#define ATECC_CMD_ATTEMPTS  3u
+
 /* 取一条 32 字节随机数（`with_crc` 决定线上带不带 CRC）*/
 static int random_try(uint8_t *out32, int with_crc)
 {
     uint8_t pkt[ATECC_CMD_LEN_CRC];
     uint8_t resp[ATECC_RESP_LEN_CRC];
-    uint32_t pklen, replen = 0u;
-    int rc, mrc;
+    uint32_t pklen, replen = 0u, i, attempt;
+    i2c_stats_t a, b;
+    int rc = ATECC_E_IO, mrc;
 
     pklen = (uint32_t)atecc_msg_random(pkt, sizeof(pkt), ATECC_MODE_SEED_UPDATE, with_crc);
     if (pklen == 0u) {
         return ATECC_E_ARG;
     }
-    /* ★ 令牌没 ACK **不等于**器件不在：器件若已经在 Idle（前一次唤醒已把它叫醒、
-     *   或者它被配置成不自睡），它对地址 0x00 会回 **NACK**。
-     *   ⇒ 这里**不早退**，照样把命令发出去，让**命令的结果**说话（`se` 自己会打 wake 那一行）。*/
-    (void)atecc_wake();
-    rc = transact(pkt, pklen, resp, sizeof(resp), &replen);
-    if (rc != 0) {
-        return rc;
-    }
-    mrc = atecc_msg_resp_random(resp, (size_t)replen, out32);
-    if (mrc != 0) {
-        /* 长度/count/CRC 对不上 —— 把原始字节留档（现场判据）*/
-        uint32_t i;
-
+    for (attempt = 0u; attempt < ATECC_CMD_ATTEMPTS; attempt++) {
+        replen = 0u;
+        /* ★ 令牌没 ACK **不等于**器件不在：器件若已经在 Idle（前一次唤醒已把它叫醒、
+         *   或者它被配置成不自睡），它对地址 0x00 会回 **NACK**。
+         *   ⇒ 这里**不早退**，照样把命令发出去，让**命令的结果**说话。*/
+        i2c_stats(&a);
+        (void)atecc_wake();
+        rc = transact(pkt, pklen, resp, sizeof(resp), &replen);
+        i2c_stats(&b);
+        /* ★ 现场判据：把**这条包实际长什么样**与**这一轮走到哪**打出来（含重试轮次）。*/
+        uart_printf(CONSOLE_UART, "[se] 试 %s 第%u次：包(%u B) ", with_crc ? "crc" : "no-crc",
+                    (unsigned)(attempt + 1u), (unsigned)pklen);
+        for (i = 0u; i < pklen; i++) {
+            uart_printf(CONSOLE_UART, "%02x ", (unsigned)pkt[i]);
+        }
+        uart_printf(CONSOLE_UART,
+                    "-> rc=%d tx=+%u nack=+%u timeout=+%u step=%u nackbyte=%u\r\n",
+                    rc, (unsigned)(b.tx_bytes - a.tx_bytes), (unsigned)(b.nack - a.nack),
+                    (unsigned)(b.timeout - a.timeout), (unsigned)b.last_step,
+                    (unsigned)b.last_nack_byte);
+        if (rc != 0) {
+            continue;                       /* 可能是"它刚睡了/刚醒"⇒ 重试 */
+        }
+        mrc = atecc_msg_resp_random(resp, (size_t)replen, out32);
+        if (mrc == 0) {
+            return 0;
+        }
+        /* 长度/count/CRC 对不上 —— 把原始字节留档（现场判据；唤醒响应 `04 11 33 43` 就落这里）*/
         s_st.last_resp_len = replen;
         for (i = 0u; i < sizeof(s_st.last_resp); i++) {
             s_st.last_resp[i] = (i < replen) ? resp[i] : 0u;
         }
-        return ATECC_E_RESP;
     }
-    return 0;
+    return (rc != 0) ? rc : ATECC_E_RESP;
 }
 
 int atecc_random(uint8_t out32[ATECC_RANDOM_BYTES])
