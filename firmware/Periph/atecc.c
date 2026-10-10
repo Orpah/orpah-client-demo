@@ -258,7 +258,12 @@ static int wake_reply_read(uint8_t out4[4])
  *   （= 器件正忙、根本不答地址 ✓）；**210 ms 时它已经睡了** ⇒ 只有"**轮询到 ACK 立刻读**"
  *   这一条路走得通 ✓——而这正是 CryptoAuthLib 的做法（响应靠**轮询**，不是干等一个数 ✓）。
  *   返回 1 = 它答了地址（响应已备好）；0 = 60 ms 内一直不答 ⇒ **本轮不读**（交给上层重试）。*/
-#define ATECC_READY_POLL_MS   60u      /* ≥ 2 × 23 ms（给两倍余量）*/
+/* ★ 2026-10-11 改（与 PC 侧同一教训）：原来 60 ms（"2 × 23 ms"）**只够 `Random`** ✓；
+ *   而 `GenKey` / `ECDH` / `Write` 要 ~40–50 ms ⇒ **PC 侧实测 `GenKey` 约 50 ms**
+ *   （重试 11 次 × 5 ms 才读到 ✓），60 ms 太贴边 ✗ ⇒ 放到 250 ms（≈5× 余量）✓。
+ *   代价很小：器件"**算完之前地址不 ACK**"✓ ⇒ 这 250 ms 只在**慢命令**上真正等到 ✓。
+ *   出处：原厂 `lib/calib/calib_execution.c` 的执行时间表（Random 23 ms / ECDH·GenKey ~40 ms …）✓。*/
+#define ATECC_READY_POLL_MS   250u
 #define ATECC_READY_GAP_US    300u     /* 两次探地址之间（探一次只要 µs 量级 ✓）*/
 
 static int wait_ready(uint32_t ms)
