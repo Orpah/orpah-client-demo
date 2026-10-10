@@ -9,7 +9,7 @@
    x="0in"
    y="0in"
    id="svg2551"
-   sodipodi:docname="cstep-nano-atecc608b.svg"
+   sodipodi:docname="cstep-nanoch32-atecc608b.svg"
    inkscape:version="1.2.1 (9c6d41e410, 2022-07-14)"
    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
    xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
@@ -29,8 +29,8 @@
      inkscape:document-units="in"
      showgrid="false"
      inkscape:zoom="4.0461147"
-     inkscape:cx="175.22983"
-     inkscape:cy="129.38338"
+     inkscape:cx="109.48775"
+     inkscape:cy="129.63053"
      inkscape:window-width="2560"
      inkscape:window-height="1351"
      inkscape:window-x="-9"
@@ -7136,22 +7136,22 @@
   <text
      xml:space="preserve"
      style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.50001px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;fill:none;fill-rule:evenodd;stroke:#aa4400;stroke-width:0.600946;stroke-miterlimit:3.9"
-     x="148.61453"
-     y="147.01022"
+     x="149.54135"
+     y="155.35156"
      id="text33051-3"><tspan
        sodipodi:role="line"
        id="tspan33049-5"
        style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.50001px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;stroke:#aa4400;stroke-width:0.600946"
-       x="148.61453"
-       y="147.01022">供电</tspan><tspan
+       x="149.54135"
+       y="155.35156">供电</tspan><tspan
        sodipodi:role="line"
        style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.50001px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;stroke:#aa4400;stroke-width:0.600946"
-       x="148.61453"
-       y="156.38524"
+       x="149.54135"
+       y="164.72658"
        id="tspan24354">I2C通讯</tspan><tspan
        sodipodi:role="line"
        style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.50001px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;stroke:#aa4400;stroke-width:0.600946"
-       x="148.61453"
-       y="165.76025"
-       id="tspan40446-2">打印日志</tspan></text>
+       x="149.54135"
+       y="174.10159"
+       id="tspan40446-2" /></text>
 </svg>

@@ -7061,10 +7061,5 @@
        style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.5px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;stroke:#aa4400;stroke-width:0.600945"
        x="171.31725"
        y="156.83778"
-       id="tspan24354">I2C通讯</tspan><tspan
-       sodipodi:role="line"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.5px;font-family:SimSun;-inkscape-font-specification:'SimSun, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;stroke:#aa4400;stroke-width:0.600945"
-       x="171.31725"
-       y="166.21278"
-       id="tspan40446-2">打印日志</tspan></text>
+       id="tspan24354">I2C通讯</tspan></text>
 </svg>
