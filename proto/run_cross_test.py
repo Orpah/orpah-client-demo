@@ -686,26 +686,28 @@ ATECC_MSG_E_LEN = -2
 ATECC_MSG_E_CRC = -3
 
 
-def py_crc16(data):
-    """★ 2026-10-10 定案：**照抄 CryptoAuthLib `atCRC()` 的口径**。
+def _rev8(b):
+    """字节按位倒序（把“低位先喂”换成“先倒位、再按高位移出”）"""
+    r = 0
+    for _ in range(8):
+        r = ((r << 1) | (b & 1)) & 0xFF
+        b >>= 1
+    return r
 
-    数据位**低位先喂** + 寄存器**左移** + poly 0x8005 + 初值 0
-    （★ **不是**任何标准 CRC 变体 ✗）。出处 `lib/calib/calib_command.c::atCRC()`：
-        for (shift_register = 0x01; ...; shift_register <<= 1) {
-            data_bit = (data[counter] & shift_register) ? 1 : 0;   /* 低位先喂 */
-            crc_bit  = crc_register >> 15;  crc_register <<= 1;    /* 寄存器左移 */
-            if (data_bit != crc_bit) { crc_register ^= polynom; }  /* polynom = 0x8005 */
-        }
-    覆盖范围 = count..最后一个数据字节（不含 CRC 自身，见 `atCalcCrc()`）；输出小端。
+
+def py_crc16(data):
+    """★ 本仓自己的写法：**教科书式 MSB-first 的 CRC-16（poly 0x8005、初值 0）** + 先把字节倒位。
+
+    它与器件要求的那个口径**逐位等价**（“低位先喂数据 + 寄存器左移” ≡ “先倒位 + 按高位移出”）：
+    喂入的位序列相同、寄存器更新规则相同 ⇒ 同一个 16 位余数。
+    出处只引**口径/行为**（CryptoAuthLib `calib_command.c` 的输入/移位/输出顺序），**不搬它的代码** ✓。
+    锚点 = 另一方产出的真实字节（见 CRC16_ATCA_ANCHORS + crc16_anchors_check）。
     """
     crc = 0
     for b in data:
-        for shift in (0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80):
-            data_bit = 1 if (b & shift) else 0
-            crc_bit = (crc >> 15) & 1
-            crc = (crc << 1) & 0xFFFF
-            if data_bit != crc_bit:
-                crc ^= 0x8005
+        crc ^= (_rev8(b) << 8)
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x8005) & 0xFFFF if (crc & 0x8000) else ((crc << 1) & 0xFFFF)
     return crc
 
 
@@ -804,26 +806,26 @@ ATECC_MSG_E_LEN = -2
 ATECC_MSG_E_CRC = -3
 
 
-def py_crc16(data):
-    """★ 2026-10-10 定案：**照抄 CryptoAuthLib `atCRC()` 的口径**。
+def _rev8(b):
+    """字节按位倒序（把“低位先喂”换成“先倒位、再按高位移出”）"""
+    r = 0
+    for _ in range(8):
+        r = ((r << 1) | (b & 1)) & 0xFF
+        b >>= 1
+    return r
 
-    数据位**低位先喂** + 寄存器**左移** + poly 0x8005 + 初值 0
-    （★ **不是**任何标准 CRC 变体 ✗）。出处 `lib/calib/calib_command.c::atCRC()`：
-        for (shift_register = 0x01; ...; shift_register <<= 1) {
-            data_bit = (data[counter] & shift_register) ? 1 : 0;   /* 低位先喂 */
-            crc_bit  = crc_register >> 15;  crc_register <<= 1;    /* 寄存器左移 */
-            if (data_bit != crc_bit) { crc_register ^= polynom; }  /* polynom = 0x8005 */
-        }
-    覆盖范围 = count..最后一个数据字节（不含 CRC 自身，见 `atCalcCrc()`）；输出小端。
+
+def py_crc16(data):
+    """★ 本仓自己的写法：**教科书式 MSB-first 的 CRC-16（poly 0x8005、初值 0）** + 先把字节倒位。
+
+    与器件要求的那个口径**逐位等价**（“低位先喂数据 + 寄存器左移” ≡ “先倒位 + 按高位移出”）。
+    出处只引**口径/行为**（CryptoAuthLib `calib_command.c` 的输入/移位/输出顺序），**不搬它的代码** ✓。
     """
     crc = 0
     for b in data:
-        for shift in (0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80):
-            data_bit = 1 if (b & shift) else 0
-            crc_bit = (crc >> 15) & 1
-            crc = (crc << 1) & 0xFFFF
-            if data_bit != crc_bit:
-                crc ^= 0x8005
+        crc ^= (_rev8(b) << 8)
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x8005) & 0xFFFF if (crc & 0x8000) else ((crc << 1) & 0xFFFF)
     return crc
 
 

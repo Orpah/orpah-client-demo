@@ -5,17 +5,16 @@
  *   我们先前按 CRC-16/BUYPASS 写 ✗ ⇒ 器件把**每一条**命令都判成 "bad crc"（状态 0xFF）
  *   ⇒ 它从来**没有执行过一条命令** ✓（这就是 c4-γ-2 到 2026-10-10 全部怪现象的根因）。
  *
- * 出处（**外部权威**）：Microchip CryptoAuthLib `lib/calib/calib_command.c::atCRC()`：
- *       uint16_t crc_register = 0;  uint16_t polynom = 0x8005;
- *       for (counter = 0; counter < length; counter++)
- *           for (shift_register = 0x01; shift_register > 0x00; shift_register <<= 1) {
- *               data_bit = (data[counter] & shift_register) ? 1 : 0;  // ★ 低位先喂
- *               crc_bit  = crc_register >> 15;
- *               crc_register <<= 1;                                   // ★ 左移
- *               if (data_bit != crc_bit) { crc_register ^= polynom; }
- *           }
- *       crc_le[0] = crc_register & 0xFF;  crc_le[1] = crc_register >> 8;  // 输出小端
- *   覆盖范围 = 从 count 字节到**第二个 CRC 字节之前**（`atCalcCrc()`：`length = txsize - ATCA_CRC_SIZE`）。
+ * 出处（**外部权威**，只引“口径/行为”：Microchip CryptoAuthLib `lib/calib/calib_command.c::atCRC()`）：
+ *   · 数据位的喂入顺序是**低位先**（`data_bit = (data[counter] & shift_register)`，`shift_register` 从 0x01 递增）
+ *   · 寄存器是**左移**（`crc_bit = crc_register >> 15; crc_register <<= 1;`），失配则异或 poly `0x8005`
+ *   · 初值 0；输出**小端**（低字节在前）；覆盖 count..最后一个数据字节（不含 CRC 自身）
+ *
+ * ★ **本仓的实现不搬它的代码** ✓：上面这个口径等价于
+ *     「先把每个字节**按位倒过来**，再喂进**教科书式 MSB-first 的 CRC-16**（poly 0x8005、初值 0）」
+ *   —— 因为“低位先喂数据 + 寄存器左移”与“先倒位 + 按高位移出”**逐位等价**
+ *   （喂入的位序列相同、寄存器状态更新规则相同 ⇒ 同一个 16 位余数）。
+ *   所以 `crc16.c` 用我们自己那份 MSB-first 写法 + 一个 `rev8()`，**只看行为、不拷代码** ✓。
  *
  * ★ 外部锚点：这个算法**在 CRC 目录里没有** ✗（所以不能拿 "123456789" 的目录校验值当锚点）
  *   ⇒ 锚点用**另一方产出的真实字节**（器件实回 / 原厂库实发，四个都记在 docs 里）：

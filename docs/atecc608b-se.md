@@ -533,18 +533,15 @@ sewake
    —— 前 5 字节与我们固件**逐字节相同** ✓，**只有 CRC 两字节不同** ✗
    （我们算 `6E DD`，原厂算 `24 CD`）⇒ **根因** ✓。
 
-**原厂的算法**（`lib/calib/calib_command.c::atCRC()`，逐行照抄）：
-```c
-crc_register = 0;  polynom = 0x8005;
-for (counter = 0; counter < length; counter++)
-    for (shift_register = 0x01; shift_register > 0x00; shift_register <<= 1) {
-        data_bit = (data[counter] & shift_register) ? 1 : 0;   /* 数据位 **低位先喂** */
-        crc_bit  = crc_register >> 15;
-        crc_register <<= 1;                                    /* 寄存器却是 **左移** */
-        if (data_bit != crc_bit) crc_register ^= polynom;
-    }
-/* 输出：低字节在前；覆盖范围 = 从 count 到第二个 CRC 字节之前（atCalcCrc: txsize-2）*/
-```
+**原厂的口径**（`lib/calib/calib_command.c::atCRC()`；下面只写**口径/行为**，不转代码 ✗）：
+
+- 数据位的喂入顺序是**低位先**（等价说法：**先把字节按位倒过来、再按高位移出**）；
+- 寄存器**左移**，末位（`>>15`）与数据位不同则异或 poly `0x8005`；
+- 初值 0；输出**低字节在前**；覆盖范围 = count..最后一个数据字节（不含 CRC 自身）。
+
+★ 本仓的实现**不搬它的代码** ✓：`proto/crc16.c` / `run_cross_test.py` 用的是**我们自己那份
+教科书式 MSB-first 写法 + 一个 `rev8()`**，两者**逐位等价**（喂入位序相同、寄存器更新规则相同）
+⇒ 四个锚点全中 ✓（新写法照样过全部交叉测试 ✓）。
 ⇒ 这是**"低位先入数据 + 高位移出寄存器"的混合口径** ✓ —— **不是任何标准 CRC 变体**
 （不是 BUYPASS / CCITT / ARC / MODBUS…）✗ ⇒ 我们一直用的 **CRC-16/BUYPASS 是错的** ✗。
 
@@ -603,7 +600,21 @@ for (counter = 0; counter < length; counter++)
 ＋ 一次性判据脚本：唤醒令牌（向 `0x00` 写 0 字节）→ 写 `[addr|0][0x03] + 07 1B 00 00 00 24 CD`
 → 等 30 ms → 从 `0x00` 读 count 再续读 ⇒ **应当 35 字节**（`FF FF 00 00`×8 + CRC）✓。
 
-### 8.3 采购与验收（买回来先跑哪几条）
+### 8.3 许可与版权（2026-10-11 用户提问后核实）
+
+- **原厂包 `cryptoauthlib` 是 Microchip 专有许可** ✗：PyPI 元数据写着
+  `License: Other` / `Classifier: License :: Other/Proprietary License`，正文是
+  “you may use Microchip software and any derivatives **exclusively with Microchip products**”
+  ⇒ **只在本机当“参照物/测试工装”用** ✓；**不入库、不随产品分发、不让产品依赖它** ✗。
+- **本仓里没有任何原厂文件** ✓（`git ls-files` 可核查）；它只以 **pip 包**形式装在本机
+  `site-packages` 下（仓库外）✓。
+- **本仓的 CRC 实现是自己写的** ✓：只引用「口径/行为」（数据喂入顺序、移位方向、poly、
+  输出字节序）——那是**接口/算法层面的事实** ✓，不属可版权的表达 ✗；代码用我们自己的
+  MSB-first 写法 + `rev8()`（等价改写 ✓，四个锚点验过 ✓）。
+- **测试锚点 = 器件/原厂实回的字节** ✓（`04 11→33 43` 等）—— 实测数据，不是原厂的创作物 ✓。
+- 文档里对原厂行为的**描述引用**都带出处（文件名+函数名）✓，且不再转录代码 ✗。
+
+### 8.4 采购与验收（买回来先跑哪几条）
 
 拆机 / 散新件最常见的三种"还能用但不像新的"：
 
