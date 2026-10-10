@@ -22,6 +22,7 @@
 #include "gpio.h"
 #include "i2c.h"
 #include "id_nonce.h"          /* idn_hex_upper()（别在业务代码里另写一份 hex）*/
+#include "sha256.h"            /* ★ d 步：签名器要先把预像哈希掉（哈希在 MCU、私钥在 SE ✓）*/
 #include "uart.h"              /* 控制台（自检打印）*/
 
 #define ATECC_WORD_ADDR         0x03u   /* 命令：写到字地址 0x03 */
@@ -448,6 +449,110 @@ int atecc_random(uint8_t out32[ATECC_RANDOM_BYTES])
 }
 
 /* ------------------------------------------------------------------ */
+/* ★★ d 步：签名（Nonce + Sign）—— 私钥永远不出芯片                     */
+/* ------------------------------------------------------------------ */
+/* 两步（形状/CRC 见 `proto/atecc_msg.c` 的 `atecc_msg_nonce_load/sign`，字节来自
+ * 2026-10-11 台架**实测**：`27 16 43 00 00 <摘要> 30 1A` + `07 41 A0 00 00 7B 85`）：
+ *   ① `Nonce(0x16)`：pass-through 把 32 B **摘要**装进器件的消息摘要缓冲
+ *      ⇒ 成功应答 = 4 字节状态包、**状态 0x00**（实测 `04 00 03 40` ✓）
+ *   ② `Sign(0x41)`：用槽里的私钥签（param2 = 槽号）⇒ 响应 67 B = `43 | r||s(64) | CRC`
+ * ⚠ 为什么两步都要重试：器件"算完之前地址是不 ACK 的"（`GenKey`/`ECDH` ≈ 40–50 ms）⇒
+ *   `transact()` 里的 `wait_ready()`（250 ms）就是为它准备的；NACK 一律当"还没好" ✓。
+ * ⚠ 失败时**保持槽号/结果原样**，让上层按 §8.2 Step2 降级（L0 → L1）—— 别在这里兜底 ✗。*/
+int atecc_sign_digest(const uint8_t digest32[ATECC_NONCE_DIGEST_BYTES],
+                      uint8_t out64[ATECC_SIGN_BYTES])
+{
+    uint8_t pkt[ATECC_CMD_LEN_NONCE_CRC];
+    uint8_t resp[ATECC_RESP_LEN_SIG_CRC];
+    uint32_t pklen, replen = 0u, attempt;
+    uint8_t st = 0u;
+    int rc, mrc;
+    /* 线上要不要挂 CRC 已经由开机那次 `Random` 判定了（`s_crc_mode`）——
+     *   还没判定过（理论上不会：`atecc_init()` 会先取一条）就按**带 CRC**（实测要带 ✓）。*/
+    const int with_crc = (s_crc_mode == 0) ? 0 : 1;
+
+    if (digest32 == 0 || out64 == 0) {
+        return ATECC_E_ARG;
+    }
+    s_st.sign_slot = ATECC_SIGN_SLOT;
+
+    /* ---- ① Nonce：装摘要 ---- */
+    pklen = (uint32_t)atecc_msg_nonce_load(pkt, sizeof(pkt), digest32, with_crc);
+    if (pklen == 0u) {
+        return ATECC_E_ARG;
+    }
+    rc = ATECC_E_IO;
+    for (attempt = 0u; attempt < ATECC_CMD_ATTEMPTS; attempt++) {
+        replen = 0u;
+        (void)atecc_wake();                 /* 器件若已醒，它对令牌回 NACK —— 不早退 ✓ */
+        rc = transact(pkt, pklen, resp, sizeof(resp), &replen);
+        if (rc != 0) {
+            continue;
+        }
+        st = 0u;
+        if (atecc_msg_err_pkt_status(resp, (size_t)replen, &st) == 0 && st == ATECC_STATUS_OK) {
+            break;                          /* `04 00 …` = 摘要已装进去 ✓ */
+        }
+        /* 不是"成功的 4 字节状态包"（例如把上一条响应的 count 读回来了）⇒ 重试 */
+        uart_printf(CONSOLE_UART, "[se] Nonce 第%u次：期望 4 字节状态包(状态 0)，实回 %u B"
+                                  "（首字节 0x%02x）⇒ 重试\r\n",
+                    (unsigned)(attempt + 1u), (unsigned)replen, (unsigned)resp[0]);
+    }
+    if (attempt >= ATECC_CMD_ATTEMPTS) {
+        s_st.sign_fail++;
+        uart_printf(CONSOLE_UART, "[se] Nonce 装摘要失败（%u 次都没拿到状态 0）\r\n",
+                    (unsigned)ATECC_CMD_ATTEMPTS);
+        return ATECC_E_IO;
+    }
+
+    /* ---- ② Sign：用槽里的私钥签 ---- */
+    pklen = (uint32_t)atecc_msg_sign(pkt, sizeof(pkt), ATECC_SIGN_SLOT, with_crc);
+    if (pklen == 0u) {
+        return ATECC_E_ARG;
+    }
+    for (attempt = 0u; attempt < ATECC_CMD_ATTEMPTS; attempt++) {
+        replen = 0u;
+        (void)atecc_wake();
+        rc = transact(pkt, pklen, resp, sizeof(resp), &replen);
+        if (rc != 0) {
+            continue;
+        }
+        mrc = atecc_msg_resp_sign(resp, (size_t)replen, out64);
+        if (mrc == 0) {
+            s_st.sign_ok++;
+            return 0;
+        }
+        /* 4 字节错误包 ⇒ **把状态翻成文字**（现场判据：0x0F「cannot execute」最常见的原因是
+         *   这个槽不是密钥槽 / 配置与预期不符，0x05 = ECC 计算错）。*/
+        st = 0u;
+        if (atecc_msg_err_pkt_status(resp, (size_t)replen, &st) == 0) {
+            uart_printf(CONSOLE_UART, "[se] Sign 第%u次：器件回状态 0x%02x（%s）\r\n",
+                        (unsigned)(attempt + 1u), (unsigned)st,
+                        atecc_msg_status_name(st));
+        } else {
+            uart_printf(CONSOLE_UART, "[se] Sign 第%u次：响应形状不对（%u B，首字节 0x%02x）\r\n",
+                        (unsigned)(attempt + 1u), (unsigned)replen, (unsigned)resp[0]);
+        }
+    }
+    s_st.sign_fail++;
+    s_st.last_err = (uint32_t)(-ATECC_E_RESP);
+    return ATECC_E_RESP;
+}
+
+int atecc_sign_pre(uint8_t out64[ATECC_SIGN_BYTES], const void *pre, size_t prelen, void *ctx)
+{
+    uint8_t dg[SHA256_DIGEST_LEN];
+
+    (void)ctx;
+    if (out64 == 0 || pre == 0) {
+        return ATECC_E_ARG;
+    }
+    /* 哈希在 MCU（快、无秘密），签名在 SE（私钥不出芯片）✓ —— 两者各管一段 */
+    sha256(pre, prelen, dg);
+    return atecc_sign_digest(dg, out64);
+}
+
+/* ------------------------------------------------------------------ */
 /* 初始化 / 自检                                                       */
 /* ------------------------------------------------------------------ */
 int atecc_init(void)
@@ -484,6 +589,9 @@ void atecc_stats(atecc_stats_t *out)
     out->cmd           = s_st.cmd;
     out->ok            = s_st.ok;
     out->fail          = s_st.fail;
+    out->sign_ok       = s_st.sign_ok;
+    out->sign_fail     = s_st.sign_fail;
+    out->sign_slot     = s_st.sign_slot;
     out->crc_mode      = s_st.crc_mode;
     out->resp_waddr    = s_st.resp_waddr;
     out->last_err      = s_st.last_err;
@@ -594,6 +702,37 @@ int atecc_selftest(void)
     }
     idn_hex_upper(r, ATECC_NONCE_BYTES, hex);
     uart_printf(CONSOLE_UART, "[se] Random(0x1B) 32 B ok; 前 16 B = %s\r\n", hex);
+
+    /* ★★ d 步的签名判据：对**固定摘要**签一次，把 `r||s` 打出来 ⇒ **PC 侧用 Slot 0 的公钥
+     *   独立验签** ✓（板上**不**自己验自己：那只证明自洽、证明不了对 ✗ —— 同 §8.7 的口径）。
+     * 摘要用固定串 ⇒ 每次开机这条判据都可复现（PC 侧照样算 SHA-256("ORPAH d-step probe v1")）。*/
+    {
+        static const char msg[] = "ORPAH d-step probe v1";
+        uint8_t dg[SHA256_DIGEST_LEN];
+        uint8_t sig[ATECC_SIGN_BYTES];
+
+        sha256(msg, sizeof(msg) - 1u, dg);
+        rc = atecc_sign_digest(dg, sig);
+        if (rc != 0) {
+            uart_printf(CONSOLE_UART,
+                        "[se] Sign(slot %u) FAILED rc=%d（sign_ok=%u fail=%u）\r\n",
+                        (unsigned)ATECC_SIGN_SLOT, rc, (unsigned)s_st.sign_ok,
+                        (unsigned)s_st.sign_fail);
+            return rc;
+        }
+        uart_printf(CONSOLE_UART, "[se] Sign(slot %u) ok; r=", (unsigned)ATECC_SIGN_SLOT);
+        for (i = 0u; i < (ATECC_SIGN_BYTES / 2u); i++) {
+            uart_printf(CONSOLE_UART, "%02x", (unsigned)sig[i]);
+        }
+        uart_printf(CONSOLE_UART, "\r\n[se] s=");
+        for (i = (ATECC_SIGN_BYTES / 2u); i < ATECC_SIGN_BYTES; i++) {
+            uart_printf(CONSOLE_UART, "%02x", (unsigned)sig[i]);
+        }
+        uart_printf(CONSOLE_UART, "\r\n[se] sign_ok=%u sign_fail=%u（摘要 = SHA-256(\"%s\")）\r\n",
+                    (unsigned)s_st.sign_ok, (unsigned)s_st.sign_fail, msg);
+        uart_printf(CONSOLE_UART, "[se] ⚠ 板上不验自己：PC 侧拿 Slot 0 的公钥独立验"
+                                  "（docs/atecc608b-se.md §8.10）\r\n");
+    }
     return 0;
 }
 

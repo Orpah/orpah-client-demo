@@ -45,6 +45,9 @@ typedef struct {
     uint32_t cmd;            /* 发出去的命令条数 */
     uint32_t ok;             /* 成功取到 32 字节的次数 */
     uint32_t fail;           /* 失败次数 */
+    uint32_t sign_ok;        /* ★ d 步：`Sign(0x41)` 成功次数（**单独计**，不混进 Random 的 ok）*/
+    uint32_t sign_fail;      /* ★ d 步：签名失败次数 */
+    uint32_t sign_slot;      /* ★ d 步：最近一次签名用的槽号 */
     uint32_t crc_mode;       /* 实测：0 = 线上不带 CRC、1 = 带 CRC（见 .c 的自动判定）*/
     uint32_t resp_waddr;     /* ★ 实测：**响应是哪个字地址读通的**：
                               *   1 = 从 `0x00` 读通（公开实现里的正确值，见 .c 的长注释）、
@@ -63,6 +66,21 @@ int atecc_present(void);
 
 /* 取 32 字节随机数（每次都**重新唤醒**）。0 = OK。*/
 int atecc_random(uint8_t out32[ATECC_RANDOM_BYTES]);
+
+/* ★★ d 步（2026-10-11）：用 **Slot 0 的私钥** 签一条 32 B 摘要 ——
+ * `Nonce(0x16)`（pass-through 把摘要装进消息摘要缓冲）+ `Sign(0x41)`（外部消息档）。
+ * 包形状/CRC 见 `proto/atecc_msg.c`，字节来自台架实测（`docs/atecc608b-se.md` §8.10）。
+ * 成功 0，并把 `r||s`（各 32 B 大端）写进 `out64`；失败返回负码（`ATECC_E_*`）。
+ * ⚠ 私钥**永远不出芯片** ✓：它由 `GenKey` 在芯片内生成、`Sign` 在芯片内使用。*/
+#define ATECC_SIGN_SLOT  0u
+int atecc_sign_digest(const uint8_t digest32[ATECC_NONCE_DIGEST_BYTES],
+                      uint8_t out64[ATECC_SIGN_BYTES]);
+
+/* ★★ d 步：给 `proto/id_build.c` 用的**签名器**（形状 = `idr_sign_fn`）：
+ * **预像 → SHA-256 → `atecc_sign_digest()`**；装了它以后 level=0 **不再需要软件私钥** ✓
+ * （`idb_t.ec` 只当“降级用”的演示材料留着，不进签名）。
+ * 失败返回非 0 ⇒ 流水线按 §8.2 Step2 降到 L1（HMAC）。*/
+int atecc_sign_pre(uint8_t out64[ATECC_SIGN_BYTES], const void *pre, size_t prelen, void *ctx);
 
 /* 唤醒（SDA 低 ≥60 µs → 高 ≥1500 µs → 写唤醒令牌地址 0x00 等 ACK）。0 = OK。*/
 int atecc_wake(void);

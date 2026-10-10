@@ -792,6 +792,26 @@ Slot 0 这类私钥槽只能走 `atcab_get_pubkey()`（= `GenKey(0x40)`，**由�
 `atecc_sign_pre()` + 控制台那一行；**上机判据** = 控制台 `id` 不再写"软件替身"、且上游
 `verify_report` 收下 SE 签的整帧 ✓。现在**别**把 `se_ok` 读成"SE 已在签" ✗。
 
+### 8.11 固件侧接上（2026-10-11；⚠ **待烧录确认**）
+
+| 处 | 改了什么 |
+|---|---|
+| `Periph/atecc.{h,c}` | `atecc_sign_digest()`（`Nonce(0x16)` + `Sign(0x41)`，复用 `transact()` 的"轮询到器件答地址再读"+重试）+ `atecc_sign_pre()`（**预像 → SHA-256 → Sign**，形状 = `idr_sign_fn`）；`atecc_stats_t` 增 `sign_ok/sign_fail/sign_slot`（**单独计**，不混进 Random 的 `ok` ✗）|
+| `proto/id_report.{h,c}` | ES256 的**签名器可注入**（`idr_sign_fn`）：注入后 `ec_priv` **不需要给** ✓（私钥不进 MCU）；失败仍走 §8.2 Step2 降级 |
+| `proto/id_build.{h,c}` | `idb_set_sign_fn()` + `last_sign_src`（与 nonce provider 同一套路）；`idb_init()` **显式清零**函数指针 —— 不清零就是拿栈垃圾当函数指针调用 ✗（同 `have_ec` 那类教训）|
+| `Core/id_core.c` | 装上 SE 签名器；控制台改成 `[id] se=ATECC608B (Slot 0 里签，私钥不出芯片)` 与 `[id] nonce_src=… sign_src=…`（**两者分开说**，别合并成一句"已启用 SE" ✗）|
+| `Periph/atecc.c` 自检 | `se` 现在会**对固定摘要签一次**并打出 `r||s`；判据在 **PC 侧**：用 Slot 0 公钥独立验签 ✓（板上**不**自己验自己 ✗）|
+| `tools/check_c4g2_bench.py` | 新判据：`sign_src=se` ✓ + 用 Slot 0 公钥**独立验签** ✓；板上还是旧固件时**只 warn 不误判** ✓ |
+
+**PC 侧已锁的两条**（`python proto\run_cross_test.py` → 16 组 exit 0 ✓）：
+① 注入"外部签名器"后报文/信封/帧与软件替身**逐字节相同** ✓；
+② 签名器报错 ⇒ 降级到 L1（`reason=slot0_sign_failed`、`fell_back=1`）✓。
+
+⚠ **上机判据（还没做 ✗）**：烧录 + 按 RST 后跑 `python tools\check_c4g2_bench.py`，期望
+`[se] Sign(slot 0) ok; r=… / [se] s=…` ✓、`[id] sign_src=se` ✓、且工具用 Slot 0 公钥
+**独立验签通过** ✓。★ 附带可观察的变化：`[id] sent … build_ms=` 应当**大幅下降**
+（原来那套软件 P-256 在 8 MHz 下是**秒级**；换成 SE 后只剩两条 I²C 命令 ✓）。
+
 ## 9. 未做 / 边界（本轮，如实）
 
 - **§6 那张"上机判据"表**：2026-10-10/11 已填 **1/2/2b/3/4 五条** ✓（第 5 条 `idsend` 那轮没跑 ⇒ 仍空）；

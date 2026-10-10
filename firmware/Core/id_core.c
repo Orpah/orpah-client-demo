@@ -73,12 +73,12 @@ static int str_prefix(const char *s, const char *pre)
 }
 
 /* §8.2 的输入：`se_ok` = “**能不能做 ES256 签名**”。
- * ⚠ 如实（c4-γ-2）：本 demo 的签名**仍是软件 P-256 替身**（真 SE 签名是 d 步）⇒
- *   `se_ok` 仍为 1，`level=0` 依旧标注为**演示级**。
- *   c4-γ-2 只是把 **nonce** 换成了 ATECC608B 的 `Random(0x1B)`（见 `_next_nonce_src()`）。*/
+ * ★★ d 步（2026-10-11）：装上了 SE 签名器（`Periph/atecc.c` 的 `atecc_sign_pre()`）
+ *   ⇒ 这里如实回“真 SE 在前”。✗ 没接/没探到时回 0（那时 level=0 走的是**软件替身** ——
+ *   口径同 §8.2：软件替身属**演示级**，别当成“SE 在签”✗）。*/
 static int _se_ok(void)
 {
-    return 1;
+    return (s_b.sign_fn != 0) ? 1 : 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -176,15 +176,24 @@ int idc_init(uint32_t boot_entropy)
             atecc_stats_t st;
 
             idb_set_nonce_fn(&s_b, atecc_nonce_hex, 0);
+            /* ★★ d 步（2026-10-11）：**签名也交给 SE** —— 装上它以后，level=0 的私钥
+             *   **不再进 MCU 的 RAM** ✓（`idb_t.ec` 只当降级链的演示材料留着），
+             *   而且不再跑那套**秒级**的软件 P-256（8 MHz 下 ~9 s ⇒ 换 SE 后 build_ms 直降）✓。*/
+            idb_set_sign_fn(&s_b, atecc_sign_pre, 0);
             atecc_stats(&st);
             uart_printf(CONSOLE_UART,
                         "[id] nonce <- ATECC608B Random(0x1B) 32B (crc_mode=%s)\r\n",
                         (st.crc_mode == 0u) ? "no-crc(响应 33 B)" :
-                        (st.crc_mode == 1u) ? "crc(响应 38 B)" : "unknown");
+                        (st.crc_mode == 1u) ? "crc(响应 35 B)" : "unknown");
+            uart_printf(CONSOLE_UART,
+                        "[id] ES256 sign <- ATECC608B Sign(0x41) slot %u（私钥不出芯片 ✓）\r\n",
+                        (unsigned)ATECC_SIGN_SLOT);
         } else {
             uart_printf(CONSOLE_UART,
                         "[id] nonce <- soft entropy (SE 无应答 rc=%d；见 docs/atecc608b-se.md)\r\n",
                         se);
+            uart_printf(CONSOLE_UART,
+                        "[id] ES256 sign <- **软件替身**（演示级 ✗；规范 §6 要的是 SE 里签）\r\n");
         }
     }
     s_ready = 1;
@@ -199,12 +208,15 @@ static void cmd_status(void)
 {
     uart_printf(CONSOLE_UART, "\r\n[id] sn=%s gen=%d fw=%s\r\n",
                 s_b.sn, s_b.gen, (s_b.firmware != 0) ? s_b.firmware : "-");
-    uart_printf(CONSOLE_UART, "[id] se=%s (demo: software key; real SE in d-step)\r\n",
-                _se_ok() ? "stand-in(software P-256)" : "unavailable");
+    uart_printf(CONSOLE_UART, "[id] se=%s\r\n",
+                _se_ok() ? "ATECC608B (Slot 0 里签，私钥不出芯片)" :
+                           "stand-in(software P-256, 演示级 ✗)");
     /* ★ nonce 来源（c4-γ-2）：规范 §5.4 要求 ATECC608B 的 RNG；没接则如实标 soft。
-     * ⚠ 签名**仍是软件替身** —— 这两件事必须分开说，别合并成一句“已启用 SE”。*/
-    uart_printf(CONSOLE_UART, "[id] nonce_src=%s\r\n",
-                (s_b.last_nonce_src != 0) ? s_b.last_nonce_src : "-");
+     * ★ d 步：**签名来源**同一套口径（`sign_src`）—— 这两件事必须分开说，
+     *   别合并成一句“已启用 SE”✗。*/
+    uart_printf(CONSOLE_UART, "[id] nonce_src=%s sign_src=%s\r\n",
+                (s_b.last_nonce_src != 0) ? s_b.last_nonce_src : "-",
+                (s_b.last_sign_src != 0) ? s_b.last_sign_src : "-");
     uart_printf(CONSOLE_UART, "[id] mode=%s  interval=%u ms  min_gap=%u ms\r\n",
                 s_mode, (unsigned)IDC_INTERVAL_MS, (unsigned)IDC_MIN_GAP_MS);
     uart_printf(CONSOLE_UART, "[id] last_level=%d why=%s nonce=%s frame_len=%u\r\n",

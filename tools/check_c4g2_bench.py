@@ -13,6 +13,9 @@
        · 失败时把 `rc / last_resp_len / raw=` 原样带出来（是 `count` 口径不对还是别的问题）
   4. **再发一次 `se`** ⇒ 两次的 16 B **必须不同**（RNG 真的在动，不是常量/缓存）；
   5. 发 `id` ⇒ `nonce_src=se`（装配进流水线的那条路径确实在用 SE；`soft` 就是没接上）；
+  6. ★ d 步（2026-10-11）：`se` 会额外对一条**固定摘要**签一次并打出 `r||s` ⇒
+     本工具用 **Slot 0 的公钥**（下面常量，来自 2026-10-11 台架实测）**独立验签** ✓
+     （板上**不**自己验自己：那只证明自洽 ✗）；同时判 `id` 的 `sign_src=se` ✓。
   6. （默认做）发 `idsend` + `idhex` ⇒ 把帧交给**上游** `orpah_id.verify_report` 判一次
      （与 `tools/check_report_hex.py` / `tools/check_c4g1_bench.py` **共用同一套判定**，不重写协议）；
      可选 `--mod-port COM24` 同时抓模组打印口，确认帧进了模组。
@@ -34,6 +37,7 @@
    MounRiver 的串口窗口（否则 `PermissionError(13)`）。
 """
 import argparse
+import hashlib
 import os
 import re
 import sys
@@ -58,6 +62,17 @@ RE_RAND = re.compile(r"\[se\]\s+Random\(0x1B\)\s+32\s*B\s*ok;\s*前\s*16\s*B\s*=
 RE_SEFAIL = re.compile(r"\[se\]\s+Random FAILED\s+rc=(-?\d+)\s+last_resp_len=(\d+)\s+raw=([0-9a-fA-F]*)")
 RE_SENORES = re.compile(r"\[se\]\s*没应答")
 RE_NONCESRC = re.compile(r"\[id\]\s+nonce_src=(\S+)")
+# ★ d 步（2026-10-11）：`id` 现在把两个来源写在同一行（`nonce_src=se sign_src=se`）
+RE_SIGNSRC = re.compile(r"\[id\]\s+nonce_src=(\S+)\s+sign_src=(\S+)")
+# `se` 的签名判据：两行（r 在 Sign 行上、s 在下一行）
+RE_SE_SIGN = re.compile(r"\[se\]\s+Sign\(slot\s*(\d+)\)\s+ok;\s*r=([0-9a-fA-F]{64})")
+RE_SE_S = re.compile(r"\[se\]\s+s=([0-9a-fA-F]{64})")
+RE_SE_SIGNCNT = re.compile(r"\[se\]\s+sign_ok=(\d+)\s+sign_fail=(\d+)")
+# ★ Slot 0 的公钥（台架 2026-10-11 实测，见 docs/atecc608b-se.md §8.10）——
+#   用来**独立验**板上那条签名；换芯片/换钥时这两个常量必须跟着换 ✓
+SLOT0_PUB_X = bytes.fromhex("91b25aacf84a88e8b457d04f289cdf9a079f96ff5f4331c5ea382a445cb1ab44")
+SLOT0_PUB_Y = bytes.fromhex("657458472353c3be6b4c9ce64257a5eaf09713d655db4776611272980b53f306")
+D_SELFTEST_MSG = b"ORPAH d-step probe v1"      # 固件 `se` 自检签的就是它 ✓
 RE_LOADLINE = re.compile(r"\[id\]\s+nonce <- (se|soft)", re.IGNORECASE)
 RE_HEXLINE = re.compile(r"^[0-9a-fA-F]{2,64}$")
 RE_SENT = re.compile(r"\[id\]\s+sent\s+level=(\d+)\s+alg=(\S+)\s+why=(\S+)\s+nonce=(\S+)"
@@ -67,7 +82,9 @@ RE_SENT = re.compile(r"\[id\]\s+sent\s+level=(\d+)\s+alg=(\S+)\s+why=(\S+)\s+non
 def parse_se_log(text):
     """从控制台文本里抽 `se` 的判据字段。**按出现顺序**收：一个 `se` 的完整判据 = 一轮。"""
     out = {"wake": None, "nores": False, "stats": None, "rands": [], "fails": [],
-           "nonce_src": None, "loadline": None, "sent": None, "hex": ""}
+           "nonce_src": None, "loadline": None, "sent": None, "hex": "",
+           "sign_src": None, "sig_r": None, "sig_s": None, "signcnt": None,
+           "sign_load": None}
     for ln in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         s = ln.strip()
         m = RE_WAKE.search(s)
@@ -95,6 +112,22 @@ def parse_se_log(text):
         m = RE_NONCESRC.search(s)
         if m:
             out["nonce_src"] = m.group(1)
+        m = RE_SIGNSRC.search(s)
+        if m:
+            out["nonce_src"], out["sign_src"] = m.group(1), m.group(2)
+        m = RE_SE_SIGN.search(s)
+        if m:
+            out["sig_r"] = m.group(2)
+        m = RE_SE_S.search(s)
+        if m:
+            out["sig_s"] = m.group(1)
+        m = RE_SE_SIGNCNT.search(s)
+        if m:
+            out["signcnt"] = {"ok": int(m.group(1)), "fail": int(m.group(2))}
+        if "ES256 sign <- ATECC608B" in s:
+            out["sign_load"] = "se"
+        elif "ES256 sign <- **软件替身**" in s or "ES256 sign <- soft" in s:
+            out["sign_load"] = "soft"
         m = RE_LOADLINE.search(s)
         if m:
             out["loadline"] = m.group(1).lower()
@@ -321,6 +354,48 @@ def main():
     if got["loadline"] == "soft" and got["nonce_src"] != "soft":
         print("warn 启动时那行 `[id] nonce <- soft` 与 `id` 不一致 —— 看原始输出")
 
+    # ---- 判据 4b（★ d 步）：签名器装的是 SE，而且**外部实现**认它签的东西 ----
+    # ⚠ 板上还是 d 步之前的旧固件时（两行都没有）⇒ **只 warn 不 FAIL**：
+    #   那说明"本轮没跑 d 步判据"，不等于器件坏了 ✗（同 `--no-idsend` 的口径 ✓）。
+    d_step = (got["sign_load"] is not None) or (got["sign_src"] is not None)
+    if not d_step:
+        print("warn 板上固件没有 d 步那两行（`ES256 sign <- …` / `sign_src=`）"
+              "⇒ **本轮没跑 d 步判据**（固件是旧的；烧了新版再看）")
+    elif got["sign_src"] is None and got["sign_load"] is None:
+        print("warn 没看到签名来源那一行（`sign_src=` / `ES256 sign <- …`）")
+    elif got["sign_src"] == "se" or got["sign_load"] == "se":
+        print("PASS `id` 显示签名来源 = SE（level=0 的 ES256 在 SE 里签）")
+    else:
+        print("FAIL 签名来源是 %s（不是 se）⇒ 要么 SE 没接上、要么签名器没装上"
+              % (got["sign_src"] or got["sign_load"]))
+        fails.append("sign_src != se")
+    if got["signcnt"]:
+        print("info `se` 计数：sign_ok=%d sign_fail=%d"
+              % (got["signcnt"]["ok"], got["signcnt"]["fail"]))
+    if not d_step:
+        pass
+    elif got["sig_r"] and got["sig_s"]:
+        sig = bytes.fromhex(got["sig_r"] + got["sig_s"])
+        digest = hashlib.sha256(D_SELFTEST_MSG).digest()
+        try:
+            from cryptography.hazmat.primitives import hashes as _h
+            from cryptography.hazmat.primitives.asymmetric import ec as _ec, utils as _u
+            pk = _ec.EllipticCurvePublicKey.from_encoded_point(
+                _ec.SECP256R1(), b"\x04" + SLOT0_PUB_X + SLOT0_PUB_Y)
+            der = _u.encode_dss_signature(int.from_bytes(sig[:32], "big"),
+                                          int.from_bytes(sig[32:], "big"))
+            pk.verify(der, digest, _ec.ECDSA(_u.Prehashed(_h.SHA256())))
+            print("PASS 板上那条签名被 **Slot 0 的公钥独立验过**（Prehashed(SHA256)）✓")
+        except ImportError:
+            print("warn 本机没装 `cryptography` ⇒ 跳过独立验签（**不算过**）")
+        except Exception as e:                                # noqa: BLE001
+            print("FAIL 独立验签不过：%r（签名/公钥/摘要三者对不上）" % (e,))
+            fails.append("板上签名验不过")
+    else:
+        print("FAIL `se` 没打印出 r||s（`Sign(slot 0) ok; r=…` / `[se] s=…`）"
+              "⇒ 签名没成，看上面的 `[se] Sign … FAILED/状态` 行")
+        fails.append("没拿到板上签名")
+
     # ---- 判据 5：帧仍被上游接受（可选，默认做）----
     if args.no_idsend or args.from_file:
         print("（跳过 ID 上报判据：--no-idsend / --from-file）")
@@ -357,6 +432,7 @@ def main():
     print("★ 本轮实测结论（请填回 docs/atecc608b-se.md §6 的「实测」列）：")
     print("   crc_mode = %s" % (st["crc_mode"] if st else "?"))
     print("   nonce_src = %s" % (got["nonce_src"] or "?"))
+    print("   sign_src  = %s（★ d 步）" % (got["sign_src"] or got["sign_load"] or "?"))
     if fails:
         print("FAIL c4-γ-2 上机判据：%d 项未过 -> %s" % (len(fails), "；".join(fails)))
         return 2
@@ -366,8 +442,12 @@ def main():
               "（本轮**没跑** ID 上报判据）")
     else:
         print("PASS c4-γ-2 上机判据：nonce 来自 ATECC608B 的 Random(0x1B)，且帧仍被上游接受")
-    print("     ⚠ 如实：**签名仍是软件 P-256 替身**（SE 签名 / Slot0 是 d 步）——"
-          "这只是把 nonce 的来源换成了 SE 的 RNG")
+    if d_step:
+        print("     ★ d 步：`sign_src=se` ✓ 且板上那条签名已被 **Slot 0 的公钥独立验过** ✓"
+              "（ES256 在 SE 里签、私钥不出芯片）")
+    else:
+        print("     ⚠ 如实：板上是**旧固件** ⇒ 只验了 nonce 来自 SE；"
+              "签名来源（`sign_src`）与 SE 签名本轮**没验** ✗")
     return 0
 
 
