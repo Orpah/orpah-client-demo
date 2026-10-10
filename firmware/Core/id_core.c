@@ -179,7 +179,7 @@ int idc_init(uint32_t boot_entropy)
             atecc_stats(&st);
             uart_printf(CONSOLE_UART,
                         "[id] nonce <- ATECC608B Random(0x1B) 32B (crc_mode=%s)\r\n",
-                        (st.crc_mode == 0u) ? "no-crc(响应 36 B)" :
+                        (st.crc_mode == 0u) ? "no-crc(响应 33 B)" :
                         (st.crc_mode == 1u) ? "crc(响应 38 B)" : "unknown");
         } else {
             uart_printf(CONSOLE_UART,

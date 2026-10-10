@@ -558,8 +558,8 @@ int atecc_selftest(void)
     rc = atecc_random(r);
     uart_printf(CONSOLE_UART, "[se] cmd=%u ok=%u fail=%u crc_mode=%s resp_waddr=%s\r\n",
                 (unsigned)s_st.cmd, (unsigned)s_st.ok, (unsigned)s_st.fail,
-                (s_st.crc_mode == 0u) ? "no-crc(响应 36 B)" :
-                (s_st.crc_mode == 1u) ? "crc(响应 38 B)" : "unknown",
+                (s_st.crc_mode == 0u) ? "no-crc(响应 33 B)" :
+                (s_st.crc_mode == 1u) ? "crc(响应 35 B)" : "unknown",
                 (s_st.resp_waddr == 1u) ? "0x00" :
                 (s_st.resp_waddr == 2u) ? "0x03" : "unknown");
     if (rc != 0) {
