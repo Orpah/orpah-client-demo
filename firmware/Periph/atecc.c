@@ -727,9 +727,40 @@ int atecc_diag_probe(void)
         hit = diag_scan("② 脉冲+tWHI 后");
     }
     if (hit != 0u) {
-        s_addr = hit;
-        uart_printf(CONSOLE_UART, "[sewake] ★ 器件在 0x%02x ⇒ 已把命令地址改成它，接着逐项验：\r\n",
-                    (unsigned)hit);
+        /* ★ 2026-10-11 修（原 bug ✗：只凭“地址应答”就改命令地址 ⇒ 台上板载 24C02 在 0x50 先应答
+         *   ⇒ 地址被换成 0x50 ⇒ 后面 Info/锁位/Random **全部对着 EEPROM** 做，报出**假**判据 ✗）。
+         *   CA 器件的判据是**能答 CA 命令**（`Info(0x30)`）✓，不是“地址 ACK” ✗。
+         *   从扫描得到的候选开始逐个试（只试到第一个能答 Info 的为止）。*/
+        uint8_t a;
+        uint8_t chosen = 0u;
+
+        for (a = hit; a <= 0x7Fu && chosen == 0u; a++) {
+            uint8_t save;
+            int is_ca;
+
+            if (diag_probe_n(a) < DIAG_PROBE_MIN) { continue; }
+            save = s_addr;
+            s_addr = a;
+            is_ca = (diag_cmd4(ATECC_OP_INFO, 0x00u, 0x0000u, rev, &crc_used) == 0);
+            if (is_ca) {
+                chosen = a;
+            } else {
+                s_addr = save;
+                uart_printf(CONSOLE_UART, "[sewake] ⚠ 0x%02x 地址应答但**不答 Info(0x30)**"
+                                          " ⇒ 不是 CA 器件（多半是别的 I²C 器件，如板载 EEPROM）"
+                                          " ⇒ 不认它 ✓\r\n", (unsigned)a);
+            }
+        }
+        hit = chosen;
+        if (chosen != 0u) {
+            uart_printf(CONSOLE_UART, "[sewake] ★ 0x%02x **答了 Info(0x30)** ⇒ 认它，"
+                                      "命令地址改成它 ✓（判据是能答 CA 命令，不是地址 ACK）\r\n",
+                        (unsigned)chosen);
+        } else {
+            uart_printf(CONSOLE_UART, "[sewake] 有地址应答但**没人答 Info(0x30)** ⇒"
+                                      " **不改命令地址**（仍是 0x%02x）✓，"
+                                      "也不做下面 ③④ 的判据 ✗\r\n", (unsigned)s_addr);
+        }
     } else {
         uart_printf(CONSOLE_UART, "[sewake] 两遍扫描都无人应答 ⇒ 器件侧确实没反应"
                                   "（供电/焊接/坏件 —— 但已不可能是「地址写错」）\r\n");
