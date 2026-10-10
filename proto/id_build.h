@@ -27,6 +27,7 @@
 
 #include "jcs.h"
 #include "id_nonce.h"
+#include "id_report.h"          /* ★ d 步：`idr_sign_fn`（签名器注入点的形状）*/
 
 #define IDB_ETHERTYPE  0x88B5
 #define IDB_MAC_LEN    6
@@ -77,6 +78,13 @@ typedef struct {
     idb_nonce_fn nonce_fn;
     void        *nonce_ctx;
 
+    /* ★★ d 步：**ES256 的签名器可注入**（非 NULL = 用它；NULL = 软件替身）。
+     *   固件 c4-γ-3 起注入 `Periph/atecc.c` 的 `atecc_sign_pre()`（SE 的 `Sign(0x41)`）⇒
+     *   **私钥不进 MCU** ✓、也不再跑秒级的软件 P-256 ✓。
+     *   与 nonce provider 同一套路：本文件与 PC 侧同一份源码，不能直接依赖硬件。*/
+    idr_sign_fn sign_fn;
+    void       *sign_ctx;
+
     /* 调用方给的 arena 与缓冲 */
     jcs_ctx_t  *jc;
     char       *rep;   size_t repcap;      /* 内层已签报文 */
@@ -93,6 +101,7 @@ typedef struct {
     int      last_err;
     char     last_nonce[IDN_NONCE_LEN + 1];
     const char *last_nonce_src;      /* "se"（注入的 provider）/ "soft"（软熵）*/
+    const char *last_sign_src;       /* ★ d 步："se"（注入的签名器）/ "soft"（软件替身）*/
     uint32_t last_frame_len;
     /* ⚠ `idr_build()` / `jcs_encode_raw()` 的输出**不带结尾 NUL**（同 jcs 家族）
      *   ⇒ 这两个长度是**读它们的唯一正确办法**（用 strlen 会读到上一行的残留）。*/
@@ -105,6 +114,10 @@ void idb_mac_default(uint8_t out[IDB_MAC_LEN]);
 
 /* 注入 nonce 来源（NULL = 回到软熵后端）。在 `idb_init()` 之后调。*/
 void idb_set_nonce_fn(idb_t *b, idb_nonce_fn fn, void *ctx);
+
+/* ★ d 步：注入 ES256 的签名器（NULL = 回到软件替身）。在 `idb_init()` 之后调。
+ * 注入后 level=0 的 `ec_priv` **不需要给**（私钥在 SE 里 ✓）。*/
+void idb_set_sign_fn(idb_t *b, idr_sign_fn fn, void *ctx);
 
 /* 初始化。失败返回负码（IDB_E_ARG）。*/
 int idb_init(idb_t *b, jcs_ctx_t *jc,

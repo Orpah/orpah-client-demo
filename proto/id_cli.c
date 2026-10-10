@@ -102,8 +102,26 @@ static long from_hex_bytes(const char *hex, unsigned char *out, size_t cap)
 /* ------------------------------------------------------------------ */
 /* 单条流水线（供 dev-frame / frame-selftest 共用）                       */
 /* ------------------------------------------------------------------ */
+/* ★★ d 步的 PC 侧替身：一个"外部签名器"（**不装进固件**，只在 PC 上证明"注入这条路"通）。
+ *   把它装进 `idb_t` 后，流水线应当产出与软件替身**逐字节相同**的帧 ✓；
+ *   另一个变体恒失败，用来证明"签名器报错 ⇒ 按 §8.2 Step2 降到 L1" ✓。
+ *   ⚠ 固件里注入的是 `Periph/atecc.c` 的 `atecc_sign_pre()`（SE 真签）——两者形状相同、实现不同。*/
+static int _prov_soft(unsigned char out64[64], const void *pre, size_t prelen, void *ctx)
+{
+    idb_t *b = (idb_t *)ctx;
+
+    if (out64 == 0 || b == 0) { return -1; }
+    return (ecdsa_sign_p256_msg(out64, b->ec, pre, prelen) == 0) ? 0 : -1;
+}
+
+static int _prov_fail(unsigned char out64[64], const void *pre, size_t prelen, void *ctx)
+{
+    (void)out64; (void)pre; (void)prelen; (void)ctx;
+    return -1;                       /* 模拟"SE 不答/签不动" */
+}
+
 static int run_pipeline(const char *sn, int gen, const char *mode, unsigned long entropy,
-                        unsigned long ctr, const char *fw, int sign_fail,
+                        unsigned long ctr, const char *fw, int sign_fail, int prov,
                         char *rephex, char *envhex, char *framehex,
                         int *level, const char **reason, idb_t *outb)
 {
@@ -119,6 +137,10 @@ static int run_pipeline(const char *sn, int gen, const char *mode, unsigned long
     /* 让 nonce 落在指定的计数器上（= idn_soft_at(sn, entropy, ctr)，便于两侧复现）*/
     b.nonce.ctr = (uint32_t)(ctr > 0u ? (ctr - 1u) : 0u);
     b.test_sign_fail = sign_fail;
+    /* ★ d 步：注入"外部签名器" —— 0 = 不注入（软件替身）/ 1 = 外部（内部仍调软件签名器，
+     *   结果应与 0 **逐字节相同**）/ 2 = 恒失败的签名器*/
+    if (prov == 1) { idb_set_sign_fn(&b, _prov_soft, &b); }
+    else if (prov == 2) { idb_set_sign_fn(&b, _prov_fail, 0); }
 
     rc = idb_build(&b, mode, &flen, level, reason);
     if (outb != NULL) { *outb = b; }
@@ -314,7 +336,7 @@ static int cmd_frame_selftest(const char *path)
          *   **不能用 strlen 读它**（实测：同进程第 2 条起会读到上一行的残留，长度看着“像对”）。*/
         rc = run_pipeline(c[1], (int)strtol(c[2], NULL, 10), c[3],
                           strtoul(c[4], NULL, 10), strtoul(c[5], NULL, 10),
-                          (n >= 10) ? c[9] : NULL, 0,
+                          (n >= 10) ? c[9] : NULL, 0, 0,
                           rephex, envhex, frhex, &level, &reason, NULL);
         if (rc != 0) {
             printf("FAIL %s:%d 流水线 ERR %d（idr_rc=%d）\n", path, lineno, rc, -200 + rc);
@@ -430,7 +452,7 @@ static int cmd_selfcheck(void)
         static const int   wantl[4] = { IDL_L0, IDL_L1, IDL_L2, IDL_L3 };
 
         for (i = 0; i < 4; i++) {
-            int rc = run_pipeline(SN_DEMO, 1, modes[i], 0xABCDu, 1u, NULL, 0,
+            int rc = run_pipeline(SN_DEMO, 1, modes[i], 0xABCDu, 1u, NULL, 0, 0,
                                   rephex, envhex, frhex, &level, &reason, NULL);
 
             if (rc != 0) { bad++; printf("FAIL 流水线 %s ERR %d\n", modes[i], rc); continue; }
@@ -447,7 +469,7 @@ static int cmd_selfcheck(void)
     /* ⑤ §8.2 Step2 的**降级路径**：ES256 签名失败 → 自动降到 L1（测试钩子模拟 SE 签名失败）*/
     {
         idb_t b2;
-        int rc = run_pipeline(SN_DEMO, 1, "auto", 0xABCDu, 1u, NULL, 1,
+        int rc = run_pipeline(SN_DEMO, 1, "auto", 0xABCDu, 1u, NULL, 1, 0,
                               rephex, envhex, frhex, &level, &reason, &b2);
 
         if (rc != 0) {
@@ -516,9 +538,46 @@ static int cmd_selfcheck(void)
         }
     }
 
+    /* ⑨ ★★ d 步：注入"外部签名器"这条路（PC 侧替身）——
+     *   ① 注入后帧必须与软件替身**逐字节相同**（证明注入路上没有任何"悄悄改了预像/顺序"）
+     *   ② 签名器报错必须走到 §8.2 Step2 的降级（level 0 → 1、reason=slot0_sign_failed）*/
+    {
+        idb_t b4;
+        char repA[4096], envA[4096], frA[8192];
+        char repB[4096], envB[4096], frB[8192];
+        int lvA = -1, lvB = -1, rca, rcb;
+        const char *rsA = NULL, *rsB = NULL;
+
+        rca = run_pipeline(SN_DEMO, 1, "auto", 0xABCDu, 1u, NULL, 0, 0,
+                           repA, envA, frA, &lvA, &rsA, NULL);
+        rcb = run_pipeline(SN_DEMO, 1, "auto", 0xABCDu, 1u, NULL, 0, 1,
+                           repB, envB, frB, &lvB, &rsB, NULL);
+        if (rca != 0 || rcb != 0) {
+            bad++; printf("FAIL 签名器注入流水线 ERR %d/%d\n", rca, rcb);
+        } else {
+            if (lvA != lvB || strcmp(repA, repB) != 0 || strcmp(envA, envB) != 0 ||
+                strcmp(frA, frB) != 0) {
+                bad++; printf("FAIL 注入外部签名器后报文/信封/帧与软件替身不一致\n");
+            }
+        }
+        rcb = run_pipeline(SN_DEMO, 1, "auto", 0xABCDu, 1u, NULL, 0, 2,
+                           repB, envB, frB, &lvB, &rsB, &b4);
+        if (rcb != 0) {
+            bad++; printf("FAIL 签名器失败时流水线应当降级而不是报错（rc=%d）\n", rcb);
+        } else {
+            if (lvB != IDL_L1) { bad++; printf("FAIL 签名器失败后 level=%d（要 1）\n", lvB); }
+            if (strcmp(rsB, "slot0_sign_failed") != 0) {
+                bad++; printf("FAIL 签名器失败后 reason=%s\n", rsB);
+            }
+            if (b4.fell_back != 1u) {
+                bad++; printf("FAIL 签名器失败后 fell_back=%u\n", (unsigned)b4.fell_back);
+            }
+        }
+    }
+
     (void)b;
     if (bad == 0) {
-        printf("PASS id-cli selfcheck（选级/nonce/流水线/降级路径/缓冲不够报错）\n");
+        printf("PASS id-cli selfcheck（选级/nonce/流水线/降级路径/签名器注入/缓冲不够报错）\n");
         return 0;
     }
     printf("FAIL id-cli selfcheck：%d 项不成立\n", bad);
@@ -538,7 +597,7 @@ static int cmd_dev_frame(char **av, int n)
     }
     rc = run_pipeline(av[0], (int)strtol(av[1], NULL, 10), av[2],
                       strtoul(av[3], NULL, 10), strtoul(av[4], NULL, 10),
-                      (n >= 6) ? av[5] : NULL, 0, rephex, envhex, frhex,
+                      (n >= 6) ? av[5] : NULL, 0, 0, rephex, envhex, frhex,
                       &level, &reason, NULL);
     if (rc != 0) {
         printf("ERR pipeline %d\n", rc);

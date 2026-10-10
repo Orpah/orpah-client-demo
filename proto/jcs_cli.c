@@ -648,6 +648,7 @@ static void idr_line(char **av, char *out, size_t outcap)
                    NULL,
                    (level == 0) ? NULL : key, (level == 0) ? 0 : (size_t)kn,
                    (level == 0) ? key : NULL, (level == 0) ? (size_t)kn : 0,
+                   0, 0,                       /* ★ d 步：不注入签名器 ⇒ 软件替身（PC 侧可复现）*/
                    repbuf, sizeof(repbuf), &rn);
     if (rc != 0) { snprintf(out, outcap, "ERR idr-%d", rc); return; }
 

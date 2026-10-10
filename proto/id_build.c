@@ -99,6 +99,11 @@ int idb_init(idb_t *b, jcs_ctx_t *jc,
     b->nonce_fn = 0;
     b->nonce_ctx = 0;
     b->last_nonce_src = "soft";
+    /* ★ d 步：签名器同样**必须显式清零**（不清零 = 拿栈垃圾当函数指针 ⟹ 调用即跑飞 ✗；
+     *   这就是上面 `have_ec` 那类教训的另一面）*/
+    b->sign_fn = 0;
+    b->sign_ctx = 0;
+    b->last_sign_src = "soft";
 
     if (idn_soft_init(&b->nonce, b->sn, boot_entropy) != 0) {
         return IDB_E_ARG;
@@ -179,6 +184,7 @@ static int _build_report(idb_t *b, int level, size_t *replen)
                    MSG_CAP_FALSE, 0, 0, b->firmware,
                    0,
                    hmac, hmaclen, ec, eclen,
+                   b->sign_fn, b->sign_ctx,
                    b->rep, b->repcap, replen);
     b->last_idr_rc = rc;
     return rc;
@@ -192,6 +198,16 @@ void idb_set_nonce_fn(idb_t *b, idb_nonce_fn fn, void *ctx)
     b->nonce_fn = fn;
     b->nonce_ctx = ctx;
     b->last_nonce_src = (fn != 0) ? "se" : "soft";
+}
+
+void idb_set_sign_fn(idb_t *b, idr_sign_fn fn, void *ctx)
+{
+    if (b == 0) {
+        return;
+    }
+    b->sign_fn = fn;
+    b->sign_ctx = ctx;
+    b->last_sign_src = (fn != 0) ? "se" : "soft";
 }
 
 int idb_build(idb_t *b, const char *mode, size_t *framelen,

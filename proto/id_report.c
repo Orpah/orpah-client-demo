@@ -25,6 +25,7 @@ int idr_build(jcs_ctx_t *c,
               const jv_t *seen_routers,
               const unsigned char *hmac_key, size_t hmac_keylen,
               const unsigned char *ec_priv, size_t ec_priv_len,
+              idr_sign_fn sign_fn, void *sign_ctx,
               char *out, size_t outcap, size_t *outlen)
 {
     jv_t *hdr, *payload, *rep;
@@ -38,8 +39,10 @@ int idr_build(jcs_ctx_t *c,
     if ((level == 1 || level == 2) && (hmac_key == NULL || hmac_keylen == 0)) {
         return IDR_E_ARG;
     }
-    /* level=0：要 32 B 大端私钥 d（严格等长 —— 短了/长了都当调用方写错了，不默认填充）*/
-    if (level == 0 && (ec_priv == NULL || ec_priv_len != P256_BYTES)) {
+    /* level=0：两条路**二选一** ——
+     *   ① 注入的签名器（`sign_fn`；真机 = SE ⇒ **私钥不进 MCU** ✓）
+     *   ② 软件替身：要 32 B 大端私钥 d（严格等长 —— 短了/长了都当调用方写错了，不默认填充）*/
+    if (level == 0 && sign_fn == NULL && (ec_priv == NULL || ec_priv_len != P256_BYTES)) {
         return IDR_E_ARG;
     }
 
@@ -94,11 +97,17 @@ int idr_build(jcs_ctx_t *c,
         int m;
 
         if (level == 0) {
-            /* ES256：SHA-256(预像) + RFC 6979 确定性 k ⇒ r||s（64 B）→ b64url。
-             * `ecdsa_sign_p256_msg` 内部就是 §5.1 那一步（哈希 + 签名）。
-             * ⚠ 返回非 0 的情形：k/d/r/s 为 0（概率 ~2^-256）或曲线层报错 ⇒ 如实报错。*/
+            /* ES256：预像 → r||s（64 B）→ b64url。
+             *   · 注入了签名器（真机 = SE）：**哈希与私钥都归它管** ⇒ 这里只负责给预像 ✓
+             *   · 否则：软件替身 `ecdsa_sign_p256_msg()`（内部 = SHA-256 + RFC 6979 确定性 k）
+             * ⚠ 返回非 0 的情形：SE 不答/签不动，或 k/d/r/s 为 0（概率 ~2^-256）⇒ 如实报错。*/
             unsigned char raw[ECDSA_BYTES];
-            if (ecdsa_sign_p256_msg(raw, ec_priv, pre, (size_t)pn) != 0) {
+
+            if (sign_fn != 0) {
+                if (sign_fn(raw, pre, (size_t)pn, sign_ctx) != 0) {
+                    return IDR_E_ES256;
+                }
+            } else if (ecdsa_sign_p256_msg(raw, ec_priv, pre, (size_t)pn) != 0) {
                 return IDR_E_ES256;
             }
             m = b64url_encode(raw, sizeof(raw), sig_b64, sizeof(sig_b64));

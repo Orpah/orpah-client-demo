@@ -17,6 +17,12 @@
  *   规范 §6 的真机是密钥在安全元件内生成且**不可导出**、签名也应在 SE 里做；
  *   所以 d 由参数传入（而不是从报文/全局里取），将来换 ATECC608B 只改调用方。
  *   本实现**不做常量时间**（见 `ecdsa.h` 的“有意不做的”），真机私钥若要留在 MCU 内必须先解决这条。
+ *
+ * ★★ **d 步（2026-10-11）：签名器可注入**（`idr_sign_fn`）——
+ *   真机 = ATECC608B 的 `Sign(0x41)`（见 `Periph/atecc.c`、`proto/atecc_msg.c`）；
+ *   注入后**私钥永远不进 MCU 的 RAM** ✓（`ec_priv` 可以完全是 `NULL` ✓），
+ *   而且不再跑软件 P-256 签名（台架上那是**秒级**：8 MHz 下 ~9 s ⇒ 换 SE 后 build_ms 大幅下降 ✓）。
+ *   不注入 = 软件替身（PC 侧交叉测试走的就是它，结果可复现 ✓）。
  */
 #ifndef ORPAH_ID_REPORT_H
 #define ORPAH_ID_REPORT_H
@@ -35,6 +41,15 @@
 #define IDR_E_JCS      (-3)     /* 预像/编码出错（arena 或缓冲不够）*/
 #define IDR_E_CAP      (-4)     /* 输出缓冲不够 */
 
+/* ★★ d 步：ES256 的**签名器可注入**（真机 = ATECC608B 的 `Sign(0x41)`）。
+ * 形状：给定**签名预像字节**（JCS 后的 `{"hdr":…,"payload":…}`，还没哈希），
+ *       写满 `r||s` 64 B（各 32 B 大端）并返回 0；否则返回非 0
+ *       （调用方按 §8.2 Step2 降到 L1 —— 即 `IDR_E_ES256` 那条路）。
+ * ★ 传进来的是**预像**而不是摘要：哈希由 provider 自己决定 ——
+ *   SE 那条路是「固件 SHA-256 → `Nonce(0x16)` 把 32 B 当摘要装进去 → `Sign(0x41)`」
+ *   （见 `docs/atecc608b-se.md` §8.10；哈希在 MCU 里做、私钥在芯片里，两边都不出芯片外的秘密 ✓）。*/
+typedef int (*idr_sign_fn)(unsigned char out64[64], const void *pre, size_t prelen, void *ctx);
+
 /* 组装并输出**报文 JSON 字节**（信封那层由 msg_id_report() 再包）。
  *   nonce            : 32 个十六进制字符（16 字节）——设备侧生成规则见 ROADMAP §五
  *   level            : 0..3（0 = ES256；1/2 = HS256；3 = 不签名）
@@ -43,7 +58,10 @@
  *   firmware         : NULL = 不写
  *   seen_routers     : NULL = 空数组（与 Python 的 `seen_routers or []` 一致）
  *   hmac_key/keylen  : level=1/2 时必须给（32 字节）
- *   ec_priv/ec_priv_len : level=0 时必须给（**32 字节大端标量 d**）；ES256 走 RFC 6979
+ *   ec_priv/ec_priv_len : level=0 **且没注入签名器**时必须给（**32 字节大端标量 d**）；
+ *                     走了 RFC 6979
+ *   sign_fn/sign_ctx : ★ d 步：ES256 的签名器（NULL = 用上面的软件替身）。
+ *                     非 NULL 时 `ec_priv` **不需要**给（私钥在 SE 里 ✓）。
  * 成功返回 0，并写 *outlen（不含结尾 NUL）。*/
 int idr_build(jcs_ctx_t *c,
               const char *sn, long long ts, const char *nonce, int level,
@@ -51,6 +69,7 @@ int idr_build(jcs_ctx_t *c,
               const jv_t *seen_routers,
               const unsigned char *hmac_key, size_t hmac_keylen,
               const unsigned char *ec_priv, size_t ec_priv_len,
+              idr_sign_fn sign_fn, void *sign_ctx,
               char *out, size_t outcap, size_t *outlen);
 
 /* level → alg 字符串（"ES256"/"HS256"/"none"）；越界返回 NULL */
