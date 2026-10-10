@@ -135,19 +135,24 @@ EXPECT = {
         {(MCU, "VDDA"), (SE, "VCC"), (RES, "connector0")},        # 3V3：SE 与两只上拉的另一端
         {(MCU, "GND"), (SE, "GND")},                              # 共地
     ],
-    # ---- 最小 SE 台架 + **PC 窗口**（`cstep-ch347f-nanoch32-atecc608b`，2026-10-06 用户画）----
-    #   在上面那张的基础上**只加窗口三根**：`TXD0 → PA10`、`RXD0 → PA9`，地并成**三块共地**。
-    #   ★ **CH347F 的 `P5`（I²C）一根都不接** —— 硬要求（同一时刻只能一个 I²C 主机）；
-    #     一旦有导线接到 `P5`，本脚本会把它报成"多出来的跨实例网"。
-    #   ★ 这张图的标注里 "打印日志" 是**名副其实**的（窗口就在图上）；
-    #     没窗口那两张（`cstep-ch347f-atecc608b` / `cstep-nanoch32-atecc608b`）的同一句标注
-    #     与图不符，已在 `hardware/wiring/README.md` 里列为"已知不符"。
+    # ---- 最小 SE 台架 + **PC 窗口**（`cstep-ch347f-nanoch32-atecc608b`，2026-10-06 用户画；
+    #      **2026-10-11 用户改**：CH347F 的 `P5` 也接上、SE 的 3V3 改从 CH347F 出）----------------
+    #   用途：它现在同时服务**两种用法**（同一个台架需要“控制台窗口 + SE”两件事）：
+    #     · **跑固件判据**：nano 当 I²C 主机 ⇒ **CH347F 不当主机**（在线的 nano 不下命令就行）；
+    #     · **用原厂库当参照**（`docs/atecc608b-se.md` §8.10）：那时 **CH347F 当主机** ⇒
+     #       nano 应**断电/按住 RST**（规矩：同一时刻只让一个主机干活；开漏不会互相损坏 ✓）。
+    #   ※ **一个 3V3 源**：SE 与两只上拉都吃 **CH347F 的 3V3**；nano 的 `VDDA` 只连自己板内
+    #      （两个 3V3 源并联 = 那次“降压芯片烫到 90 ℃”的成因 ✗）。
+    #   ⚠ **2026-10-11 实测：两只上拉的 3V3 端还悬空** ✗（图上只有 `C9/D9` 两行互连、没接电源）
+    #      ⇒ 规格按**应该的样子**写（上拉要接 3V3）⇒ 未补线前本脚本会报“图上找不到这个网” ✓（不是误报 ✓）。
+    #   ※ `CH347F` 那侧的 `VIO` 在图上只与板内 `VREF` 同网（靠 **JP1** 跳到 3V3，导线在图上看不见 ✓）。
     "cstep-ch347f-nanoch32-atecc608b.fzz": [
-        {(MCU, "PB7/USB2DM"), (SE, "SDA"), (RES, "connector1")},   # I²C 数据 + 一只 4.7k
-        {(MCU, "PB6/USB2DP"), (SE, "SCL"), (RES, "connector1")},   # I²C 时钟 + 另一只 4.7k
-        {(MCU, "VDDA"), (SE, "VCC"), (RES, "connector0")},        # 3V3：SE 与两只上拉的另一端
-        {(MCU, "GND"), (SE, "GND"), (BRIDGE, "GND")},            # **三块共地**
-        {(BRIDGE, "TXD0"), (MCU, "PA10")},                         # 窗口：CH347F UART0 → nano 控制台
+        {(MCU, "PB7/USB2DM"), (SE, "SDA"), (BRIDGE, "SDA"), (RES, "connector0")},   # I²C 数据（nano + SE + CH347F P5）
+        {(MCU, "PB6/USB2DP"), (SE, "SCL"), (BRIDGE, "SCL"), (RES, "connector0")},   # I²C 时钟（同上）
+        {(SE, "VCC"), (BRIDGE, "3V3")},                                           # SE 供电：**只从 CH347F 出**
+        {(RES, "connector1"), (BRIDGE, "3V3")},                                     # 两只上拉的另一端 → 3V3（★ 待补那一根线）
+        {(MCU, "GND"), (SE, "GND"), (BRIDGE, "GND")},                            # **三块共地**
+        {(BRIDGE, "TXD0"), (MCU, "PA10")},                                         # 窗口：CH347F UART0 → nano 控制台
         {(BRIDGE, "RXD0"), (MCU, "PA9")},
     ],
     # ---- I²C **主机自检**（`cstep-ch347f-nanoch32-i2ctest`，2026-10-10 用户画）-------------
