@@ -8,7 +8,8 @@
  *
  * §8.2 的四个条件（与上游逐字对应）：
  *   Step1 SE(ATECC608B) I2C 通信失败 → 看 CH32 有没有 HMAC 密钥：有 → L2 / 无 → L3
- *   Step2 SE 通、`atcab_sign(Slot0)` 失败 → L1（改用 Slot 5 的 HMAC）
+ *   Step2 SE 通、`atcab_sign(Slot0)` 失败 → L1（改用 **HMAC 钥** —— 规范原文写 Slot 5，
+ *   本实现用 **slot 4** ✓：该节自述非规范性，槽号以数据手册/产线配置为准，见 `docs/atecc608b-se.md` §8.14）
  *   Step2 SE 通、签名成功 → L0（正常 ECDSA）
  */
 #ifndef ORPAH_ID_LEVEL_H

@@ -4,15 +4,21 @@ ORPAH（用无线技术找人）五仓里的**客户端侧**：**CH32V203 + 安�
 （802.11ah HaLow）模组**。目标是一台**免电池/低功耗**的客户端设备：周期性向 HaLow 路由器
 上报「我还在」（Orpah ID 签名上报），必要时按电量降级，并配合服务端做定位与搜寻。
 
-> **现状（2026-09-21）**：三块拼图都已上机验过：
+> **现状（2026-10-12 更新）**：四块拼图都已上机验过：
 > ① **自家固件**（`firmware/`，c3-2b）—— 控制台 + 1 ms 时基 + 心跳灯（板载 `D1`=PA15）+
 >    **模组数据口**（USART2 ↔ TX-AH，HGIC 命令/应答双向通）；接线 / 判据 / 四个真凶见
 >    `docs/c3-2b-bench-bringup.md`；
 > ② **协议内核**（`proto/`）与 Python 参考**零偏差**（`python proto\run_cross_test.py` → exit 0）；
 > ③ **b 步台架**（PC ↔ 模组）—— 控制面、数据面端到端、L2 全链路（含已签 `ORPAH-ID-REPORT`
->    验签通过）都跑通，见 `docs/txah-uart-macbus.md` 与 `ROADMAP.md` §二。
-> **未做（如实）**：c4（选级 / 无 RTC / 自限频 / 已签上报）**未上机**；ATECC608B 未接线；
-> 产线烧录、低功耗与取能标定未做；与 `orpah-over-halow` / `orpah-openwrt-demo` 的真机联调未做。
+>    验签通过）都跑通，见 `docs/txah-uart-macbus.md` 与 `ROADMAP.md` §二；
+> ④ **c4 + 安全元件（SE）全线通**（2026-10-11）—— 选级（ES256/HS256）/ 无 RTC（`ts=0`）/
+>    自限频 / 已签上报全部上机 ✓；**两把钥都在 ATECC608B 里、都不出芯片** ✓：
+>    ES256 在 Slot 0 签（`sign_src=se`）、HS256 在 Slot 4 算 HMAC（`nonce_src=se`）；
+>    实测 `build_ms` ~9 s（软件 P-256）→ **481 ms**；整帧被上游 `verify_report` 接受
+>    （`level=0` ⇒ `trust=high`；`level=1` ⇒ `trust=medium`）✓ —— 见 `docs/atecc608b-se.md`。
+> **未做（如实）**：**模组侧那一半**（`[mbus rx]` 那一条要接上 TX-AH 才有；见 `docs/atecc608b-se.md` §9.0 第 2 条）；
+> `0x64` 那颗芯片的地址谜团（§9.0 第 4 条）；低功耗与取能标定、d 步的**定制载板**、
+> 与 `orpah-over-halow` / `orpah-openwrt-demo` 的真机联调都未做。
 > ⚠ `AT+TXDATA`/`FRAME:RX` 那条路（`docs/nano-ch32v203-uart-bridge.md`）在**真模组上不成立**
 > （fmac 固件的 AT 没有用户数据命令）—— 实际走通的是 **UART-MACBUS（HGIC 帧）**，即上面 ③。
 
@@ -125,18 +131,22 @@ openocd -f interface/wch-link.cfg -f target/ch32v20x.cfg \
 
 ## 还没做（如实）
 
-- **b 步的物理通路**（数据面走哪一条：USB→SPI MACBUS / RJ45 桥）——**尚未定** ✗（控制面 + 回程已通，见 `ROADMAP.md` §二）；
+- **模组侧那一半** —— 帧从固件发到 USART2 了，但本台架**没有模组** ⇒ 缺「`[mbus rx] <帧长+8> byte(s)`」
+  这一条实测（`docs/atecc608b-se.md` §9.0 第 2 条）；
+- **`0x64` 那颗芯片的地址谜团**（稳定 ACK、命令全不回；需要那颗芯片 + `seaddr 64` + `se`）；
 - 与 `orpah-over-halow`（服务端/仿真器）、`orpah-openwrt-demo`（路由器侧）的**真机联调**（e 步）；
-- 功耗实测（免电池取能曲线）、**产线流程在真片上跑完**（工具已入库 `tools/se_provision.py` ✓，
-  用户已焊好 **3 片**待配；流程里两个**引原厂源码**定的值还没上机实测：`Lock(Data)`=0x81、
-  `GenKey` 创建=0x04 —— 首片的判据是**读回锁状态** + **锁后重算公钥=登记公钥**，见 `docs/atecc608b-se.md` §8.13）；
-**HMAC 降级密钥**目前在固件里是**演示派生**（规范 §6 的真机该把它也放进 SE）。
+- 功耗实测（免电池取能曲线）、d 步的**定制载板**、e 步的一体板。
+★ **已结、别再说"未做"** ✗（2026-10-12）：b 步物理通路（= **UART-MACBUS** ✓）、
+**产线流程已在真片上跑完** ✓（`tools/se_provision.py`；**4 颗已配、公钥/降级钥已入库**，余 3 颗按用户决定保留不配 ✗）、
+**降级 HMAC 钥已在 SE 的 slot 4 里** ✓（不再是"演示派生"）。
 
 （**已完成、别再说「未做」**：`proto/` 协议内核（与 Python 参考零偏差）、
 固件平台层 + 控制台 + 1 ms 时基 + 心跳灯 + 模组数据口（c3-2b 上机）、
 b 步台架与 L2 全链路（含已签 `ORPAH-ID-REPORT` 验签通过）、
 **ATECC608B 全线通**（双锁 + Slot 0 私钥不可导出 + 真随机数；`nonce_src=se sign_src=se`；
-整帧被**上游 `verify_report` 接受**，见 `docs/atecc608b-se.md` §8.7–§8.11）。）
+**HS256 的降级钥也在 SE 的 slot 4 里、同样不出芯片** ✓；整帧被**上游 `verify_report` 接受**
+（`level=0`/`trust=high` 与 `level=1`/`trust=medium` **两条都过** ✓），见
+`docs/atecc608b-se.md` §8.7–§8.30）、**台架总闸门 6/6** ✓（`run_checks.py --bench`，§8.30）。）
 
 ## 许可
 

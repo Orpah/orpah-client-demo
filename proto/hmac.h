@@ -4,7 +4,9 @@
  *     ES256: sig = ECDSA-P256-sign(privkey, SHA-256(preimage))
  *     HS256: sig = HMAC-SHA256(symkey, preimage)        ← 就是本文件
  * ⚠ 注意区别：HS256 **直接对 preimage 做 HMAC**，**不再先哈希**（哈希在 HMAC 内部做）。
- *   设备侧持有的一把 32 字节对称密钥（Slot 5 / CH32 保护区）就是这里的 key。
+ *   设备侧持有的一把 32 字节对称密钥就是这里的 key —— **本实现放在 SE 的 slot 4** ✓
+ *   （规范参考实现写 Slot 5，但该节**自述非规范性**、槽号以数据手册/产线配置为准；
+ *   L2 回退时才在 CH32 保护区）—— 槽号口径见 `docs/atecc608b-se.md` §8.14。
  *
  * 单一源：Python `hmac.new(key, msg, hashlib.sha256).digest()`（交叉测试按它拍）。
  */

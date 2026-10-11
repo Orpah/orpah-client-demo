@@ -161,8 +161,8 @@ orpah-client-demo/
   ★ 两条**硬教训**（已写进 `proto/README.md`）：① 结构体里的“已派生/已填充”标志**必须显式清零**，
   否则同进程第 2 次调用会拿栈垃圾当密钥（一次一进程的 CLI 恰好掩盖它）；② jcs 家族输出**不带结尾
   NUL** ⇒ 只能按返回长度读，`strlen()` 会读到上一行残留。
-  ⚠ **未上机**；`se_ok` 是**软件 P-256 替身**（level=0 属演示级）、nonce 是**软熵后端**（非生产强度），
-  两者都如实打在启动横幅/控制台 `id` 上。
+  ⚠ **当时未上机**（后已上机 ✓，见 2026-10-11 各条）；`se_ok` 是**软件 P-256 替身**（level=0 属演示级）、
+  nonce 是**软熵后端**（非生产强度），两者都如实打在启动横幅/控制台 `id` 上。
 - **2026-09-22（c4-γ-1 台架 + c4-γ-2 代码）**：γ-1 **上机两条判据都过** —— 上游 `verify_report` 接受
   （level=0/trust=high，`build_ms≈9.1 s`）+ **模组侧确认** COM24 `[mbus rx] 403 byte(s)`（8 B HGIC 头
   + 395 B 帧）。顺带实测把一条旧口径纠正了：**模组的 cookie 顺序检查是「按数据通道」**（只比上一条
@@ -178,7 +178,7 @@ orpah-client-demo/
   + 心跳灯（板载 `D1`=PA15）+ **模组数据口**（USART2 ↔ TX-AH，HGIC 双向通）；
   协议内核 `proto/` 与 Python 参考零偏差（`python proto\run_cross_test.py` → exit 0）。
   现场记录（接线/判据/**四个真凶**：链接基址 0x0、`IRQn_Type` +16、`mstatus` MPP、TIM `INTFR`）
-  见 `docs/c3-2b-bench-bringup.md`；**c4（选级/无 RTC/自限频/已签上报）仍未上机**。
+  见 `docs/c3-2b-bench-bringup.md`；**c4（选级/无 RTC/自限频/已签上报）当时仍未上机**（后已上机 ✓ 见下）。
 - **a 步（客户端设备仿真器）已在 `orpah-over-halow` 完成**（本仓无代码交付）：
   `client_sim.py`（`DeviceSim`，可换传输）+ `demo_client_sim.py`（端到端验收：验签通过 /
   下行到达 / 零丢弃）+ `docs/client_sim.md`（含 b–e 各步的判据与两条候选物理通路）。
@@ -225,7 +225,8 @@ orpah-client-demo/
   是**"成功、无数据"的合法状态包** ✓（`Write`/`Lock`/`SHA START`/`UPDATE`/`Nonce` 成功时就只回它）
   ⇒ 会让**还没上过机**的 `config-hmac`/`write-hmac` **在成功时报 FAIL** ✗；已按**固件同一口径**
   （`firmware/Periph/atecc.c:502`）修正 ✓。详见 **§8.17**。
-  ⚠ 仍未做：slot 4 的 `config-hmac` / `write-hmac` / `hmac-verify` 整条要**新片**才能跑（7 颗未配 ✗）。
+  ★ **2026-10-12 已结** ✓：slot 4 的 `config-hmac` / `write-hmac` / `hmac-verify` 整条
+  **已在 4 颗新片上跑过** ✓（§8.19–§8.21 / §8.23；余 3 颗按用户决定**保留不配** ✗）。
 - **2026-10-11（当夜续：3 颗新片跑完整条产线 + 公钥登记进密钥库）**：
   ① `se1`/`se2`/`se3` 三颗**全通过** ✓（双锁 `00/00` ✓、私钥 ✓、HMAC 钥 ✓、独立验签 ✓）——
   见 `docs/atecc608b-se.md` **§8.19–§8.21**。
@@ -289,7 +290,7 @@ orpah-client-demo/
      第三方 = `nack>0` + `step=3` + **换目标（另一颗器件）也不答** ✓。详见 `docs/atecc608b-se.md` 真凶表 **⑤**。
   ★ 教训（同 §6）：**“没人 ACK”有三种成因**（器件/接线/共地/上拉 ✓、器件在睡 ✓、**另一个主机在总线上** ✗）——
      别在第一种上反复拔插 ✗；**换个目标试一次**就能把“主机侧”与“器件侧”分开 ✓。
-- **2026-10-11（夜继：**固件侧**的 HS256 也接到 SE，未上机 ✗）**：
+- **2026-10-11（夜继：**固件侧**的 HS256 也接到 SE，当时未上机 ✗ ⇒ **后已上机 ✓** 见 §8.28）**：
   ① `proto/atecc_msg.{c,h}` 新增 `SHA(0x47)` 三连（`sha_start/update/hmac_end` + `resp_sha`），
      并把**带数据的包**抽成唯一一份 `cmd_data()`（`Nonce` 也改走它 —— 字节与改前逐行一致 ✓）；
      `ATECC_CMD_LEN_MAX` 随 **39 → 71**（UPDATE 满块）—— “最长包”是会变的数，别写死在别处 ✗。
@@ -299,7 +300,8 @@ orpah-client-demo/
   ★★ **外部锚点**：`SHA(HMAC_START, slot 4)` 带 CRC 包 = **`0747040400ae47`**（§8.24 那次真机**实发**字节）——
      同时钉在 C 侧 `selfcheck` ⑪ 与 Python 侧生成期断言（两处，不自证 ✓）。
   验证（PC）：交叉测试 **41 行**逐行一致 ✓（`selfcheck` 10 → **11 类**）；`tools/run_checks.py` **5/5** ✓
-  （固件零 warning，text 44672 → 46012）。⚠ **未上机**：`atecc_sha_hmac()` 一次真机都没跑过 ✗
+  （固件零 warning，text 44672 → 46012）。⚠ **当时未上机**：`atecc_sha_hmac()` 一次真机都没跑过 ✗
+  ★ **2026-10-11 23:43 已上机** ✓（§8.28/§8.29：判据全过 —— `accepted / level=1 / trust=medium` ✓）。
   —— 上机判据 = `idlevel l1` 后把 `idhex` 的帧喂上游，必须 **accepted / alg=HS256 / trust=medium** ✓。
   详见 **§8.25**。
 - **2026-10-11（深夜续：`param2` 口径回正 + **多块 HMAC 已通** ✓）**：

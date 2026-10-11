@@ -28,9 +28,11 @@
 | a | 无（软件侧已完成）；本仓只**记下判据与接口**：host 数据口帧格式 = `orpah-over-halow/host_bus.py`（SPI MACBUS `DATA_TX`/`DATA_RX` 语义）、协议 = `Protocol/docs/OrpahIDProtocol.md` |
 | b | **PC 侧 UART/AT 数据面** —— ✅ 已实现（在 `orpah-over-halow`：`host_serial.SerialAtBus` =
   `AT+TXDATA` 上行 + `FRAME:RX` 下行；纯 PC 排练 `demo_client_uart.py`，判据双向都断言过）。
-  ⚠ **真机未验证**：上机首测要确认三件事（命令写法 / 下行格式 / 数据模式粘性）。 |
-| c | 第一版**固件**：CH32V203 裸机主循环 + host 数据口（SPI 从机/主机关系待定）+ §8.2 选级 + 无 RTC（`ts=0`）+ `cap.rtc` 声明；ATECC608B 先用**软件 P-256** 顶（SE 驱动在 d）—— **进行中：c1 骨架已完成**（2026-09-20，见 §五） |
-| d | 换上**定制载板** + 真实 **ATECC608B 驱动**（Slot 0 私钥不可导出 / Slot 5 HMAC）+ 产线烧录流程（协议 §6.2） |
+  ★ **2026-09-14 真机首测：这条路不成立** ✗（fmac 固件的 AT 只有控制面、没有用户数据命令）⇒
+  实际走通的是 **UART-MACBUS（HGIC 帧）**：控制面+回程（09-16）、数据面端到端（09-20）、
+  L2 全链路（09-20）**都已真机跑通** ✓ ⇒ 见 §二。那套 `AT+TXDATA` 代码**留作 API 对照** ✓。 |
+| c | 第一版**固件**：CH32V203 裸机主循环 + host 数据口（SPI 从机/主机关系待定）+ §8.2 选级 + 无 RTC（`ts=0`）+ `cap.rtc` 声明；ATECC608B 先用**软件 P-256** 顶（SE 驱动在 d，台架上已完成 ✓）—— **✅ 已完成**（c1 骨架 09-20 / c3-2b 数据口 09-21 / c4 内核 09-22 / c4-γ 上机 10-11；见 §五） |
+| d | 换上**定制载板** + 真实 **ATECC608B 驱动**（Slot 0 私钥不可导出 / 降级 HMAC 钥**在器件内**）+ 产线烧录流程（协议 §6.2）—— **驱动 + 产线流程已在 c 步台架上做完并上机** ✓（4 颗已配、公钥/降级钥已入库）⇒ **d 步只剩"定制载板"** ✗ |
 | e | 一体板：+ 低功耗/取能（能量轴实测标定，SPEC F-11）、结构/天线、Gerber/PNP 交付 |
 
 ## 二、b 步：**PC ↔ TX-AH 板走 UART**（用户 2026-09-14 定）
@@ -211,10 +213,11 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
   仅剩：**真机形态的有线口**（PC/OpenWrt 有线网卡直连 AP 的 RJ45）没验 —— 本机没有有线网卡，
   跑的是家用 Wi-Fi 的 L2 域。（`ID-REPORT`/验签那一路**已进夹具**，见本节上面的 ⑤⑥ 与 ⑦⑧。）
 - c 步：**c1（骨架）+ c3-2b（模组数据口）上机全绿（2026-09-21）**；c2（协议内核 C + 交叉测试）、
-  c3-1（HGIC 帧层）离线已完成；**c4 的内核已齐（2026-09-22）**：降级（HS256）+ **ES256
-  （曲线/ECDSA/RFC 6979 确定性 k）已接进 `idr_build()`**，服务端 `verify_report` 离线验签通过
-  （含 level=0）；**未上机**（固件 main 还没调 `idr_build`）—— 见 §五。
-  ATECC608 未接线；ATECC608B 驱动、产线烧录、低功耗与取能标定全未做。
+  c3-1（HGIC 帧层）离线已完成；★ **c4 已全部上机** ✓（2026-10-11：c4-γ-1 主循环 + c4-γ-2 nonce 走 SE
+  + c4-γ-3 签名走 SE，见 §五与 `docs/atecc608b-se.md`）。
+  ★ **ATECC608B 驱动与产线烧录流程也已在 c 步台架上做完并上机** ✓（4 颗已配、
+  公钥/降级钥已入库 ⇒ 只差「模组侧那一半」与 `0x64` 谜团，见 `docs/atecc608b-se.md` §9.0）；
+  低功耗与取能标定、d 步的**定制载板**未做。
 - 客户端侧的 `seen_routers`（设备看到哪些路由器）在仿真器里仍是**演示写死值**，
   真机要等空口侧给出可用读数（且 `xport` 不在签名内，见 SPEC F-12）。
 
@@ -222,17 +225,18 @@ SSID `测试链路`、**当时是 AP 模式**（`mode=2`、908.0MHz/bw8、无 st
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| **c1** | 本仓 `firmware/` 骨架：Makefile / `ld` / startup / `Core{board.h,main.c}` / `Periph{gpio,uart}` | **✅ 完成（未上机）** |
+| **c1** | 本仓 `firmware/` 骨架：Makefile / `ld` / startup / `Core{board.h,main.c}` / `Periph{gpio,uart}` | **✅ 完成**（2026-09-20 编译过；**2026-09-21 上机 ✓**，见下面 c3-2b） |
 | c2 | 协议内核 C 实现 + 与 Python 的**交叉测试**（同一批黄金向量，纯 PC） | **✅ 完成（见下）** |
 | **c3** | HGIC 数据口（UART ↔ TX-AH：8 字节头 + `FRM2` + `CMD`/`EVENT`） | **✅ 完成（2026-09-21 真机全绿）** —— 帧层 + `proto/*.c` 编进固件 + `Periph/hgic_uart.*` 胶水；上机双向通（见 §五末 **c3-2b** 条） |
-| c4 | §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）+ 自限频 + 已签 ID 上报 | **内核已完成（2026-09-22）**：降级（HS256）→ 服务端验签通过（c4-α）；ES256 曲线/ECDSA/RFC 6979（c4-β-1/2）；**level=0 已接进 `idr_build()` 并过上游 `verify_report`**（c4-β-3：交叉测试 14 组 exit 0、`id-report-selftest` 7/7、服务端接受 6 条 level=0/1/2）。**c4-γ-1（2026-09-22）已接进固件主循环且★上机内容判据已过**（`tools/check_c4g1_bench.py`：`AT`→`OK` + 帧 395 B + 上游接受 level=0/trust=high；实测一条 **build_ms≈9.1 s**，即 8 MHz 上 ES256 的代价）。**c4-γ-2（2026-09-22）代码已就位、PC 侧判据已过**：nonce 换 **ATECC608B `Random(0x1B)`**（`Periph/i2c.c` 硬件 I2C1 @ `PB6/PB7` + `Periph/atecc.c` 唤醒/事务/自检 + `proto/crc16.c`/`atecc_msg.c` 纯函数层 + `id_build` 的 **nonce provider 注入点**）；交叉测试 **16 组** exit 0（新增 `crc-selftest` 7 行 / `msg-selftest` 9 行零偏差，含**外部锚点**（器件/原厂实回的字节对；★ 2026-10-10 纠正：原实现按 CRC-16/BUYPASS 是**错的** ✗，见 `docs/atecc608b-se.md` §8.2 第四段）。**剩**：上机（控制台 `se` / `id` 的 `nonce_src=se`）+ 两条待实测确认的假设（线上 CRC 模式、响应 count 36/38，见 `docs/atecc608b-se.md`） |
+| c4 | §8.2 选级 + 无 RTC（`ts=0`/`cap.rtc=false`）+ 自限频 + 已签 ID 上报 | **内核已完成（2026-09-22）**：降级（HS256）→ 服务端验签通过（c4-α）；ES256 曲线/ECDSA/RFC 6979（c4-β-1/2）；**level=0 已接进 `idr_build()` 并过上游 `verify_report`**（c4-β-3：交叉测试 14 组 exit 0、`id-report-selftest` 7/7、服务端接受 6 条 level=0/1/2）。**c4-γ-1（2026-09-22）已接进固件主循环且★上机内容判据已过**（`tools/check_c4g1_bench.py`：`AT`→`OK` + 帧 395 B + 上游接受 level=0/trust=high；实测一条 **build_ms≈9.1 s**，即 8 MHz 上 ES256 的代价）。**c4-γ-2（2026-09-22）代码已就位、PC 侧判据已过**：nonce 换 **ATECC608B `Random(0x1B)`**（`Periph/i2c.c` 硬件 I2C1 @ `PB6/PB7` + `Periph/atecc.c` 唤醒/事务/自检 + `proto/crc16.c`/`atecc_msg.c` 纯函数层 + `id_build` 的 **nonce provider 注入点**）；交叉测试 **16 组** exit 0（新增 `crc-selftest` 7 行 / `msg-selftest` 9 行零偏差，含**外部锚点**（器件/原厂实回的字节对；★ 2026-10-10 纠正：原实现按 CRC-16/BUYPASS 是**错的** ✗，见 `docs/atecc608b-se.md` §8.2 第四段）。**剩**：上机（控制台 `se` / `id` 的 `nonce_src=se`）+ 两条待实测确认的假设（线上 CRC 模式、响应 count 36/38，见 `docs/atecc608b-se.md`） ⇒ ✓ **已完成**（2026-10-11 上机；见 §8.15 与 `docs/atecc608b-se.md` §8.16–§8.30） |
 | **c4-γ-3** | **nonce 与 ES256 签名都交给 ATECC608B**（`Periph/atecc.c` 的 `atecc_sign_digest()/atecc_sign_pre()` + `id_build` 的 `idr_sign_fn` 签名器注入点） | **✅ 完成（2026-10-11 上机全绿）** —— 芯片双锁（Config+Data）+ Slot 0 里 P-256 私钥（**物理不可导出**）；`se` 自检对固定摘要签一次并打出 `r||s` ⇒ 被 **Slot 0 公钥独立验签**通过 ✓；`id` 报 `nonce_src=se sign_src=se` ✓；整帧被**上游 `verify_report` 接受**（level=0 / trust=high ✓，密钥库里登记的是这颗芯片的公钥 = 产线那一步）；`build_ms` 从 ~9 s（软件 P-256）降到 **1031 ms**（剩下的是等器件就绪的轮询）。逐步记录与两条被台架抓出来的真 bug 见 `docs/atecc608b-se.md` §8.7–§8.11 |
 | c5 | 低功耗 / 取能标定 | 推后到 d/e |
 
 **c1 实测判据（2026-09-20）**：`make clean && make` **exit=0** ⇒ `build/orpah-client.elf` 9644 B、
 `.bin` 2108 B（`text 2046` ⚠ `bss` 20224 ≈ 整个 RAM，是 `link.ld` 里 `.heap (NOLOAD)` 从 RAM 中段
 预留到顶端 − 256 造成的，**不是真用掉**；`sp = _eusrstack` 从顶端向下长）。
-**未上机**：横幅 / 心跳灯 / `AT`→`OK` 这三条是"烧进去应该看到什么"的判据，**由用户执行后确认**。
+**当时未上机**（横幅 / 心跳灯 / `AT`→`OK` 这三条是"烧进去应该看到什么"的判据，**由用户执行后确认**）
+⇒ ★ **2026-09-21 已由用户上机确认** ✓（三条全中，见 `c3-2b-bench-bringup.md` §3）。
 
 **c1 顺手更正的两条事实**（细节都写进 `firmware/README.md`）：
 
@@ -292,7 +296,7 @@ c4 要签/要做 MAC 的就是这两串，先把它们钉死。
 Mod97 是 `21`（我一开始凭记忆把 B 当成 Luhn32 期望值 ⇒ 自检当场失败。
 教训：**期望值只能来自 Python 输出**）。
 
-**c3-1（HGIC 帧层）：✅ 完成（2026-09-20，未上机）** —— `proto/hgic.{h,c}` + `proto/hgic_cli.c`：
+**c3-1（HGIC 帧层）：✅ 完成（2026-09-20 编译过；**2026-09-21 上机 ✓**）** —— `proto/hgic.{h,c}` + `proto/hgic_cli.c`：
 
 * 内容：8 B 头的组/解（**小端**、`ifidx:4|flags:4`）、数据帧 `FRM2`、命令帧 `CMD`/`CMD2`（**4 B union 补满**，
   参数在偏移 12）、cookie 计数器（**15 位回绕**、逐帧 +1 —— 模组做顺序检查）、控制面解码
@@ -423,5 +427,8 @@ Mod97 是 `21`（我一开始凭记忆把 B 当成 Luhn32 期望值 ⇒ 自检�
 `Periph/gpio.{c,h}`、`Periph/uart.{c,h}`）**改一侧必须同步另一侧**，并标清哪一侧上机验证过
 （本仓 = 已上机；参考仓 = 未上机）。
 
-**未做（如实）**：c4 的选级/无 RTC/自限频/已签上报**未上机**；`payload.nonce` 仍等 SE
-（不塞假随机）；ATECC608B 未接线；只在**这一块** nanoCH32V203 上验过。
+**未做（如实，2026-10-12 更新）**：**模组侧那一半**（帧已发到 USART2，但本台架没模组 ⇒ 缺 `[mbus rx]` 那条实测）
+与 `0x64` 谜团（见 `docs/atecc608b-se.md` §9.0）；低功耗与取能标定、d 步的**定制载板**。
+~~c4 未上机 / `payload.nonce` 等 SE / ATECC608B 未接线~~ ⇒ ✓ **三者均已结**（2026-10-11，见上表 c4-γ-3
+与 `docs/atecc608b-se.md`）—— `nonce` 与签名**都在芯片里**、都不出芯片 ✓。
+⚠ 仍然成立：只在**这一块** nanoCH32V203 + **这一颗** SE 上验过（换芯片的判据 = 锁状态读回 + 锁后重算公钥 = 登记公钥 ✓）。

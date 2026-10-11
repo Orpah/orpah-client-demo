@@ -19,6 +19,16 @@
 #   ⇒ 本仓三条 recipe 已改成**不依赖 sh**：去掉 `ls`（改用 echo）、`mkdir -p`/`rm -rf`
 #     换成 `cmd /c`（见下面的 MKDIR/RMDIR；POSIX 平台仍用 mkdir/rm）⇒ 干净树上 `make` 可跑。
 #
+# ★★ 2026-10-12 实测**更正上面最后那句**：**干净树上 `make` 现在跑不了** ✗ ——
+#   `cmd /c "…"` 那两条（MKDIR/RMDIR）在这个 make 组合下会**启动交互式 cmd** 并卡住
+#   （现场看到 cmd 的版本横幅 + `f:\…\firmware>` 提示符，recipe 永不返回）⇒
+#   `make clean` 与"`build/` 不存在时的 `make`"**都挂** ✗。
+#   **确定能用的做法**：目录先由外部建好（`build/` + `build/{Core,Periph,proto}`）之后再 `make`，
+#   一切正常 ✓ —— `tools/run_checks.py` 走的正是这条（它**不删** `build/`，所以平时不会撞上）。
+#   ⇒ 在干净树上编译：先用 PowerShell/Python 把上面四个目录建出来，再 `make` ✓。
+#   （去掉引号的 `cmd /c mkdir x` 能过，但**路径带空格就废** ✗ ⇒ 没敢这么改；
+#     正确的修法试出来之前，这里只写**实测到的**状态，不写"可跑" ✗。）
+#
 # ★ 另一条测出来的坑：变量赋值**不要写行内注释** —— `PROTO_DIR = ../proto   # 说明`
 #   会把注释前的对齐空格留在值里 ⇒ 先决条件变成 `../proto   /sn.c`（找不到）而规则静静失效，
 #   同时 `-I../proto   ` 又能编译（编译器忍受尾空格）⇒ 现象很迷惑。注释请单独一行。
@@ -92,6 +102,23 @@ PROTO_SRCS += atecc_msg.c crc16.c
 OBJS = $(addprefix $(BUILD)/, $(SRCS:.c=.o))
 OBJS += $(addprefix $(BUILD)/proto/, $(PROTO_SRCS:.c=.o))
 OBJS += $(BUILD)/startup.o
+
+# ★★ 头文件依赖（2026-10-12 补，修一个**闸门空转**的毛病）：原先**一条头依赖都没有**
+#   ⇒ 改 `Core/*.h` / `Periph/*.h` / `../proto/*.h` 之后 `make` 只报
+#   "Nothing to be done for 'all'"，**一个 .o 都不重编** ✗ ⇒ `tools/run_checks.py` 那条
+#   "固件编译（要求零 warning）"会**报 PASS 而其实什么都没编** ✗（自证陷阱的又一例）。
+#   这里取**粗粒度**依赖（把所有头文件都当先决条件）：会多编几个文件，但不会有
+#   "改了某些文件却没编"的静默漏 ✗。细粒度可用 gcc `-MMD` + include 那份 `.d`，
+#   但多一份中间文件要管，收益不大。
+#
+#   ★★ 另外**必须**同时钉住默认目标：下面这条 `$(OBJS): $(HEADERS)` 是文件里**第一条规则**，
+#     不钉的话 make 的默认目标就变成"第一个 .o" ✗ —— 实测（2026-10-12）现象是
+#     `make` 只编 `build/Core/main.o` 就 **rc=0 退出**、`.elf` 根本不生成 ✗（很能骗人：
+#     退出码 0 + 零 warning，看着像"编译通过"）。`.DEFAULT_GOAL` 那行就是为它加的 ✓。
+.DEFAULT_GOAL := all
+
+HEADERS = $(wildcard Core/*.h Periph/*.h $(PROTO_DIR)/*.h)
+$(OBJS): $(HEADERS)
 
 all: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex
 
