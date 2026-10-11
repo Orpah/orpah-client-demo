@@ -714,8 +714,12 @@ static int sha_hmac_body(uint16_t slot, const uint8_t *msg, size_t len,
         uart_printf(CONSOLE_UART, "[se] HMAC_START 失败（slot %u）\r\n", (unsigned)slot);
         return rc;
     }
-    /* ② HMAC_UPDATE：整块 64 B，0 次或多次（`param2` = 本块字节数 ✓）*/
-    while ((len - off) >= ATECC_SHA_BLOCK) {
+    /* ② HMAC_UPDATE：整块 64 B（`param2` = 0 ✓）
+     * ★★ 最后一块**留给 END**（2026-10-11 实测 ✗）：长度恰为 64 的整数倍时，
+     *   "先 UPDATE 最后一块、再发一个**空尾**"会被器件拒（`0x03`）✗；
+     *   而尾块非空的都通过 ✓（21/100/129 B），**64 B 单块直接走 END 也通过** ✓
+     *   ⇒ 循环条件要留一块（`>` 不是 `>=` ✓）。判据 = 器件内 HMAC = 软件 HMAC 逐字节 ✓。*/
+    while ((len - off) > ATECC_SHA_BLOCK) {
         pklen = (uint32_t)atecc_msg_sha_update(pkt, sizeof(pkt), msg + off,
                                               ATECC_SHA_BLOCK, with_crc);
         if (pklen == 0u) { return ATECC_E_ARG; }
@@ -727,7 +731,7 @@ static int sha_hmac_body(uint16_t slot, const uint8_t *msg, size_t len,
         }
         off += ATECC_SHA_BLOCK;
     }
-    /* ③ 608_HMAC_END：尾块（可能 0 B）⇒ 响应就是 32 B 摘要 ✓ */
+    /* ③ 608_HMAC_END：剩下的 ≤ 64 B（可能是整整一块）⇒ 响应就是 32 B 摘要 ✓ */
     pklen = (uint32_t)atecc_msg_sha_hmac_end(pkt, sizeof(pkt), msg + off,
                                              len - off, with_crc);
     if (pklen == 0u) { return ATECC_E_ARG; }

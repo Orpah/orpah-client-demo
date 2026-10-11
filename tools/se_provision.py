@@ -482,9 +482,20 @@ class Se:
         rc, resp, note = self.cmd(pkt, 4, wait_ms=WAIT_MS_CRYPTO)
         if rc != 0:
             return None, "HMAC_START：" + note
-        rest = len(msg) % SHA_BLOCK if len(msg) else 0
+        # ★★ 尾块的取法（2026-10-11 实测 ✗）：**尾块不能是空的**
+        #   长度恰为 64 的整数倍时，"先把最后一块 UPDATE、再发一个**空尾**"会被器件拒（0x03）✗；
+        #   而 21 / 100 / 129 B（尾块非空）**都逐字节相同** ✓ ⇒ 所以**最后一块直接走 END** ✓。
+        #   （判据：器件内 HMAC = 软件 HMAC，逐字节 ✓ —— 不靠"它没报错" ✓）
+        if len(msg) == 0:
+            nblk, tail = 0, b""
+        elif len(msg) % SHA_BLOCK == 0:
+            nblk = len(msg) // SHA_BLOCK - 1          # ★ 留最后一块给 END ✓
+            tail = bytes(msg[nblk * SHA_BLOCK:])
+        else:
+            nblk = len(msg) // SHA_BLOCK
+            tail = bytes(msg[nblk * SHA_BLOCK:])
         off = 0
-        while len(msg) - off >= SHA_BLOCK:
+        for _ in range(nblk):
             self._settle(HMAC_STEP_GAP_MS)
             # ★ param2 = **0**（不是 SHA_BLOCK ✗）—— 2026-10-11 实测，见 `SHA_MODE_HMAC_UPDATE` 处
             pkt = ci.atecc_pkt(OP_SHA, SHA_MODE_HMAC_UPDATE, 0, self.crc,
@@ -494,7 +505,6 @@ class Se:
             if rc != 0:
                 return None, "HMAC_UPDATE@%d：%s" % (off, note)
             off += SHA_BLOCK
-        tail = bytes(msg[off:off + rest])
         self._settle(HMAC_STEP_GAP_MS)
         pkt = ci.atecc_pkt(OP_SHA, SHA_MODE_608_HMAC_END | SHA_TARGET_TEMPKEY, len(tail),
                            self.crc, extra=tail)
