@@ -904,6 +904,69 @@ PASS 板上那条签名被 **Slot 0 的公钥独立验过**（Prehashed(SHA256)�
 - `Lock(Data)` 的 param1 = `0x00` 仍是**推断** ✗（只实测了 `Lock(Config) = 0x80` ⇒ `07 17 80 00 00 39 8D` ✓）
   ⇒ **第一颗新片上机时先抓原厂 `atcab_lock_data_zone()` 的真包**再照抄 ✓（`se_provision.py` 里也标了 ✓）。
 
+### 8.13 ★★ 参数值：**引原厂源码**核对（2026-10-11，一次抓出我们两个错 ✗）
+
+做产线流程时还剩两个"猜的值"（`Lock(Data)` 的 param1、`GenKey` 的模式 ✗）——
+**没上机就不许猜** ✓ ⇒ 改去读**原厂源码**（`MicrochipTech/cryptoauthlib`；只**引数值与口径**，
+不搬代码 ✗ —— 与 §8.3 同一条界线 ✓）。结果**当场抓出我们工具里两个错** ✗：
+
+| 项 | 值 | 出处（原厂源码，逐文件可核 ✓） | 与实测/我们 |
+|---|---|---|---|
+| `Read` 的 **32 B 位** | param1 `0x80` = `ATCA_ZONE_READWRITE_32` | `lib/calib/calib_command.h` | **实测同值** ✓（§8.12 那四条 `07 02 80 …`）——原厂读配置区正是靠这一位 ✓ |
+| `Read` 的**地址单位** | config/OTP：`(block << 3) \| offset`；data：`slot<<3 \| offset \| block<<8` | `lib/calib/calib_basic.c::calib_get_addr()` | **实测同值** ✓（四条地址 `0x00/0x08/0x10/0x18` = **字地址** ✓，正好是 4 个 32 B 块 ✓） |
+| `param2` **小端** | `packet->param2 = ATCA_UINT16_HOST_TO_LE(param2)` | `lib/calib/calib_command.c::atCalcCrc()` | **实测同值** ✓（`08 00`）——两个**互相独立**的来源都指向小端 ✓ |
+| `Lock` 锁 **Config** | `0x80` = `LOCK_ZONE_NO_CRC｜LOCK_ZONE_CONFIG` | `calib_lock.c::calib_lock_config_zone()` + `calib_command.h` | **实测同值** ✓（`07 17 80 00 00 39 8D`）⇒ 证明这套常量读对了 ✓ |
+| `Lock` 锁 **Data** | **`0x81`** = `LOCK_ZONE_NO_CRC｜LOCK_ZONE_DATA`（`CONFIG=0x00`/`DATA=0x01`/`NO_CRC=0x80`） | 同上，`calib_lock_data_zone()` | ✗ 我们原来写 **`0x00`** ⇒ **错**（那是"config、不带 CRC"，会锁错区/报错）⇒ 已改 ✓；⚠ **仍未实测** ✗ |
+| `GenKey` = **创建私钥** | **`0x04`** = `GENKEY_MODE_PRIVATE` | `calib_genkey.c::calib_genkey()` | ✗ 我们原来用 `0x00` ⇒ **错**（`0x00` 是"只按已有钥算公钥"✗）⇒ 已改 ✓；⚠ **仍未实测** ✗ |
+| `GenKey` = **只算公钥** | `0x00` = `GENKEY_MODE_PUBLIC` | `calib_genkey.c::calib_get_pubkey()` | **实测同值** ✓（`07 40 00 00 00 00 05`，§8.10 第 ① 步就是它 ✓） |
+| `Sign` 外部消息档 | `0xA0` = `SIGN_MODE_EXTERNAL(0x80)｜SIGN_MODE_SOURCE_MSGDIGBUF(0x20)` | `calib_command.h` | **实测同值** ✓（`07 41 A0 …`） |
+| `Nonce` 装入摘要档 | `0x43` = `NONCE_MODE_TARGET_MSGDIGBUF(0x40)｜PASSTHROUGH(0x03)` | `calib_command.h` | **实测同值** ✓（`27 16 43 …`） |
+
+★★ **教训（比数值本身值钱）**：
+1. **"猜一个能跑的" ≠ "对"** ✗ —— 那两个错**都不会立刻报错**：`Lock(Data)=0x00` 会去锁
+   **配置区**（已锁 ⇒ 可能只回 `0x0F`、看起来像"已经锁过了" ✗），`GenKey=0x00` 会**返回一个
+   不是槽里那把钥的公钥** ⇒ 拿它登记进密钥库，**全部验签不过** ✗✗（而且是在芯片锁死之后才发现 ✗）。
+2. ⇒ **凡"要发给器件"的值，要么实测、要么引权威源** ✓ —— 两者能**互证**最好（上表里
+   5 条的"引证值 = 实测包" 就是这种互证 ✓）。**只凭"大概是这样"就上产线是不行的** ✗。
+3. ⇒ **引证值也别当实测** ✗：上表两条带 ⚠ 的，首片上机时的判据**不是"包长得对"**，而是
+   **读回锁状态**（`LockValue` 变 `0x00` ✓）与 **"锁后按槽内钥重算公钥 = 登记公钥"** ✓
+   （已写进 `se_provision.py` 的 `verify` ✓ —— 它就是"创建那一步真生效了吗"的第二个声音 ✓）。
+
+### 8.14 ★★ 降级 HMAC 密钥要放进 SE：**先把"这槽能不能写"问清**（2026-10-11）
+
+用**原厂自带的结构体**（`cryptoauthlib.device.Atecc608Config`）解我们那颗的 128 B 配置，
+把 16 个槽的关键字段列出来（`SlotConfig` / `KeyConfig` ✓）：
+
+| 槽 | IsSecret | WriteKey | **WriteConfig** | KeyType | Lockable | 判读 |
+|---|---|---|---|---|---|---|
+| 0/1/2 | 1 | 0 | 2 | **4 = P-256** | **1** | ECDSA 私钥槽 ✓（Slot 0 就是我们要的 ✓） |
+| **3/4** | 1 | **15** | **8** | **7 = SHA/HMAC** | 0 | **HMAC 槽** ✓，但写它要**带 MAC** ✗ |
+| 5/6/7/15 | 1 | 15 | 8 | 7 | 0 | 同类（15 是"父钥"槽 —— 被 3–7 当 WriteKey ✓） |
+| 8–14 | 0 | 0 | **0** | 7 | 1 | **明文可写** ✓（原厂 `calib_write_pubkey()` 就是明文写 8–15 ✓ —— 这是"`WriteConfig=0` = 明文写"的**代码级证据** ✓） |
+
+★★ 写 HMAC 槽（3/4）不能像写一个普通数据那样一条 `Write` 了事 ✗ —— 原厂自己走的是
+`calib_write_enc()`（出处：`lib/calib/calib_write.c`，我们只**引口径/顺序** ✓）：
+`Nonce(随机)` → 主机算 TempKey（`atcah_nonce`）→ `GenDig(GENDIG_ZONE_DATA, WriteKey槽, OtherData)`
+→ 主机算会话钥（`atcah_gen_dig`）→ 主机算 `atcah_write_auth_mac` → `Write(zone|ENCRYPTED, addr, 密文, MAC)`
+⇒ **主机侧那三段 TempKey/MAC 计算要我们自己实现** ✗（公式在**数据手册**里 ⇒ ⚠ 我们手上那份是
+**NDA 摘要版、没有命令集/真值表** ✗ ⇒ 要么找到全本手册 ✓、要么先拿原厂库把这套**逐字节核对**一遍 ✓）。
+
+★ **两条路（取舍要说清，别偷偷选 ✗）**：
+
+| | (A) 保留出厂配置 + 实现**加密写** ✓ | (B) 改配置：把要用的槽 `WriteConfig` 8→**0** ✓ 然后明文写 |
+|---|---|---|
+| 工作量 | 大（主机侧 TempKey/MAC ✗） | 小（一条明文 `Write` ✓ 但要**改配置** ✗） |
+| 时序 | **不要求**在锁之前做完 ✓ —— 原厂 `calib_write_enc()` 的 docstring 原话："**Data zone must be locked** and the slot configuration must be set to encrypted write for the block to be successfully written" ✓ ⇒ 加密写正是**锁后**还能写的手段 ✓ | **必须**在 `lock-config` **之前**改 ✗（配置一锁就改不了 ✗） |
+| 安全 | 每次写都要 WriteKey(槽 15) 的 MAC ✓ ⇒ 想在总线上偷偷换掉这把钥**也办不到** ✓ | 锁数据区之前的那段时间里，总线上**任何人都能覆盖**这把钥 ✗（差一档 ✓） |
+| 适用于**已双锁**的现在这颗 | ✓（加密写仍然可用 ✓） | ✗（配置已锁 ✗） |
+
+★★ **⇒ 可执行结论**：这两条路**决定"要不要先锁"** ⇒
+**新片在决定之前一律先别锁** ✗（`lock-config`/`lock-data` 都不可逆 ✓）——
+现在那颗已锁的片子只做读/签/验 ✓，**不要**拿它试写 HMAC ✗。
+⚠ 标注：`WriteConfig = 8` 的"encrypt"含义**没有手册表可引** ✗（我们那份是摘要版 ✗）—— 上表是
+**从原厂库的实际行为反推** ✓（8–14 明文可写 ↔ `WriteConfig=0` ✓；3–7 走 `calib_write_enc()` ✓）
+⇒ 首片用**原厂库 `atcab_write_enc`** 写一次、并**读回核对**，当场把这条钉死 ✓。
+
 ## 9. 未做 / 边界（本轮，如实）
 
 - **§6 那张"上机判据"表**：2026-10-10/11 已填 **1/2/2b/3/4 五条** ✓（第 5 条 `idsend` 那轮没跑 ⇒ 仍空）；

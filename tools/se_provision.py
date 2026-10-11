@@ -62,9 +62,21 @@ OP_GENKEY = 0x40
 OP_NONCE = 0x16
 OP_SIGN = 0x41
 MODE_READ_32 = 0x80     # `Read` 的 32 B 模式（§8.4 记的就是这样读的四块）
-LOCK_ZONE_CONFIG = 0x80 # `Lock` 的 zone：Config（实测包 `07 17 80 00 00 39 8D` ✓）
-LOCK_ZONE_DATA = 0x00   # `Lock` 的 zone：Data（p1=0x00；★ 首次上机时与参照对拍记下 ✓）
-GENKEY_MODE_NEW = 0x00  # GenKey：生成（槽已锁时它**返回已有公钥**、不会重新生成 ✓ 实测过）
+LOCK_ZONE_CONFIG = 0x80  # `Lock` 的 zone：Config —— 实测包 `07 17 80 00 00 39 8D` ✓
+# `Lock` 的 zone：Data。★ 2026-10-11 按**原厂源码**定案（不再靠猜 ✗）：
+#   `calib_command.h`：`LOCK_ZONE_CONFIG 0x00` / `LOCK_ZONE_DATA 0x01` / `LOCK_ZONE_NO_CRC 0x80`
+#   `calib_lock.c`：`lock_config_zone()` = `LOCK_ZONE_NO_CRC|LOCK_ZONE_CONFIG` = **0x80** ✓
+#                  （与上一条实测包逐字节对得上 ✓ ⇒ 证明这套常量读对了 ✓）
+#                  `lock_data_zone()`   = `LOCK_ZONE_NO_CRC|LOCK_ZONE_DATA`   = **0x81** ✓
+#   ⚠ 原来写 0x00 是**错的** ✗（那会变成“不用 CRC 的 config 锁” ⇒ 锁错区/报错）。
+LOCK_ZONE_DATA = 0x80 | 0x01
+# GenKey 两档（出处 = 原厂 `calib_genkey.c`；`calib_command.h` 里是 `GENKEY_MODE_*`）：
+#   `calib_genkey()`      → `GENKEY_MODE_PRIVATE (0x04)` = **在槽里新建**私钥 + 回公钥
+#   `calib_get_pubkey()`  → `GENKEY_MODE_PUBLIC  (0x00)` = **只由已有私钥算**公钥（不写）
+# ⚠ 0x00 **不是**“新建” ✗ —— 产线“生成密钥”那一步必须用 0x04 ✓
+#   （拿 0x00 去当新建用，会拿到一个“不是槽里那把钥”的公钥 ⇒ 登记进密钥库就全盘验不过 ✗✗）。
+GENKEY_MODE_PRIVATE = 0x04
+GENKEY_MODE_PUBLIC = 0x00
 NONCE_MODE_MSGDIGBUF = 0x43
 SIGN_MODE_EXTERNAL = 0xA0
 SIGN_SLOT = 0x0000
@@ -211,8 +223,9 @@ class Se:
                 return st, "状态 0x%02X（%s）" % (st, nm)
         return None, "没读到 4 字节状态包"
 
-    def genkey(self, slot):
-        pkt = ci.atecc_pkt(OP_GENKEY, GENKEY_MODE_NEW, slot, self.crc)
+    def genkey(self, slot, mode=GENKEY_MODE_PRIVATE):
+        """`mode` 缺省 = **创建**（0x04）。只想按已存的钥算公钥就传 `GENKEY_MODE_PUBLIC` ✓。"""
+        pkt = ci.atecc_pkt(OP_GENKEY, mode, slot, self.crc)
         rc, resp, note = self.cmd(pkt, 1 + 64 + (2 if self.crc else 0))
         if rc != 0:
             return None, note
@@ -313,18 +326,26 @@ def step_lock_config(se, args, cfg=None):
 
 def step_genkey(se, args):
     print("  ✗ 生成 Slot 0 的 P-256 私钥（**只**导出公钥；私钥物理不出芯片 ✓）")
+    print("    模式 = 0x%02X（原厂 `calib_genkey()` = GENKEY_MODE_PRIVATE ⇒ **真的新建** ✓）"
+          % GENKEY_MODE_PRIVATE)
     pub, note = se.genkey(SIGN_SLOT)
     if pub is None:
         print("FAIL GenKey(0) 失败：%s" % note)
+        if "0x0F" in note:
+            print("     ⇒ `0x0F cannot execute` 的常见成因：**数据区已经锁了** ✗ ⇒ 创建不了新钥 ✓")
+            print("        （已锁的片子上只用 `verify`：它按 `GENKEY_MODE_PUBLIC` 只算公钥 ✓，不写芯片 ✓）")
         return 2, None
     print("  Slot 0 公钥：X = %s" % hexs(pub[:32]))
     print("                Y = %s" % hexs(pub[32:]))
     print("PASS 公钥已导出（hex = %s）" % pub.hex())
+    print("     ⇒ 拿它去密钥库登记（见 `--record`；登记后再 `lock-data` ✗）")
     return 0, pub
 
 
 def step_lock_data(se, args, cfg=None):
     print("  ✗ 不可逆：锁**数据区**（Slot 0 的私钥从此改不了 = 规范 §6 要的“一代终身” ✓）")
+    print("    param1 = 0x%02X（引原厂 `calib_lock_data_zone()` ✓；★ 本条**未实测** —— 首片看读回）"
+          % LOCK_ZONE_DATA)
     st, note = se.lock_zone(LOCK_ZONE_DATA)
     print("  Lock(Data) → %s" % note)
     if st is None:
@@ -360,13 +381,26 @@ def step_verify(se, args, pub=None):
         print("FAIL Random 回的是 `FFFF0000` 模式 ⇒ **配置区还没锁** ✗（未锁时器件就是回这个）")
         return 2, None
     print("PASS 真随机数 32 B：%s" % hexs(rnd[:16]))
-    # ② 公钥（没给就现取）
+    # ② 公钥：**只按槽里已有的钥算**（`GENKEY_MODE_PUBLIC` = 不写芯片 ✓）。
+    #   ★★ 这一条是“创建那一步真的生效了”的**第二个声音** ✓：
+    #     若创建时用错模式（算了个不属于槽里的公钥），这里重算出来的就会**与登记的不等** ✗；
+    #     而且它是在 `lock-data` **之后**算的 ⇒ 槽里的钥已经改不了 ⇒ 相等才算数 ✓。
+    pub_now, note = se.genkey(SIGN_SLOT, GENKEY_MODE_PUBLIC)
+    if pub_now is None:
+        print("FAIL 取公钥失败（GenKey mode 0x00）：%s" % note)
+        return 2, pub
     if pub is None:
-        pub, note = se.genkey(SIGN_SLOT)
-        if pub is None:
-            print("FAIL 取公钥失败（GenKey）：%s" % note)
-            return 2, None
-        print("  Slot 0 公钥 = %s" % pub.hex())
+        print("  Slot 0 公钥（按槽内已有钥算）= %s" % pub_now.hex())
+        pub = pub_now
+    elif pub_now != pub:
+        print("FAIL 锁后重算的公钥与登记的公钥**不等** ✗")
+        print("      登记：%s" % pub.hex())
+        print("      现算：%s" % pub_now.hex())
+        print("     ⇒ 说明“创建私钥”那一步没真把钥写进槽 ✗（别拿这个公钥去登记 ✗）")
+        return 2, pub
+    else:
+        print("PASS 锁后按槽内已有的钥重算公钥 = 登记的公钥 ✓（逐字节相同，%s…）"
+              % pub_now.hex()[:32])
     # ③ 签一条固定摘要 + **独立验签**
     dg = hashlib.sha256(SELFTEST_MSG).digest()
     sig, note = se.sign_digest(dg)
@@ -398,12 +432,15 @@ REF_DIGEST = hashlib.sha256(SELFTEST_MSG).hexdigest()
 def selftest():
     """离线自检：把**台架实测的包字节**当锚点，验本工具的组包/CRC（不碰硬件 ✓）。
 
-    锚点全是 2026-10-11 用**原厂库**驱动时**原厂栈实发**的字节（§8.10）⇒ 不是我们自己说的 ✓。
+    锚点全是 2026-10-11 用**原厂库**驱动时**原厂栈实发**的字节（§8.10/§8.12）⇒ 不是我们自己说的 ✓。
     ⚠ 这几条同时把“我抄错一个字节”钉住 ✓：包尾那 2 字节 CRC 就是整包的校验和。
-    还没实测过的那两条（`Lock(Data)` / 32 B 块 `Read`）**不写成锚点** ✗ —— 等首片上机两边对拍再补 ✓。"""
+    ★ 没实测过的包**不写成锚点** ✗ —— 它们的值只能靠**引原厂源码**（包字节仍是没见过的）：
+      `Lock(Data)` 的 param1 = `0x81`（`calib_lock.c` + `calib_command.h`，见文件头常量处 ✓）。
+      这类“引证值”在**首片上机**时第一次真发出去 —— 判据是**读回锁状态**（`LockValue` 变 0x00 ✓）
+      与 `verify` 里的“锁后重算公钥 = 登记公钥” ✓，不是“包长得对” ✗。"""
     anchors = [
         ("Lock(Config)", ci.atecc_pkt(OP_CMD, LOCK_ZONE_CONFIG, 0, True), "0717800000398d"),
-        ("GenKey(slot0)", ci.atecc_pkt(OP_GENKEY, GENKEY_MODE_NEW, 0, True), "07400000000005"),
+        ("GetPubKey(slot0)", ci.atecc_pkt(OP_GENKEY, GENKEY_MODE_PUBLIC, 0, True), "07400000000005"),
         ("Sign(slot0)", ci.atecc_pkt(OP_SIGN, SIGN_MODE_EXTERNAL, 0, True), "0741a000007b85"),
         ("Random", ci.atecc_pkt(0x1B, 0x00, 0, True), "071b00000024cd"),
         ("Nonce(摘要)", ci.atecc_pkt(OP_NONCE, NONCE_MODE_MSGDIGBUF, 0, True,
@@ -511,7 +548,7 @@ def main():
         else:
             rc, pub = step_verify(se, args, pub)
     except ci.cs.Ch347Error as exc:
-        # ★ 实测踩过（2026-10-12）：总线上没有器件应答时 DLL 只报 "CH347StreamI2C 失败" ✗ ——
+        # ★ 实测踩过（2026-10-11）：总线上没有器件应答时 DLL 只报 "CH347StreamI2C 失败" ✗ ——
         #   抛 traceback 对现场毫无帮助 ✓ ⇒ 一行判语 + 下一步该查什么 ✓。
         print("FAIL I²C/USB 层失败：%s" % exc)
         print("⇒ 查三件事：① nano 断电 / 按住 RST ✓ ② 只有一个进程用 CH347 ✓"

@@ -128,7 +128,8 @@ openocd -f interface/wch-link.cfg -f target/ch32v20x.cfg \
 - **b 步的物理通路**（数据面走哪一条：USB→SPI MACBUS / RJ45 桥）——**尚未定** ✗（控制面 + 回程已通，见 `ROADMAP.md` §二）；
 - 与 `orpah-over-halow`（服务端/仿真器）、`orpah-openwrt-demo`（路由器侧）的**真机联调**（e 步）；
 - 功耗实测（免电池取能曲线）、**产线流程在真片上跑完**（工具已入库 `tools/se_provision.py` ✓，
-  但手上剩 **7 颗** SE 还没配 —— 第一颗上机时要顺带**抓原厂 `Lock(Data)` 的真包**，因为那一档还是推断 ✗）；
+  用户已焊好 **3 片**待配；流程里两个**引原厂源码**定的值还没上机实测：`Lock(Data)`=0x81、
+  `GenKey` 创建=0x04 —— 首片的判据是**读回锁状态** + **锁后重算公钥=登记公钥**，见 `docs/atecc608b-se.md` §8.13）；
 **HMAC 降级密钥**目前在固件里是**演示派生**（规范 §6 的真机该把它也放进 SE）。
 
 （**已完成、别再说「未做」**：`proto/` 协议内核（与 Python 参考零偏差）、
