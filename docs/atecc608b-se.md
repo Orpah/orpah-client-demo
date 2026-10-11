@@ -967,6 +967,29 @@ PASS 板上那条签名被 **Slot 0 的公钥独立验过**（Prehashed(SHA256)�
 **从原厂库的实际行为反推** ✓（8–14 明文可写 ↔ `WriteConfig=0` ✓；3–7 走 `calib_write_enc()` ✓）
 ⇒ 首片用**原厂库 `atcab_write_enc`** 写一次、并**读回核对**，当场把这条钉死 ✓。
 
+★★ **用户 2026-10-11 选定 (B)，已实现进 `tools/se_provision.py`**（`config-hmac` / `write-hmac` /
+`hmac-verify` 三步 ✓）—— 三处**报文形状**都引原厂源码（不是猜 ✓）：
+
+| 步 | 发什么 | 出处 / 为什么是这个形状 |
+|---|---|---|
+| `config-hmac` | `Write` param1 = **`0x00`**（zone，**不带** 32 B 位）、param2 = **字地址 `7`**、数据 4 B | ⚠ **只能按 4 B 字写** ✗：config 前 16 B（序列号）不可写 ✓（原厂 `calib_write_config_zone()` 自己就 "skip the first 16 bytes" ✓）⇒ 32 B 块写会连序列号一起写、必然失败 ✗ |
+| `write-hmac` | `Write` param1 = **`0x82`**（data｜32 B 位）、param2 = **`0x20`**（slot 4 ⇒ `4<<3` ✓）、数据 32 B | 数据区未锁时**只允许 32 B 写** ✓（原厂 `calib_write_bytes_zone()` 的 docstring 原话）⇒ 必须整块写 ✓ |
+| `hmac-verify` | `SHA(0x47)`：`param1=0x04, param2=slot` → 若干 `param1=0x01, param2=64` → `param1=0x02\|0x00, param2=尾巴<64` | 顺序/模式照原厂 `calib_sha_hmac_{init,update,finish}()` ✓；**608 的 HMAC 结束码 = `0x02`** ✓（`SHA_MODE_608_HMAC_END` ✓）；落点 `0x00`=TempKey（同 `NONCE/KDF_MODE_TARGET_TEMPKEY` ✓）；⚠ 响应里**总是**回 32 B 摘要 ✓ ⇒ 落点不影响取值 ✓。**HMAC 不走 `Nonce`** ✓（原厂 `calib_sha_hmac_init()` 里没有 ✓）⇒ 密钥不出芯片 ✓ |
+
+★ **补丁的字节位置不是猜的** ✓（`config-hmac` 里那三个常量）：由原厂结构体的字段顺序推出
+`SlotConfig` 从 **byte 20** 起、每槽 2 B 小端 ⇒ slot 4 的 word 在 **byte 28**、`WriteConfig` = 高 4 位 ✓；
+旁证两条：① `Counters` 的字节偏移 **52** 正好 = 20 + 16×2 ✓（原厂写计数器用的就是 `52 + i*8` ✓）；
+② 拿解码结果对账：slot 0 = `83 20`(LE `0x2083`) ⇒ ReadKey=3/IsSecret=1/WriteConfig=2 ✓、
+slot 4 = `8F 8F`(LE `0x8F8F`) ⇒ ReadKey=15/WriteKey=15/WriteConfig=8 ✓✓ 与解码表**逐字段一致** ✓。
+⇒ 补丁 = `0x8F8F → **0x0F8F**`（只动 **byte 29** 一个字节 ✓）。
+
+★ **`--selftest` 里加了这条的数值真值校验**（纯离线 ✓），而且它**当场抓到我一个错** ✗：
+我原来断言"会差 byte 28/29 **两个**字节" ✗ —— 实际 `0x8F8F→0x0F8F` 只改**高字节** ✓。
+⇒ 不变量应当写成"**只允许**在这两个字节里变" ＋ "**word 值对**" ✓（不是"必须变两个" ✗）；
+**同一条错也在 `config-hmac` 的读回判据里**（真上机时会假报 FAIL ✗✗）⇒ 一并改掉 ✓。
+另：本机装了原厂包时会**再用它的结构体解一遍**做第二个声音 ✓（`crc_ok` 那套思路 ✓），
+没装就跳过并说明 ✓。
+
 ## 9. 未做 / 边界（本轮，如实）
 
 - **§6 那张"上机判据"表**：2026-10-10/11 已填 **1/2/2b/3/4 五条** ✓（第 5 条 `idsend` 那轮没跑 ⇒ 仍空）；
