@@ -642,6 +642,12 @@ int atecc_sign_pre(uint8_t out64[ATECC_SIGN_BYTES], const void *pre, size_t prel
 /* ★★ 上机扫参数用的运行期副本（缺省 = 上面两个常数；控制台 `setime` 可改 ✓）*/
 static uint32_t s_restarts       = ATECC_HMAC_RESTARTS;
 static uint32_t s_restart_gap_ms = ATECC_RESTART_GAP_MS;
+/* ★★★ 序列**中间**要不要每次发唤醒令牌（缺省 1 = 现行为 ✓；控制台可改成 0 试）。
+ * 可疑点 ✗：器件本来就醒着时，那个令牌是**白送的额外 I²C 事务** —— 它是序列里唯一的多余动作，
+ *   而我们的失败位置又是**随机**的（挂第 1/2/3 条都有）⇒ 值得单独把它关掉试一次 ✓。
+ * ⚠ 不能全关：PC 侧实测“一条都不发”连 100 B 也挂 ✗（器件在命令间隙会睡 ✓）
+ *   ⇒ 所以这里的语义是：**每趟的第一条（`START`）必发** ✓，中间的由这个旋钮定 ✓。*/
+static int      s_wake_each      = 1;
 
 /* 用主循环的 1 ms 时基等一段（只给"给器件收尾"用；调用方在主循环上下文 ✓）*/
 static void gap_ms(uint32_t ms)
@@ -655,7 +661,7 @@ static void gap_ms(uint32_t ms)
  *   `want_status` = 1 ⇒ 期望 4 B 状态包（状态 0）；= 0 ⇒ 期望 33/35 B 摘要（写进 `out32`）。
  * 返回 0 = OK；<0 = 错误码。*/
 static int sha_txn(const uint8_t *pkt, uint32_t pklen, int want_status,
-                   uint8_t out32[ATECC_SHA_DIGEST_BYTES])
+                   uint8_t out32[ATECC_SHA_DIGEST_BYTES], int wake)
 {
     uint8_t resp[ATECC_RESP_LEN_SHA_CRC];
     uint32_t attempt, i;
@@ -675,7 +681,9 @@ static int sha_txn(const uint8_t *pkt, uint32_t pklen, int want_status,
         }
         uart_printf(CONSOLE_UART, "\r\n");
 
-        (void)atecc_wake();             /* 器件若已醒，它对令牌回 NACK —— 不早退 ✓ */
+        if (wake) {
+            (void)atecc_wake();         /* 器件若已醒，它对令牌回 NACK —— 不早退 ✓ */
+        }
         i2c_stats(&a);
         rc = transact(pkt, pklen, resp, sizeof(resp), &replen);
         i2c_stats(&b);
@@ -745,7 +753,7 @@ static int sha_hmac_once(uint16_t slot, const uint8_t *msg, size_t len,
     /* ① HMAC_START：param2 = **key slot**（钥在器件里，我们只报槽号 ✓）*/
     pklen = (uint32_t)atecc_msg_sha_start(pkt, sizeof(pkt), slot, with_crc);
     if (pklen == 0u) { return ATECC_E_ARG; }
-    rc = sha_txn(pkt, pklen, 1, out32);
+    rc = sha_txn(pkt, pklen, 1, out32, 1);      /* ★ START 必发唤醒 ✓ */
     if (rc != 0) {
         uart_printf(CONSOLE_UART, "[se] HMAC_START 失败（slot %u）\r\n", (unsigned)slot);
         return rc;
@@ -759,7 +767,7 @@ static int sha_hmac_once(uint16_t slot, const uint8_t *msg, size_t len,
         pklen = (uint32_t)atecc_msg_sha_update(pkt, sizeof(pkt), msg + off,
                                               ATECC_SHA_BLOCK, with_crc);
         if (pklen == 0u) { return ATECC_E_ARG; }
-        rc = sha_txn(pkt, pklen, 1, out32);
+        rc = sha_txn(pkt, pklen, 1, out32, s_wake_each);
         if (rc != 0) {
             uart_printf(CONSOLE_UART, "[se] HMAC_UPDATE@%u 失败\r\n", (unsigned)off);
             return rc;
@@ -770,7 +778,7 @@ static int sha_hmac_once(uint16_t slot, const uint8_t *msg, size_t len,
     pklen = (uint32_t)atecc_msg_sha_hmac_end(pkt, sizeof(pkt), msg + off,
                                              len - off, with_crc);
     if (pklen == 0u) { return ATECC_E_ARG; }
-    rc = sha_txn(pkt, pklen, 0, out32);
+    rc = sha_txn(pkt, pklen, 0, out32, s_wake_each);
     if (rc != 0) {
         uart_printf(CONSOLE_UART, "[se] HMAC_END 失败\r\n");
         return rc;
@@ -828,23 +836,25 @@ int atecc_sha_hmac(uint16_t slot, const uint8_t *msg, size_t len,
 
 /* ★★ 上机扫时序的旋钮（见 `atecc.h` 的声明与 `s_sha_*` 处）—— 只影响 SHA/HMAC 这一段 ✓。*/
 void atecc_sha_timing_set(int poll, uint32_t ready_ms, uint32_t gap_ms,
-                          uint32_t restart_gap_ms, uint32_t restarts)
+                          uint32_t restart_gap_ms, uint32_t restarts, int wake_each)
 {
     s_sha_poll       = (poll != 0) ? 1 : 0;
     s_sha_ready_ms   = ready_ms;
     s_sha_gap_ms     = gap_ms;
     if (restart_gap_ms > 0u) { s_restart_gap_ms = restart_gap_ms; }
     if (restarts > 0u)       { s_restarts = restarts; }
+    s_wake_each      = (wake_each != 0) ? 1 : 0;
 }
 
 void atecc_sha_timing_get(int *poll, uint32_t *ready_ms, uint32_t *gap_ms,
-                          uint32_t *restart_gap_ms, uint32_t *restarts)
+                          uint32_t *restart_gap_ms, uint32_t *restarts, int *wake_each)
 {
     if (poll != 0)           { *poll = s_sha_poll; }
     if (ready_ms != 0)       { *ready_ms = s_sha_ready_ms; }
     if (gap_ms != 0)         { *gap_ms = s_sha_gap_ms; }
     if (restart_gap_ms != 0) { *restart_gap_ms = s_restart_gap_ms; }
     if (restarts != 0)       { *restarts = s_restarts; }
+    if (wake_each != 0)      { *wake_each = s_wake_each; }
 }
 
 /* 固件里没有 strcmp（-nostdlib）—— 就地比一下那两个短名字（口径 = `proto/id_report.h` ✓）*/

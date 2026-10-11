@@ -273,14 +273,14 @@ static void cmd_status(void)
     }
     /* ★★ SHA/HMAC 的时序旋钮（`setime` 可改 ✓）—— 放在状态里，好让现场确认“这次跑的是哪组参数” ✓ */
     {
-        int poll;
+        int poll, wake;
         uint32_t ready, gap, rgap, rst;
 
-        atecc_sha_timing_get(&poll, &ready, &gap, &rgap, &rst);
+        atecc_sha_timing_get(&poll, &ready, &gap, &rgap, &rst, &wake);
         uart_printf(CONSOLE_UART,
                     "[id] sha timing: poll=%d ready_ms=%u gap_ms=%u restart_gap_ms=%u restarts=%u"
-                    "（setime 可改 ✓）\r\n",
-                    poll, (unsigned)ready, (unsigned)gap, (unsigned)rgap, (unsigned)rst);
+                    " wake_each=%d（setime 可改 ✓）\r\n",
+                    poll, (unsigned)ready, (unsigned)gap, (unsigned)rgap, (unsigned)rst, wake);
     }
     /* ⚠ 如实：软熵后端只保证"同一 boot 内不重复"。**跨 boot 若上电熵撞了，整段 nonce 会重**
      *   ⇒ 服务端按重放丢弃（= 漏报）。把这个值打出来，好让人一眼看出撞了没。*/
@@ -399,10 +399,10 @@ int idc_console(const char *cmd, uint32_t now_ms)
      *   **烧一次、之后每轮只要敲一行** ✓。不带参数就只打印当前值 ✓。*/
     if (str_prefix(cmd, "setime")) {
         const char *arg = cmd + 6;
-        long v[5];
+        long v[6];
         int n = 0;
 
-        while (n < 5) {
+        while (n < 6) {
             long x = 0;
             int got = 0;
 
@@ -416,27 +416,29 @@ int idc_console(const char *cmd, uint32_t now_ms)
             v[n++] = x;
         }
         if (n >= 1) {
-            int poll;
+            int poll, wake;
             uint32_t ready, gap, rgap, rst;
 
-            atecc_sha_timing_get(&poll, &ready, &gap, &rgap, &rst);
+            atecc_sha_timing_get(&poll, &ready, &gap, &rgap, &rst, &wake);
             poll = (int)v[0];
             if (n >= 2) { ready = (uint32_t)v[1]; }
             if (n >= 3) { gap = (uint32_t)v[2]; }
             if (n >= 4) { rgap = (uint32_t)v[3]; }
             if (n >= 5) { rst = (uint32_t)v[4]; }
-            atecc_sha_timing_set(poll, ready, gap, rgap, rst);
+            if (n >= 6) { wake = (int)v[5]; }
+            atecc_sha_timing_set(poll, ready, gap, rgap, rst, wake);
         }
         {
-            int poll;
+            int poll, wake;
             uint32_t ready, gap, rgap, rst;
 
-            atecc_sha_timing_get(&poll, &ready, &gap, &rgap, &rst);
+            atecc_sha_timing_get(&poll, &ready, &gap, &rgap, &rst, &wake);
             uart_printf(CONSOLE_UART,
                         "\r\n[id] sha timing: poll=%d ready_ms=%u gap_ms=%u restart_gap_ms=%u"
-                        " restarts=%u\r\n（用法：setime <poll 0|1> <ready_ms> <gap_ms>"
-                        " <restart_gap_ms> <restarts>）\r\n",
-                        poll, (unsigned)ready, (unsigned)gap, (unsigned)rgap, (unsigned)rst);
+                        " restarts=%u wake_each=%d\r\n"
+                        "     （用法：setime <poll 0|1> <ready_ms> <gap_ms> <restart_gap_ms>"
+                        " <restarts> <wake_each 0|1>）\r\n",
+                        poll, (unsigned)ready, (unsigned)gap, (unsigned)rgap, (unsigned)rst, wake);
         }
         return 1;
     }

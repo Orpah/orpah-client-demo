@@ -153,9 +153,9 @@ void atecc_stats(atecc_stats_t *out);
  *   而每次试都要重新烧固件 ⇒ 一轮要几分钟；做成旋钮后**烧一次、之后每轮只要敲一行** ✓。
  * `poll` = 1 ⇒ 用“探地址”当就绪判据（器件的原生就绪信号 ✓）；= 0 ⇒ 固定等 `ready_ms`。*/
 void atecc_sha_timing_set(int poll, uint32_t ready_ms, uint32_t gap_ms,
-                          uint32_t restart_gap_ms, uint32_t restarts);
+                          uint32_t restart_gap_ms, uint32_t restarts, int wake_each);
 void atecc_sha_timing_get(int *poll, uint32_t *ready_ms, uint32_t *gap_ms,
-                          uint32_t *restart_gap_ms, uint32_t *restarts);
+                          uint32_t *restart_gap_ms, uint32_t *restarts, int *wake_each);
 
 /* 给 `proto/id_build.c` 用的 nonce provider（`idb_nonce_fn` 的形状）：
  * 取 32 字节随机数的**前 16 字节** → 32 个大写十六进制字符 + NUL。
