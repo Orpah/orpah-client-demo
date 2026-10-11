@@ -123,6 +123,16 @@ ATECC_STATUS_OK = 0x00
 # ★ “刚被唤醒”的状态（出处同上：`CMD_STATUS_WAKEUP 0x11` ✓；唤醒应答 `04 11 33 43` 里就是它 ✓）
 #   2026-10-11 实测：命令响应里读到它 = 读到了**旧的唤醒应答**（不是这条命令的响应 ✗）⇒ 重同步 ✓
 ATECC_STATUS_WAKEUP = 0x11
+# ★ 原厂状态表里**认识**的那些（出处 `calib_command.h` 的 `CMD_STATUS_*`，与 `proto/atecc_msg.h` 同一份 ✓）：
+#   0x00 ok / 0x01 checkmac / 0x03 parse / 0x05 ecc / 0x07 selftest / 0x08 rng / 0x0F exec /
+#   0x11 wakeup / 0xFF comm。★ **不在这张表里的值 ⇒ 输出缓冲里的不干净字节**（不是器件说的状态 ✗），
+#   实测过 **0xEE**（§8.15 早就把它记成“线索 ✗”）；2026-10-11 当晚它把 `write-hmac` 的读回打断了 ✗。
+ATECC_KNOWN_STATUS = (0x00, 0x01, 0x03, 0x05, 0x07, 0x08, 0x0F, ATECC_STATUS_WAKEUP, 0xFF)
+# ★ 这三类状态 ⇒ **不当命令失败** ✗，而是“重新同步 + 重发本命令”（可见地打一行 ✓）：
+#   · 0x11 = 读到旧唤醒应答；
+#   · 0xFF = `bad crc found`（命令没被正确收到 ✓ ⇒ 重发就对了）；
+#   · 不在 `ATECC_KNOWN_STATUS` 里的值 = 缓冲里的脏字节（如 0xEE ✓）。
+ATECC_RETRY_STATUS = (ATECC_STATUS_WAKEUP, 0xFF)
 SELFTEST_MSG = b"ORPAH d-step probe v1"     # 与固件 `se` 自检签的同一条摘要 ✓
 # 只读半证的**第二条消息**：100 B > 64 ⇒ 能多走一轮 `SHA HMAC_UPDATE` ✓（1×64 + 36 B 尾巴）
 # （第一条 23 B 只走 START + END ⇒ 两条合起来把 UPDATE 那条路也盖住 ✓）
@@ -156,6 +166,19 @@ REF_CONFIG_HEX = (
 
 def hexs(b):
     return " ".join("%02X" % x for x in b) if b else "-"
+
+
+# ★ SE 自己的序列号（要记进产线台账 ✓）—— 取**原厂结构体的 SN 三段**：
+#   出处 = 原厂 `cryptoauthlib/device.py` 的 `Atecc608Config`（本工具本来就装它做“配置位段复核” ✓）：
+#     `SN03`(4 B) + `RevNum`(4 B) + `SN48`(5 B) ⇒ 共 **13 B** = `cfg[0..12]` ✓
+#   （Microchip 常说的“9 字节序列号” = 前 9 字节 ✓，是它的**前缀** ✓；
+#     这里记**全段 13 B hex**，免得只差后 4 字节的两颗看起来一样 ✗）
+SE_SN_BYTES = 13
+
+
+def se_sn_of(cfg):
+    """`cfg[0..12]` 的 hex（26 字符）= SE 的序列号/身份段 ✓（理由见 `SE_SN_BYTES` 的注释）。"""
+    return cfg[:SE_SN_BYTES].hex()
 
 
 class Se:
@@ -277,14 +300,14 @@ class Se:
                 nm = rct.py_atecc_status_name(st) if HAVE_RCT else "?"
                 if st == ATECC_STATUS_OK:
                     return 0, raw[:4], "状态包：状态 0x00（ok，无数据）"
-                if st == ATECC_STATUS_WAKEUP:
-                    # ★ 0x11 = **“刚被唤醒”** ⇒ 读回来的是**唤醒应答**，不是这条命令的响应 ✗ ——
-                    #   器件输出缓冲里还留着旧内容（§8.8 那条教训的同一形状 ✓）。
-                    #   2026-10-11 实测踩到：中途"重开会话"自愈之后，`HMAC_START` 读回 0x11 ✗。
-                    #   ⇒ **不当错误** ✗：重新同步（下一轮会重发唤醒令牌 + 重发本命令 ✓）
+                if st in ATECC_RETRY_STATUS or st not in ATECC_KNOWN_STATUS:
+                    # ★ 这类不是“命令失败” ✗，而是**没读到这条命令的响应**（旧内容/脏字节/CRC 没收对 ✓）：
+                    #   ⇒ **不当错误**，重新同步（下一轮会重发唤醒令牌 + 重发本命令 ✓）。
+                    #   实测（2026-10-11）：0x11（唤醒应答）与 0xEE（表外的脏字节 ✓）各扭过一次 ✗。
                     if self.verbose:
-                        print("      · 读到唤醒应答（状态 0x11）⇒ 缓冲里是旧内容，"
-                              "重新同步后重发本命令")
+                        print("      · 4 字节包状态 0x%02X%s ⇒ 不当失败 ✓：重新同步后重发本命令"
+                              % (st, "（唤醒应答）" if st == ATECC_STATUS_WAKEUP else
+                                 "（表外值 = 缓冲脏字节）" if st not in ATECC_KNOWN_STATUS else "（CRC 没收到）"))
                     continue
                 return 2, raw[:4], "4 字节错误包：状态 0x%02X（%s）" % (st, nm)
             if len(raw) < cnt:
@@ -541,6 +564,7 @@ def step_read(se, args):
           % (lv, lc, "已锁" if lc == 0x00 else "未锁",
              "已锁" if lv == 0x00 else "未锁"))
     print("  I2C_Enable/地址：cfg[16] = 0x%02X（0xC0 = 使能、地址 0x60）" % cfg[16])
+    print("  SE 序列号（cfg[0..12] = 原厂 SN03+RevNum+SN48 ✓）：%s" % se_sn_of(cfg))
     ref = bytes.fromhex(REF_CONFIG_HEX)
     if len(ref) != 128:
         print("warn 参照配置常量长度不对（%d）—— 这是本工具的 bug" % len(ref))
@@ -572,24 +596,27 @@ def step_read(se, args):
 
 
 def step_lock_config(se, args, cfg=None):
+    # ★ 本函数**一律回 `(rc, cfg)`** ✓ —— 上轮只改了主返回、漏了几处早期 `return 2` ✗ ⇒
+    #   调用方 `rc, cfg = step_lock_config(...)` 当场 `TypeError: cannot unpack non-iterable int` ✗
+    #   （2026-10-11 实测踩到，而且它把“锁后读回失败”这个真问题**掩盖**了 ✗）。
     print("  ✗ 不可逆：锁**配置区**（槽位/I²C 参数从此定死）")
     st, note = se.lock_zone(LOCK_ZONE_CONFIG)
     print("  Lock(Config) → %s" % note)
     if st is None:
-        return 2
+        return 2, cfg
     if st == 0x0F:
         print("  info 状态 0x0F = cannot execute ⇒ 多半**已经锁过了** ✓（继续按“读回”判，不按命令判）")
     elif st != 0x00:
         print("FAIL 锁配置区失败（状态 0x%02X）" % st)
-        return 2
+        return 2, cfg
     cfg2, _ = se.read_config()
     if cfg2 is None:
         print("FAIL 锁后读回失败")
-        return 2
+        return 2, cfg
     lv, lc = lock_state(cfg2)
     if lc != 0x00:
         print("FAIL 锁后 LockConfig = 0x%02X（应当 0x00）" % lc)
-        return 2
+        return 2, cfg2
     print("PASS 锁后读回：LockConfig = 0x00 ✓（LockValue = 0x%02X ⇒ 数据区%s）"
           % (lv, "仍未锁 ✓（故意留的）" if lv != 0x00 else "也已锁"))
     # ★ 把**锁后的 cfg** 交给调用方 ✓：后面几步（如 `write-hmac` 的守卫）判的是**当前状态**，
@@ -598,6 +625,25 @@ def step_lock_config(se, args, cfg=None):
 
 
 def step_genkey(se, args):
+    # ★ **幂等**（2026-10-11 加）：数据区**已经锁了**的时候，"创建"必然失败（器件回 `0x0F` ✗）
+    #   ⇒ 那种情形**不创建** ✗，改成"**按槽内已有的钥算公钥**"（`GENKEY_MODE_PUBLIC` ✓，不写芯片 ✓）
+    #   —— 这正是续跑/重跑 `all` 时要走的路 ✓（否则重跑会在这一步白失败 ✗）。
+    #   ⚠ 代价（如实）：这条路上"创建那步真生效了吗"**不再由本步**证明 ✗，而是由
+    #     `lock-data` 之后的 `verify`（重算公钥 = 登记公钥 + 独立验签 ✓）证明 ✓。
+    cfg, note = se.read_config()
+    if cfg is None:
+        print("FAIL 读配置失败：%s" % note)
+        return 2, None
+    lv, lc = lock_state(cfg)
+    if lv == 0x00:
+        print("  info 数据区**已锁**（LockValue = 0x00）⇒ 不能创建新钥 ✓，改取槽内已有的钥 ✓")
+        pub, note = se.genkey(SIGN_SLOT, GENKEY_MODE_PUBLIC)
+        if pub is None:
+            print("FAIL 按槽内已有的钥算公钥失败：%s" % note)
+            return 2, None
+        print("  Slot 0 公钥（按槽内已有钥算，第 2 次及以后重跑走的就是这条）：%s" % pub.hex())
+        print("PASS 取到公钥 ✓（**本次没有写芯片** ✓）；有效性交给后面的 `verify` 判 ✓")
+        return 0, pub
     print("  ✗ 生成 Slot 0 的 P-256 私钥（**只**导出公钥；私钥物理不出芯片 ✓）")
     print("    模式 = 0x%02X（原厂 `calib_genkey()` = GENKEY_MODE_PRIVATE ⇒ **真的新建** ✓）"
           % GENKEY_MODE_PRIVATE)
@@ -1107,6 +1153,7 @@ def main():
         print("⇒ 先跑 `python tools\\ch347_i2c.py list` 看它在不在 ✗")
         return 2
     rc, cfg, pub = 0, None, None
+    se_sn0 = "-"        # SE 序列号（身份段 ✓）—— 台账要记它（协议 §6.2 要绑 SE 序列号 ✓）
     if getattr(args, "pub_hex", None):
         # ★ 让**单独跑 `verify`** 也能做“与登记公钥对比”那条判据 ✓
         #   （不然只有 `all`（`genkey` → … → `verify` 同一进程）才带得上那个对照 ✗ —— 2026-10-11 实测踩到）
@@ -1118,6 +1165,15 @@ def main():
         print("登记公钥（由 `--pub-hex` 给）：%s…" % hx[:32])
     try:
         ok, four = se.wake()
+        # ★ 顺手把 SE 序列号记下来（台账要用 ✓）：身份字节（`cfg[0..12]` ✓）**从不变化** ⇒
+        #   开跑时读一次就够 ✓；读不到就记 `-`（不阻断 ✗）。
+        try:
+            c0, _n0 = se.read_config()
+            if c0 is not None:
+                se_sn0 = se_sn_of(c0)
+                print("SE 序列号（cfg[0..12]）：%s" % se_sn0)
+        except ci.cs.Ch347Error as _e0:                      # noqa: BLE001
+            print("（SE 序列号读不到：%s ⇒ 台账里记 `-`）" % _e0)
         print("唤醒：%s（读到 %s%s）" % ("拿到 04 11 33 43 ✓" if ok else "没拿到唤醒应答（器件可能本来就醒着 ✓ 或没接 ✗）",
                                         hexs(four),
                                         "" if ok or four[:4] not in (SELFTEST_FAIL,) else " ← 自检失败 ✗"))
@@ -1196,6 +1252,7 @@ def main():
         line = "%s\taddr=0x%02X\tstep=%s\tpubkey_hex=%s	hmac_fp=%s\n" % (
             datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), addr, args.step,
             pub.hex() if pub else "-", fp)
+        line = line.rstrip("\n") + "\tse_sn=%s\n" % se_sn0   # ★ 带上 SE 序列号（身份段 ✓）
         with open(args.record, "a", encoding="utf-8", newline="\n") as f:
             f.write(line)
         print("台账已追加：%s" % args.record)
