@@ -1017,13 +1017,16 @@ def py_atecc_cmd_sha_start(slot, with_crc):
 
 
 def py_atecc_cmd_sha_update(blk, with_crc):
-    """`SHA(HMAC_UPDATE, param2=**0**) + 该块`（≤ 64 B ✓）。
+    """`SHA(HMAC_UPDATE, param2=**本块字节数**) + 该块`（块长 64 ✓）。
 
-    ★★ `param2` = **0**，不是块长 —— **2026-10-11 上机实测** ✗：
-      同一条 100 B 消息，`param2=64` 失败、`param2=0` 时器件内 HMAC 与软件**逐字节相同** ✓。
-      长度本来就在 `count` 里（`count = 1+4+数据+2`）✓。
-    ⚠ `START` 的 param2（key slot）与 `END` 的 param2（尾块长度）**都对** ✓，别一起改 ✗。"""
-    return py_atecc_pkt(ATECC_OP_SHA, ATECC_SHA_MODE_HMAC_UPDATE, 0, with_crc, blk)
+    ★★ `param2` = **64**（块长）—— 出处 = **原厂源码** ✓，不是猜 ✗：
+      `cryptoauthlib/lib/calib/calib_sha.c` 的 `calib_sha_hmac_update()` 调
+      `calib_sha_base(device, SHA_MODE_HMAC_UPDATE, ATCA_SHA256_BLOCK_SIZE, ctx->block, …)`
+      ⇒ `param2 = 64`；而 `calib_sha_base()` 是 `packet->param2 = length`、`atSHA()` 是
+      `txsize = ATCA_CMD_SIZE_MIN + param2` ⇒ **`count` 与 `param2` 必须自洽** ✓。
+    ⚠ `START` 的 param2 = key slot ✓、`END` 的 param2 = 尾块字节数（可为 0 ✓）
+      —— 三者各按各的，别“顺手统一” ✗。"""
+    return py_atecc_pkt(ATECC_OP_SHA, ATECC_SHA_MODE_HMAC_UPDATE, 64, with_crc, blk)
 
 
 def py_atecc_cmd_sha_end(tail, with_crc):

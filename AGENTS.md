@@ -296,6 +296,23 @@ orpah-client-demo/
   （固件零 warning，text 44672 → 46012）。⚠ **未上机**：`atecc_sha_hmac()` 一次真机都没跑过 ✗
   —— 上机判据 = `idlevel l1` 后把 `idhex` 的帧喂上游，必须 **accepted / alg=HS256 / trust=medium** ✓。
   详见 **§8.25**。
+- **2026-10-11（深夜续：`param2` 口径回正 + 多块 HMAC 仍未通 ✗）**：
+  ① **`SHA(HMAC_UPDATE)` 的 `param2` = 本块字节数（= 64）** ✓，**有原厂源码为据**（不靠试 ✗）：
+     `calib_sha_hmac_update()` → `calib_sha_base(…, SHA_MODE_HMAC_UPDATE, 64, block, …)`；
+     `calib_sha_base()` 是 `packet->param2 = length`、`atSHA()` 是 `txsize = 5 + param2`
+     ⇒ **`count` 与 `param2` 必须自洽** ✓；`START` = key slot ✓、`END` = 尾块字节数（可为 0 ✓）
+     —— 三者**各按各的** ✗。已改三处同源（`proto/atecc_msg.c`、`tools/se_provision.py`、
+     `proto/run_cross_test.py`）；固件走同一份 `atecc_msg.c` ⇒ 不用重复改 ✓。`--refresh` 后
+     41 行一致 ✓、`run_checks.py` **5/5** ✓。
+  ★★ **教训**：§8.26① 那条“p2=0 才对”是用**单块**用例量的 ✗ —— 单块时两种写法**区分不开** ✗
+     ⇒ **用一个区分不开两种假设的用例下结论 = 白分** ✗；**判据要能区分假设** ✓（这里是 ≥2 条
+     UPDATE ✓），**有原厂源码就先读源再试** ✗（顺序我也做反了）。
+  ② **多块（≥2 条 `HMAC_UPDATE`）仍未通** ✗（`hmac-readonly`：23 B ✓ / 100 B ✓ / **250 B ✗**，
+     挂在**第 1 条** UPDATE）—— 而 100 B 与 250 B 的**第 1 条包形状完全相同** ✗ ⇒ 故障不在包 ✓。
+     已排除：电气/速率（100/10/5 kHz 一样 ✗）、桥退化（`health` 100% ✓）、主机差异
+     （PC 与固件**都挂** ✓）、每轮唤醒令牌（改成只开头唤醒**更糟** ✗ ⇒ 已回退 ✓）。
+  ⚠ **如实边界**：ORPAH 的 HS256 预像约 **364 B**（6 块）⇒ **“HS256 用 SE 出报文”仍未成立** ✗；
+     §8.24 通的是 **167 B（≤2 块）** 的短消息 ✓（当时没测过 3 块）。详见 **§8.27**。
 - **未做**：b 步的物理传输（USB→SPI 走 MACBUS 或 RJ45 桥，**通路未定**）、固件主循环/状态机、
   ~~SE（ATECC608B）驱动~~（**2026-10-11 已做 ✓**，见上）、~~产线烧录流程~~（工具已入库 ✓、
   4 颗已配且公钥已上传 ✓，余 3 颗按用户决定**保留不写** ✗）、低功耗与取能标定、与 `orpah-over-halow`（服务端/仿真器）

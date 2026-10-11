@@ -89,9 +89,10 @@ MODE_READ_32 = 0x80     # `Read`/`Write` 的 32 B 位（`ATCA_ZONE_READWRITE_32`
 ZONE32_CONFIG = 0x00 | MODE_READ_32      # = 0x80
 ZONE32_DATA = 0x02 | MODE_READ_32        # = 0x82
 SHA_MODE_HMAC_START = 0x04   # param1；param2 = **key slot**（原厂 `calib_sha_hmac_init()` ✓）
-SHA_MODE_HMAC_UPDATE = 0x01  # param1；★ param2 = **0**（✗ 不是块长 64）—— 2026-10-11 实测：
-                             #   同一条 100 B 消息，param2=64 会失败、param2=0 逐字节相同 ✓；
-                             #   长度本来就在 count 里（count = 1+4+数据+2）✓；START/END 的 param2 都对 ✓ 别一起改 ✗
+SHA_MODE_HMAC_UPDATE = 0x01  # param1；★ param2 = **本块字节数（喂满块 = 64）** —— 出处 = 原厂源码 ✓：
+                             #   `calib_sha_hmac_update()` → `calib_sha_base(…, SHA_MODE_HMAC_UPDATE, 64, block, …)`；
+                             #   `calib_sha_base()` 是 `packet->param2 = length`、`atSHA()` 是 `txsize = 5 + param2`
+                             #   ⇒ **count 与 param2 必须自洽** ✓；START = key slot ✓、END = 尾块字节数 ✓ 别一起改 ✗
 SHA_MODE_608_HMAC_END = 0x02 # ★ 608 的 HMAC 结束码（`calib_sha_hmac_finish()` 里按器件选 ✓）
 SHA_TARGET_TEMPKEY = 0x00    # 结果落点（0x00 = TempKey：同 `NONCE/KDF_MODE_TARGET_TEMPKEY` ✓）；
                              # 响应里总是会回 32 B 摘要 ✓ ⇒ 落点不影响我们取值 ✓
@@ -165,8 +166,12 @@ ATECC_KNOWN_STATUS = (0x00, 0x01, 0x03, 0x05, 0x07, 0x08, 0x0F, ATECC_STATUS_WAK
 ATECC_RETRY_STATUS = (ATECC_STATUS_WAKEUP, 0xFF)
 SELFTEST_MSG = b"ORPAH d-step probe v1"     # 与固件 `se` 自检签的同一条摘要 ✓
 # 只读半证的**第二条消息**：100 B > 64 ⇒ 能多走一轮 `SHA HMAC_UPDATE` ✓（1×64 + 36 B 尾巴）
-# （第一条 23 B 只走 START + END ⇒ 两条合起来把 UPDATE 那条路也盖住 ✓）
+# （第一条 23 B 只走 START + END ⇒ 三条合起来把 UPDATE 那条路也盖住 ✓）
 HMAC_RO_MSG2 = bytes(range(100))
+# ★★ 只读半证的**第三条（决定性的一条 ✗）**：250 B ⇒ 需要 **3 条** `SHA(HMAC_UPDATE)`
+#   为什么非它不可 ✗：2026-10-11 实测，“带 1 条 UPDATE”的 100 B 用例**即使口径写错也能过** ✗
+#   ⇒ 它**验不出**多块路径 ✓；而 **≥2 条 UPDATE（≥160 B）** 当时**两种主机都失败** ✗ ⇒ 只有它当判据 ✓。
+HMAC_RO_MSG3 = bytes((i * 7 + 3) & 0xFF for i in range(250))
 # 只读半证的**默认槽**：出厂这颗 slot 8 的 `SlotConfig = 0x0000`
 # （byte 36/37 ⇒ `IsSecret=0`、`ReadKey=0` = 允许明文读 ✓；`KeyConfig = 0x003C` ⇒ KeyType=7 = SHA/HMAC ✓）
 HMAC_RO_SLOT = 8
@@ -292,6 +297,9 @@ class Se:
         ★ 就绪等待 = **固定等 `wait_ms`**（不再“探地址” ✗，见文件头那段）。
         ★ `retry_write=False` = **写被 DLL 报错时不许重发本命令** ✗（有状态的命令：如
           `GenKey(创建)` 会重新生成钥、`SHA UPDATE` 会把同一段数据再喂一遍 ⇒ 结果错 ✗✗）。
+
+        ★★ 唤醒令牌**必须每轮都发** ✓（实测 2026-10-11：去掉它之后**连 100 B 都挂** ✗
+          —— 器件会在命令间隙睡下去 ⇒ 下一条读不到响应 ✓）。
         """
         for k in range(tries):
             self.wake()
@@ -497,8 +505,8 @@ class Se:
         off = 0
         for _ in range(nblk):
             self._settle(HMAC_STEP_GAP_MS)
-            # ★ param2 = **0**（不是 SHA_BLOCK ✗）—— 2026-10-11 实测，见 `SHA_MODE_HMAC_UPDATE` 处
-            pkt = ci.atecc_pkt(OP_SHA, SHA_MODE_HMAC_UPDATE, 0, self.crc,
+            # ★ param2 = **本块字节数**（= SHA_BLOCK，喂满 64 B 块）—— 原厂 `calib_sha_hmac_update()` ✓
+            pkt = ci.atecc_pkt(OP_SHA, SHA_MODE_HMAC_UPDATE, SHA_BLOCK, self.crc,
                                extra=bytes(msg[off:off + SHA_BLOCK]))
             # ★ UPDATE **不自动重发** ✗：重发会把同一段数据再喂一遍 ⇒ 摘要就错了 ✗✗
             rc, resp, note = self.cmd(pkt, 4, wait_ms=WAIT_MS_CRYPTO, retry_write=False)
@@ -1035,7 +1043,8 @@ def step_hmac_readonly(se, args, cfg=None):
     print("  槽内 32 B 已读出（%s）—— 指纹 %s…（**不打印钥本身 ✗**）"
           % (note, hashlib.sha256(key).hexdigest()[:8]))
     for name, msg in (("23 B（只走 START+END）", SELFTEST_MSG),
-                      ("100 B（多走一轮 HMAC_UPDATE）", HMAC_RO_MSG2)):
+                      ("100 B（多走一轮 HMAC_UPDATE）", HMAC_RO_MSG2),
+                      ("250 B（需要 3 条 HMAC_UPDATE ✗ 决定性）", HMAC_RO_MSG3)):
         got, note = se.sha_hmac(slot, msg)
         if got is None:
             print("FAIL 器件内 HMAC 失败（%s）：%s" % (name, note))
