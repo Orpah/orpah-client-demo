@@ -1,6 +1,6 @@
 # checks_report.md —— `tools/run_checks.py` 的输出（**入库**，同隔壁仓惯例）
 
-跑的时间：2026-10-11 22:01:55
+跑的时间：2026-10-11 22:08:00
 
 判定口径：**退出码 0 且输出里没有 `FAIL` / `Traceback`**（只看退出码会漏 —— 有些脚本自己吞异常）。
 
@@ -115,7 +115,7 @@ F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Tool
 F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -nostartfiles -nostdlib -T ld/link.ld -Wl,--gc-sections -Wl,-Map=build/orpah-client.map -o build/orpah-client.elf build/Core/main.o build/Core/id_core.o build/Periph/gpio.o build/Periph/uart.o build/Periph/i2c.o build/Periph/atecc.o build/Periph/hgic_uart.o build/proto/sn.o build/proto/jcs.o build/proto/b64url.o build/proto/msg.o build/proto/downlink.o build/proto/sha256.o build/proto/hmac.o build/proto/id_report.o build/proto/hgic.o build/proto/id_build.o build/proto/id_level.o build/proto/id_keys.o build/proto/id_nonce.o build/proto/p256.o build/proto/rfc6979.o build/proto/ecdsa.o build/proto/atecc_msg.o build/proto/crc16.o build/startup.o -lgcc
 F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-size build/orpah-client.elf
    text	   data	    bss	    dec	    hex	filename
-  46940	     30	  20192	  67162	  1065a	build/orpah-client.elf
+  47088	     30	  20192	  67310	  106ee	build/orpah-client.elf
 F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-objcopy -O binary build/orpah-client.elf build/orpah-client.bin
   built: build/orpah-client.bin  (raw binary; bytes = size text + data above)
 F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-objcopy -O ihex build/orpah-client.elf build/orpah-client.hex

@@ -623,6 +623,7 @@ static int sha_txn(const uint8_t *pkt, uint32_t pklen, int want_status,
 {
     uint8_t resp[ATECC_RESP_LEN_SHA_CRC];
     uint32_t attempt, i;
+    i2c_stats_t a, b;
 
     for (attempt = 0u; attempt < ATECC_SHA_ATTEMPTS; attempt++) {
         uint8_t st = 0u;
@@ -639,7 +640,17 @@ static int sha_txn(const uint8_t *pkt, uint32_t pklen, int want_status,
         uart_printf(CONSOLE_UART, "\r\n");
 
         (void)atecc_wake();             /* 器件若已醒，它对令牌回 NACK —— 不早退 ✓ */
+        i2c_stats(&a);
         rc = transact(pkt, pklen, resp, sizeof(resp), &replen);
+        i2c_stats(&b);
+        /* ★★ 2026-10-11：**实际搬了多少字节**是判断"包是不是真发出去了"的唯一硬数
+         *   （71 B 的包应当在 74 附近：字地址 1 + 包 71 + 地址字节 2 ✓）。*/
+        uart_printf(CONSOLE_UART,
+                    "[se] SHA 第%u次 → rc=%d tx=+%u rx=+%u nack=+%u timeout=+%u step=%u\r\n",
+                    (unsigned)(attempt + 1u), rc,
+                    (unsigned)(b.tx_bytes - a.tx_bytes), (unsigned)(b.rx_bytes - a.rx_bytes),
+                    (unsigned)(b.nack - a.nack), (unsigned)(b.timeout - a.timeout),
+                    (unsigned)b.last_step);
         if (rc != 0) {
             uart_printf(CONSOLE_UART, "[se] SHA 第%u次：事务失败 rc=%d（%u B 包）\r\n",
                         (unsigned)(attempt + 1u), rc, (unsigned)pklen);
