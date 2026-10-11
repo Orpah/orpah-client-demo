@@ -31,6 +31,7 @@
     python tools\\check_c4g2_bench.py --port COM7
     python tools\\check_c4g2_bench.py --no-idsend          # 只判 SE（不碰 ID 上报）
     python tools\\check_c4g2_bench.py --from-file log.txt  # 离线解析一段控制台日志
+    python tools\\check_c4g2_bench.py --from-keystore       # ★ 用产线登记的那把钥验帧（HS256 也能判 ✓）
     python tools\\check_c4g2_bench.py --keep-open          # 只 dump 原始输出，不判定
 
 ⚠ **串口独占**：Windows 上一个口只能被一个进程打开 ⇒ 先关掉 WindTerm / SecureCRT /
@@ -47,7 +48,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
-from check_report_hex import load_upstream, judge, strip_hex      # noqa: E402  （单一源：解析/判定）
+from check_report_hex import load_upstream, find_upstream, judge, strip_hex  # noqa: E402  （单一源：解析/判定）
 
 BAUD = 115200
 # ⚠ `crc_mode=` 后面那串**含空格**（`crc(响应 35 B)`）⇒ 不能用 \S+
@@ -167,6 +168,9 @@ def main():
     ap.add_argument("--from-file", help="离线：解析一段控制台日志（不用串口）")
     ap.add_argument("--keep-open", action="store_true", help="只 dump 原始输出，不做判定")
     ap.add_argument("--upstream", help="orpah-over-halow 目录（默认自动找）")
+    ap.add_argument("--from-keystore", action="store_true",
+                    help="★ 用 orpah-over-halow/orpah.db 里**产线登记**的那把钥验"
+                         "（HS256 也能验 ✓）；不传则用硬编码的 Slot 0 公钥常量（只认 ES256）")
     args = ap.parse_args()
 
     for s in (sys.stdout, sys.stderr):
@@ -420,11 +424,24 @@ def main():
             #   演示密钥库里那把是从 SN 派生的**另一把** ✗ ⇒ 不换钥必然 `signature_invalid`
             #   （那不是 bug，是"密钥库还没登记这颗芯片"）。
             pk_hex = (SLOT0_PUB_X + SLOT0_PUB_Y).hex()
-            if d_step:
-                print("info 用 **Slot 0 的公钥**验这条帧（产线该登记的那把 ✓），"
-                      "不是 demo 派生钥")
+            ksdb = None
+            if args.from_keystore:
+                dbp = os.path.join(find_upstream(args.upstream) or "", "orpah.db")
+                if not os.path.exists(dbp):
+                    print("FAIL --from-keystore 要能找到 %s（用 --upstream <dir> 指路）" % dbp)
+                    fails.append("找不到密钥库")
+                else:
+                    import keystore as kst                   # noqa: PLC0415
+                    ksdb = kst.KeyStoreDB(dbp)               # 真库（产线登记的那把 ✓）
+                    print("info 用**密钥库**里登记给该 SN 的钥验（ES256 取公钥 / HS256 取降级 HMAC 钥 ✓）：%s"
+                          % dbp)
+            elif d_step:
+                print("info 用 **Slot 0 的公钥**验这条帧（硬编码常量、产线该登记的那把 ✓），"
+                      "不是 demo 派生钥；★ 它**只认这一颗 + 只走 ES256** ✗ ⇒ 要按库里的钥验就加"
+                      " `--from-keystore`")
             if judge(o, proto, bytes.fromhex(h),
-                     pubkey_hex=(pk_hex if d_step else None)) != 0:
+                     pubkey_hex=(None if ksdb is not None else (pk_hex if d_step else None)),
+                     ksdb=ksdb) != 0:
                 fails.append("上游不接受帧")
             if mod_buf or (args.mod_port and not args.no_mod_port):
                 want = "%d byte(s)" % (len(h) // 2 + 8)
