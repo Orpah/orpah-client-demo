@@ -8,8 +8,16 @@
 用法：
     python tools\\check_report_hex.py 7b2276223a312c...      # 直接给 hex（可跨行/带空白）
     python tools\\check_report_hex.py --file frame.hex
+    python tools\\check_report_hex.py --from-keystore <hex>  # ★ 上机首选：用真库里登记的钥验
+    python tools\\check_report_hex.py --se-pubkey <X||Y 128hex> <hex>   # 只给公钥（ES256）
     python tools\\check_report_hex.py --selftest             # 用 proto/test_vectors_id_frame.txt 自检
     支持从 stdin 读（echo … | python tools\\check_report_hex.py -）
+
+★★ `--from-keystore` = 用 **`orpah-over-halow/orpah.db` 里产线登记的那把钥**验：
+   ES256 取 `pubkey`、HS256 取 `hmac_key`（`verify_report` 按 SN 自己查 ✓）。
+   **为什么它是上机首选**：d 步的报文是 **SE 里签的**，而“默认”那条路会用**演示派生钥**
+   （`o.Device(sn, gen)` 自己造一把）✗ ⇒ 拿演示钥验真芯片签的帧**必然** `signature_invalid` ✗。
+   用真库才叫**另一把尺子**：钥既不是我传的、也不是我算的 ✓（与 §8.24 那条判据同源 ✓）。
 
 退出码：0 = 上游接受（level 0/1/2；level 3 是 §8.3 的"仅覆盖"，只陈述不算判据）；
         2 = 被拒（打印 error 码）；1 = 用法/环境问题（例如找不到上游参考实现）。
@@ -71,11 +79,13 @@ def strip_hex(text):
     return "".join(out)
 
 
-def judge(o, proto, frame, nonce_cache=None, pubkey_hex=None):
+def judge(o, proto, frame, nonce_cache=None, pubkey_hex=None, ksdb=None):
     """`pubkey_hex` = 64 B hex（X||Y）：**用这把公钥验**（= 产线该登记的那把，见 §6.2）。
     ★ 为什要它：d 步起报文是 **SE 里签的**，而演示密钥库里那把（`Device(demo_key=True)`）
       是从 SN **派生**出来的**另一把** ✗ ⇒ 不换钥必然 `signature_invalid` ✗（那不是 bug，
-      是“密钥库还没登记这颗芯片的公钥”）。给上它 = 把产线那一步补上 ✓。"""
+      是“密钥库还没登记这颗芯片的公钥”）。给上它 = 把产线那一步补上 ✓。
+    `ksdb` = 已经把**真库**（`orpah.db`）读进来的 `keystore.KeyStoreDB` ⇒ 优先用它 ✓
+      （产线登记的真钥既能验 ES256 也能验 HS256，比 `pubkey_hex` 更全 ✓）。"""
     got = proto.parse_eth_frame(frame)
     if got is None:
         print("FAIL 不是一条合法的 ORPAH 以太帧（长度要 ≥14 且 ethertype=0x88B5）")
@@ -99,9 +109,15 @@ def judge(o, proto, frame, nonce_cache=None, pubkey_hex=None):
           % (pay.get("cap"), pay.get("battery_mv"), pay.get("firmware"),
              pay.get("seen_routers")))
 
-    ks = o.KeyStore()
-    if pubkey_hex:
+    if ksdb is not None:
+        # ★★ 2026-10-11：用**真库**里登记给这个 SN 的钥 —— 产线那把 ✓
+        ks = ksdb
+        print("密钥库：用**真库**（orpah.db）里登记给该 SN 的钥验（ES256 取公钥 / "
+              "HS256 取降级 HMAC 钥 ✓）")
+        ks.register  # noqa: B018  （真库已在它里面，不再自造 Device ✗）
+    elif pubkey_hex:
         # ★ 把**这颗芯片的公钥**登记进去（等价于产线烧录那一步；见 `docs/atecc608b-se.md` §6.2/§8.10）
+        ks = o.KeyStore()
         try:
             from cryptography.hazmat.primitives.asymmetric import ec as _ec   # noqa: PLC0415
 
@@ -116,9 +132,11 @@ def judge(o, proto, frame, nonce_cache=None, pubkey_hex=None):
         except ImportError:
             print("FAIL 本机没装 `cryptography` ⇒ 没法用 --se-pubkey")
             return 1
+        ks.register(dev, model="bench-c4g1", firmware="c4g1")
     else:
+        ks = o.KeyStore()
         dev = o.Device(sn=pay.get("sn") or DEMO_SN, gen=DEMO_GEN)
-    ks.register(dev, model="bench-c4g1", firmware="c4g1")
+        ks.register(dev, model="bench-c4g1", firmware="c4g1")
     v = o.verify_report(rep, ks, used_nonces=(nonce_cache or o.NonceCache()))
     print("服务端判定：accepted=%s level=%s trust=%s coverage_only=%s error=%s"
           % (v.get("accepted"), v.get("level"), v.get("trust"), v.get("coverage_only"),
@@ -134,7 +152,7 @@ def judge(o, proto, frame, nonce_cache=None, pubkey_hex=None):
     return 0
 
 
-def selftest(o, proto):
+def selftest(o, proto, ksdb=None):
     path = os.path.join(REPO, "proto", "test_vectors_id_frame.txt")
     rows = [l.rstrip("\n").split("\t") for l in open(path, encoding="utf-8")
             if l.strip() and not l.startswith("#")]
@@ -142,7 +160,7 @@ def selftest(o, proto):
     for r in rows:
         print("-" * 60)
         print("用例 mode=%s level=%s" % (r[3], r[6]))
-        rc = judge(o, proto, bytes.fromhex(r[8]))
+        rc = judge(o, proto, bytes.fromhex(r[8]), ksdb=ksdb)
         want = 0 if int(r[6]) in (0, 1, 2) else 0
         if rc != want:
             nbad += 1
@@ -162,6 +180,9 @@ def main():
     ap.add_argument("--se-pubkey", metavar="HEX",
                     help="用这把公钥验（64 B hex = X||Y）—— d 步起帧是 SE 里签的，"
                          "密钥库里应当登记这颗芯片的公钥（= 产线那一步）")
+    ap.add_argument("--from-keystore", action="store_true",
+                    help="★ 用**真密钥库**（orpah-over-halow/orpah.db）里产线登记的那把钥验："
+                         "ES256 取公钥 / HS256 取降级 HMAC 钥（按 SN 自己查 ✓）")
     ap.add_argument("--upstream", help="orpah-over-halow 目录（默认自动找）")
     args = ap.parse_args()
 
@@ -174,8 +195,21 @@ def main():
     o, proto = load_upstream(args.upstream)
     if o is None:
         return 1
+
+    ksdb = None
+    if args.from_keystore:
+        up = find_upstream(args.upstream)
+        dbp = os.path.join(up or "", "orpah.db")
+        if up is None or not os.path.isfile(dbp):
+            print("FAIL --from-keystore 要能找到 %s（用 --upstream <dir> 指路）" % dbp)
+            return 1
+        import keystore as kst                  # noqa: PLC0415
+
+        ksdb = kst.KeyStoreDB(dbp)              # 真库（同一 orpah.db 的写穿透版 ✓）
+        print("真密钥库：%s" % dbp)
+
     if args.selftest:
-        return selftest(o, proto)
+        return selftest(o, proto, ksdb=ksdb)
 
     if args.file:
         text = open(args.file, encoding="utf-8", errors="replace").read()
@@ -194,7 +228,7 @@ def main():
     except ValueError as e:
         print("FAIL hex 解不开：%r" % (e,))
         return 1
-    return judge(o, proto, frame, pubkey_hex=args.se_pubkey)
+    return judge(o, proto, frame, pubkey_hex=args.se_pubkey, ksdb=ksdb)
 
 
 if __name__ == "__main__":

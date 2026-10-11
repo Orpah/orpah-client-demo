@@ -1458,9 +1458,21 @@ level=1 的帧。它已被确认的只是“包形状与真机实发字节一致
 **★ 上机判据（烧完板子跑一遍，一句话）**：控制台 `idlevel l1`（或 `idlevel auto` 且 SE 在位）⇒
 `idhex` 打印的**整帧 hex** 拿去喂上游：
 
-    python tools/check_report_hex.py <帧hex> --se-pubkey <X||Y>       # 或直接喂 verify_report
+    python tools/check_report_hex.py --from-keystore <帧hex>
 
-⇒ 必须 **accepted=True / alg=HS256 / trust=medium** ✓（同 §8.24 表里那条 ✓）。
+⇒ 必须 **accepted=True / level=1 / trust=medium** ✓（同 §8.24 表里那条 ✓）。
+★ `--from-keystore` 是关键 ✗：它到**真库**（`orpah-over-halow/orpah.db`）里取**产线登记**给该 SN
+  的那把钥（ES256 取公钥 / HS256 取降级 HMAC 钥，`verify_report` 按 SN 自己查 ✓）；
+  不带宽的路会用 `o.Device(sn, gen)` **自己派生一把演示钥** ✗ ⇒ 拿演示钥验真芯片的帧
+  **必然** `signature_invalid` ✗（那不是芯片的问题，是"尺子拿错了" ✓）。
+★ 同一把尺子也能验 ES256：`--from-keystore` 对 level=0 一样能用 ✓ ⇒ 它把 §8.22 那条
+  "用库里公钥验芯片实签"**常设化**了 ✓（不再需要临时脚本 ✓）。
+
+★ 本命令**已实测可用**（2026-10-11 夜，PC 侧）：`--from-keystore --selftest` ⇒ 打印
+  `真密钥库：f:\git\orpah-over-halow\orpah.db` ✓，5 条向量（level 0/1/2/3）**全部 accepted** ✓
+  —— 库里那 5 行 = 演示 SN + **se1..se4**（每行都带自己的 `se_sn` ✓）。
+  ⚠ 但**真芯片的帧还没有**（那 4 颗的签名没留存 ✗）⇒ "用库里那把钥验**芯片实签**"这条
+  **仍要上机**才算数 ✓（第 4 颗那次是临时脚本 ✓，见 §8.23；现在改由本命令常设 ✓）。
 ★ 判据为什么必须是**上游**：固件的“包形状对”和“摘要对”**都是我自己实现的** ✗ ⇒
   只有**另一把尺子**（服务端拿库里那把 HMAC 钥重算）才能说“真对” ✓ —— 这就是 §8.24 定的
   那条“结果必须与软件逐字节相同”在固件里的落点 ✓。
