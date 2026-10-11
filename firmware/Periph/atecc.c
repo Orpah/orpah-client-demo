@@ -274,6 +274,16 @@ static int wake_reply_read(uint8_t out4[4])
 #define ATECC_READY_POLL_MS   250u
 #define ATECC_READY_GAP_US    300u     /* 两次探地址之间（探一次只要 µs 量级 ✓）*/
 
+/* ★★ 2026-10-11 上机（HS256 从第 3 块起全回 `0x03`）给 SHA/HMAC 序列开的开关：
+ *   ① 器件“算完之前地址不 ACK” ⇒ 探地址（`wait_ready`）**本该**是对的；
+ *   ② 但 PC 侧早先实测过“**探地址事务本身**会把传输层搞死”（§8.16：3/12 → 改成固定等待 **12/12** ✓）
+ *      ⇒ 那边**已经全部用固定等待**（`WAIT_MS_DEFAULT` 20 ms / `WAIT_MS_CRYPTO` 150 ms ✓）。
+ *   ⇒ 这里默认仍是“探地址”（其它路径行为**不变** ✗），只在 `atecc_sha_hmac()` 里关掉它 ✓。 */
+static int s_poll_ready = 1;
+#define ATECC_READY_FIXED_MS  150u     /* = PC 侧 `WAIT_MS_CRYPTO`（同源 ✓）*/
+
+static void gap_ms(uint32_t ms);        /* 定义在后（给“不探地址”那条路用 ✓）*/
+
 static int wait_ready(uint32_t ms)
 {
     uint32_t deadline = g_tick_ms + ms;
@@ -329,11 +339,16 @@ static int transact(const uint8_t *pkt, uint32_t pktlen,
         if (rc != 0) {
             return rc;
         }
-        if (!wait_ready(ATECC_READY_POLL_MS)) {
-            uart_printf(CONSOLE_UART,
-                        "[se] 等器件备好超时（%u ms 内它一直不答地址）⇒ 本轮不读（留给重试）\r\n",
-                        (unsigned)ATECC_READY_POLL_MS);
-            return ATECC_E_IO;
+        if (s_poll_ready) {
+            if (!wait_ready(ATECC_READY_POLL_MS)) {
+                uart_printf(CONSOLE_UART,
+                            "[se] 等器件备好超时（%u ms 内它一直不答地址）⇒ 本轮不读（留给重试）\r\n",
+                            (unsigned)ATECC_READY_POLL_MS);
+                return ATECC_E_IO;
+            }
+        } else {
+            /* ★ SHA/HMAC 序列走这条：固定等一段（同 PC 侧口径 ✓，见 `s_poll_ready` 处）*/
+            gap_ms(ATECC_READY_FIXED_MS);
         }
         /* ★ 读前判据：两线真被放开才读。若有线被按住 ⇒ **不读**（否则必是 BERR）⇒
          *   返回错误、交给上层 `random_try()` 重试（那里会重做唤醒序列）。*/
@@ -607,12 +622,21 @@ static int sha_txn(const uint8_t *pkt, uint32_t pklen, int want_status,
                    uint8_t out32[ATECC_SHA_DIGEST_BYTES])
 {
     uint8_t resp[ATECC_RESP_LEN_SHA_CRC];
-    uint32_t attempt;
+    uint32_t attempt, i;
 
     for (attempt = 0u; attempt < ATECC_SHA_ATTEMPTS; attempt++) {
         uint8_t st = 0u;
         uint32_t replen = 0u;
         int rc;
+
+        /* ★★ 现场判据：把**这条包实际长什么样**打出来（同一套做法在 PC 侧已经救过场 ✓）。
+         *   万一还是 `0x03`，就能拿这串字节与 PC 侧工具实发的对一遍 —— 不用猜 ✗。*/
+        uart_printf(CONSOLE_UART, "[se] SHA 第%u次 包(%u B)：",
+                    (unsigned)(attempt + 1u), (unsigned)pklen);
+        for (i = 0u; i < pklen; i++) {
+            uart_printf(CONSOLE_UART, "%02x", (unsigned)pkt[i]);
+        }
+        uart_printf(CONSOLE_UART, "\r\n");
 
         (void)atecc_wake();             /* 器件若已醒，它对令牌回 NACK —— 不早退 ✓ */
         rc = transact(pkt, pklen, resp, sizeof(resp), &replen);
@@ -644,16 +668,21 @@ static int sha_txn(const uint8_t *pkt, uint32_t pklen, int want_status,
             uart_printf(CONSOLE_UART, "[se] SHA 第%u次：器件回状态 0x%02x（%s）\r\n",
                         (unsigned)(attempt + 1u), (unsigned)st, atecc_msg_status_name(st));
         } else {
-            uart_printf(CONSOLE_UART, "[se] SHA 第%u次：响应形状不对（%u B，首字节 0x%02x）\r\n",
-                        (unsigned)(attempt + 1u), (unsigned)replen, (unsigned)resp[0]);
+            uart_printf(CONSOLE_UART, "[se] SHA 第%u次：响应形状不对（%u B）raw=",
+                        (unsigned)(attempt + 1u), (unsigned)replen);
+            for (i = 0u; i < replen && i < sizeof(resp); i++) {
+                uart_printf(CONSOLE_UART, "%02x", (unsigned)resp[i]);
+            }
+            uart_printf(CONSOLE_UART, "\r\n");
         }
         break;
     }
     return ATECC_E_RESP;
 }
 
-int atecc_sha_hmac(uint16_t slot, const uint8_t *msg, size_t len,
-                   uint8_t out32[ATECC_SHA_DIGEST_BYTES])
+/* ★ 真正的活：三条命令的编排（`atecc_sha_hmac()` 包一层，为的是在这一段里关掉“探地址”）。*/
+static int sha_hmac_body(uint16_t slot, const uint8_t *msg, size_t len,
+                         uint8_t out32[ATECC_SHA_DIGEST_BYTES])
 {
     uint8_t pkt[ATECC_CMD_LEN_SHA_DATA_CRC];   /* ★ 71 = **最长包**（UPDATE 满块）——
                                                 *   引单一源常量，别自己写数 ✗ */
@@ -700,6 +729,20 @@ int atecc_sha_hmac(uint16_t slot, const uint8_t *msg, size_t len,
     s_st.hmac_ok++;
     s_st.hmac_slot = (uint32_t)slot;
     return 0;
+}
+
+/* ★★ 对外入口：只是把“探地址”关掉（见 `s_poll_ready` 处为什么 —— PC 侧已证明
+ *   探地址事务会把传输层搞死，那边已经全改固定等待；固件这里只改 SHA/HMAC 这一段 ✗，
+ *   其它路径（`Random` / `Nonce`+`Sign`）行为**一点不变** ✓）。*/
+int atecc_sha_hmac(uint16_t slot, const uint8_t *msg, size_t len,
+                   uint8_t out32[ATECC_SHA_DIGEST_BYTES])
+{
+    int rc;
+
+    s_poll_ready = 0;
+    rc = sha_hmac_body(slot, msg, len, out32);
+    s_poll_ready = 1;
+    return rc;
 }
 
 /* 固件里没有 strcmp（-nostdlib）—— 就地比一下那两个短名字（口径 = `proto/id_report.h` ✓）*/
