@@ -12,6 +12,14 @@
 
 ## 1. 台架（三块板、三根 USB、各自供电、共地）
 
+[![c 步台架接线：nanoCH32V203（自家固件）↔ TX-AH EVB（UART 版 macbus）↔ CH347F（P2 = 控制台 COM23、P3 = 模组 AT/打印口 COM24）](../hardware/wiring/cstep-ch347f-txah-evb-nanoch32.svg)](../hardware/wiring/cstep-ch347f-txah-evb-nanoch32.svg)
+
+图的看点在**两条串口各走一路**：`PA9/PA10`（控制台）进 CH347F 的 **P2/UART0**、
+`PA2/PA3`（HGIC 数据口）进模组的 **A10/A11**，模组的 `A12/A13` 再进 **P3/UART1** ——
+所以 PC 上会同时开着「我们的横幅/命令」与「模组的 AT/打印」两个窗口 ✓（判据见表下）。
+⚠ 图上那些文字标注是**手加在导出的 `.svg` 上**的，重新导出 `.fzz` 会丢 ——
+规格以 `.fzz` 网表为准（用 `tools\fzz_nets.py` 核，见 [`../hardware/wiring/README.md`](../hardware/wiring/README.md)）。
+
 ```
         ┌──────────────┐   UART2 (HGIC 数据口)   ┌────────────┐
         │ nanoCH32V203 │ PA2 ────────────────→ A10│  TX-AH EVB │

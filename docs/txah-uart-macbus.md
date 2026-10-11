@@ -32,6 +32,12 @@ python tools\fmac_macbus_switch.py restore    # 还原
 
 ## 三、接线
 
+[![b 步单模块夹具：CH347F ↔ 一块 TX-AH EVB（UART0 = 数据口 / mac_bus，UART1 = 模组 AT/打印口）](../hardware/wiring/bstep-ch347f-txah-evb.svg)](../hardware/wiring/bstep-ch347f-txah-evb.svg)
+
+先看接线的"全景"再看下面的逐针表：**一个 CH347F 同时当两个串口** ——
+`P2/UART0` 接模组的**数据口**（`A10/A11`，跑 8 B HGIC 头的二进制帧）、
+`P3/UART1` 接模组的 **AT/打印口**（`A12/A13`，跑 `AT…` 与日志）✓。
+
 ### 3.1 CH347F-EVT 的排针（哪一排是什么）
 
 | 排针 | 内容 |
@@ -516,6 +522,10 @@ python tools\probe_txah_uart.py --ch347-com 0 send-eth --frame-type frm --with-f
 
 ## 七、两块模块端到端（b 步数据面；用户 2026-09-16 选“第二块 TX-AH 当对端”）
 
+[![b 步两块模块夹具：同一个 CH347F 同时带客户端(STA)与对端(AP)两块 TX-AH EVB](../hardware/wiring/bstep-ch347f-2txah-evb.svg)](../hardware/wiring/bstep-ch347f-2txah-evb.svg)
+
+这一节用的就是上图：**两块 TX-AH 各当 STA 与 AP**，一个 CH347F 管两端（PC 上一条命令就能测）。
+
 ### 7.1 接线（一个 CH347F 管两端，PC 上一条命令就能测）
 
 | 谁 | 接到 | 说明 |
@@ -640,6 +650,8 @@ python tools\probe_txah_uart.py xfer --tx-com 0 --rx-com 1 --frame-type frm --wi
 | `hdr.ifidx` = 0…7 逐个 | 都不到 |
 
 ## 八、★ 2026-09-20 实测：**下行也通了**（客户端 STA ↔ TH-RJ45 WNB-AP）
+
+[![b 步客户端(STA) ↔ T-Halow-RJ45(AP) 夹具接线图](../hardware/wiring/bstep-ch347f-txah-evb-thrj45.svg)](../hardware/wiring/bstep-ch347f-txah-evb-thrj45.svg)
 
 §7.5 那条「下行不通」的缺口，在这条台架上补上了。台架：
 

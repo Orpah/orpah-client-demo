@@ -42,6 +42,15 @@
 
 ## 3. 接线（PC ↔ TX-AH 模块的 AT 口）
 
+> ★ **2026-10-12 补图说明**：本节这套是**最早那条台架**（nano 刷 WCH `SimulateCDC` 当 USB-UART 桥）。
+> 它后来被 **CH347F 两路 UART** 取代（能同时看控制台与模组口，而且不必刷 WCH 固件）——
+> 下面这张是**取代它的现行台架**；"nano 当 USB 桥"那张**没有画过**（这条路已废 ✗，
+> 见 §5 与 §6，不值得再画）。
+>
+> [![现行 c 步台架：nanoCH32V203（自家固件）↔ TX-AH EVB ↔ CH347F（P2 = 控制台 COM23、P3 = 模组 AT/打印口 COM24）](../hardware/wiring/cstep-ch347f-txah-evb-nanoch32.svg)](../hardware/wiring/cstep-ch347f-txah-evb-nanoch32.svg)
+>
+> 现行台架的接线、上电判据与四个真凶见 [`c3-2b-bench-bringup.md`](c3-2b-bench-bringup.md)。
+
 | nanoCH32V203 | TX-AH 开发板 | 说明 |
 |---|---|---|
 | **nano A2**（= PA2 = **USART2_TX**） | **IOA13 = J4 Pin 3** | 过桥后就是 PC 的 TX → 模块的 RX 侧信号 |
