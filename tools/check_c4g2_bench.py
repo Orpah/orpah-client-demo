@@ -156,6 +156,40 @@ def read_until(ser, pred, timeout, chunk=0.05):
     return buf
 
 
+_RE_SN = re.compile(r"\[id\]\s*sn=([A-Za-z0-9\-]+)")
+
+
+def slot0_pub_by_sn(dbp, sn):
+    """按 SN 从**真密钥库**里取那颗芯片的 Slot 0 **公钥**（64 B `X||Y`）；取不到回 None。
+
+    ★ 为什么必须按 SN 取、不能只用硬编码常量 ✗（2026-10-12 跑台架闸门才抓到 ✓）：
+      `SLOT0_PUB_X/Y` 是**某一颗**量出来的 ⇒ 换一颗就必然 `InvalidSignature`
+      —— 那是**尺子错、不是签名错** ✗（与 2026-10-11 `check_report_hex.py` 那个坑同一类）。
+    读法 = **直读 `keys` 表的 `pubkey_pem`**（与 `tools/which_chip.py` 同一张表、同一种读法 ✓）；
+      用 `public_numbers()` 拼 `X||Y`（**绕开各种序列化枚举** ✓ 版本无尖）。
+    """
+    if not dbp or not sn:
+        return None
+    try:
+        import sqlite3                                            # noqa: PLC0415
+
+        from cryptography.hazmat.primitives import serialization as _ser   # noqa: PLC0415
+
+        con = sqlite3.connect(dbp)
+        try:
+            row = con.execute("SELECT pubkey_pem FROM keys WHERE sn=?"
+                              " ORDER BY gen DESC LIMIT 1", (sn,)).fetchone()
+        finally:
+            con.close()
+        if not row or not row[0]:
+            return None
+        n = _ser.load_pem_public_key(row[0].encode("ascii")).public_numbers()
+        return n.x.to_bytes(32, "big") + n.y.to_bytes(32, "big")
+    except Exception as e:                                        # noqa: BLE001
+        print("warn 从库里取 Slot 0 公钥失败（sn=%s）：%r" % (sn, e))
+        return None
+
+
 def main():
     ap = argparse.ArgumentParser(description="c4-γ-2 上机判据（ATECC608B nonce 后端，PC 侧一键）")
     ap.add_argument("--port", default="COM23", help="固件控制台串口（默认 COM23）")
@@ -181,6 +215,14 @@ def main():
 
     fails = []
     mod_buf = ""
+    # ★ 密钥库路径（`--from-keystore` 时）—— **只解析一次**，帧判据与 `se` 判据共用 ✓
+    dbp = None
+    if args.from_keystore:
+        dbp = os.path.join(find_upstream(args.upstream) or "", "orpah.db")
+        if not os.path.exists(dbp):
+            print("FAIL --from-keystore 要能找到 %s（用 --upstream <dir> 指路）" % dbp)
+            return 1
+        print("info 用**密钥库**验（产线登记给该 SN 的那把钥 ✓）：%s" % dbp)
     if args.from_file:
         text = open(args.from_file, encoding="utf-8", errors="replace").read()
         print("（离线模式：解析 %s，%d 字符）" % (args.from_file, len(text)))
@@ -381,15 +423,28 @@ def main():
     elif got["sig_r"] and got["sig_s"]:
         sig = bytes.fromhex(got["sig_r"] + got["sig_s"])
         digest = hashlib.sha256(D_SELFTEST_MSG).digest()
+        # ★★ 公钥从**哪来**也有对错 ✗（2026-10-12 实测）：按 SN 从库里取 ✓；
+        #    取不到才回退硬编码常量，而且要**报警**（它只属于被量过的那一颗 ✗）。
+        _m = _RE_SN.search(t or "")
+        sn_seen = _m.group(1) if _m else None
+        pub64 = slot0_pub_by_sn(dbp, sn_seen)
+        psrc = "密钥库里登记的（sn=%s ✓）" % sn_seen
+        if pub64 is None:
+            pub64 = SLOT0_PUB_X + SLOT0_PUB_Y
+            psrc = "**硬编码常量**（★ 只属于被量过的那一颗）"
+            print("warn 没按 SN 从库里取到 Slot 0 公钥（sn=%s）⇒ 回退用**硬编码常量** ✗："
+                  "换一颗芯片就会 `InvalidSignature`（**尺子错、不是签名错** ✗）；"
+                  "要按库里的钥验就加 `--from-keystore`" % (sn_seen or "?"))
         try:
             from cryptography.hazmat.primitives import hashes as _h
             from cryptography.hazmat.primitives.asymmetric import ec as _ec, utils as _u
             pk = _ec.EllipticCurvePublicKey.from_encoded_point(
-                _ec.SECP256R1(), b"\x04" + SLOT0_PUB_X + SLOT0_PUB_Y)
+                _ec.SECP256R1(), b"\x04" + pub64)
             der = _u.encode_dss_signature(int.from_bytes(sig[:32], "big"),
                                           int.from_bytes(sig[32:], "big"))
             pk.verify(der, digest, _ec.ECDSA(_u.Prehashed(_h.SHA256())))
-            print("PASS 板上那条签名被 **Slot 0 的公钥独立验过**（Prehashed(SHA256)）✓")
+            print("PASS 板上那条签名被 **Slot 0 的公钥独立验过**（Prehashed(SHA256)；公钥来源 = %s）✓"
+                  % psrc)
         except ImportError:
             print("warn 本机没装 `cryptography` ⇒ 跳过独立验签（**不算过**）")
         except Exception as e:                                # noqa: BLE001
@@ -425,16 +480,9 @@ def main():
             #   （那不是 bug，是"密钥库还没登记这颗芯片"）。
             pk_hex = (SLOT0_PUB_X + SLOT0_PUB_Y).hex()
             ksdb = None
-            if args.from_keystore:
-                dbp = os.path.join(find_upstream(args.upstream) or "", "orpah.db")
-                if not os.path.exists(dbp):
-                    print("FAIL --from-keystore 要能找到 %s（用 --upstream <dir> 指路）" % dbp)
-                    fails.append("找不到密钥库")
-                else:
-                    import keystore as kst                   # noqa: PLC0415
-                    ksdb = kst.KeyStoreDB(dbp)               # 真库（产线登记的那把 ✓）
-                    print("info 用**密钥库**里登记给该 SN 的钥验（ES256 取公钥 / HS256 取降级 HMAC 钥 ✓）：%s"
-                          % dbp)
+            if dbp:
+                import keystore as kst                       # noqa: PLC0415
+                ksdb = kst.KeyStoreDB(dbp)                   # 真库（产线登记的那把 ✓）
             elif d_step:
                 print("info 用 **Slot 0 的公钥**验这条帧（硬编码常量、产线该登记的那把 ✓），"
                       "不是 demo 派生钥；★ 它**只认这一颗 + 只走 ES256** ✗ ⇒ 要按库里的钥验就加"

@@ -1,6 +1,6 @@
 # checks_report.md —— `tools/run_checks.py` 的输出（**入库**，同隔壁仓惯例）
 
-跑的时间：2026-10-12 00:11:38
+跑的时间：2026-10-12 00:18:31
 
 判定口径：**退出码 0 且输出里没有 `FAIL` / `Traceback`**（只看退出码会漏 —— 有些脚本自己吞异常）。
 
@@ -11,7 +11,7 @@
 | ✅ PASS | 标注扫描（量尺，不作闸门） | `C:\Python313\python.exe fzz_annot_scan.py --svg` | 0 |
 | ✅ PASS | Python 语法（tools/ + proto/） | `C:\Python313\python.exe -m compileall -q tools proto` | 0 |
 | ✅ PASS | 固件编译（riscv-none-embed-gcc，要求零 warning） | `make -C firmware SHELL=D:\Program Files\Git\bin\sh.exe` | 0 |
-| ⏭ skip | 台架判据（check_c4g2_bench.py，要接板子 ⇒ 用 --bench） | — | — |
+| ✅ PASS | 台架判据：SE 唤醒/Random/签名/nonce_src/sign_src/上游收帧 | `C:\Python313\python.exe check_c4g2_bench.py --port COM23 --from-keystore` | 0 |
 
 ## 各闸门输出的尾部（便于「上次为什么红」一眼可查）
 
@@ -64,7 +64,7 @@ cstep-nanoch32-atecc608b.fzz -> F:\git\orpah-client-demo\hardware\wiring\cstep-n
   --- 逐网核对（模块侧不限实例编号）---
     ✓ MCU.PB7/USB2DM  <->  电阻.connector1  <->  安全元件.SDA  （图上 = R1.connector1  U5.SDA  U6.PB7/USB2DM）
     ✓ MCU.PB6/USB2DP  <->  电阻.connector1  <->  安全元件.SCL  （图上 = R2.connector1  U5.SCL  U6.PB6/USB2DP）
-    ✓ MCU.VDDA  <->  电阻.connector0  <->  安全元件.VCC  （图上 = R2.connector0  U5.VCC  U6.VDDA）
+    ✓ MCU.VDDA  <->  电阻.connector0  <->  安全元件.VCC  （图上 = R1.connector0  U5.VCC  U6.VDDA）
     ✓ MCU.GND  <->  安全元件.GND                      （图上 = U5.GND  U6.GND）
     · 非连线（部件内部同网 / 空孔）：U5.NC  @E7
     · 非连线（部件内部同网 / 空孔）：U5.NC  @E6
@@ -113,6 +113,36 @@ cstep-nanoch32-atecc608b.fzz -> F:\git\orpah-client-demo\hardware\wiring\cstep-n
 make: Entering directory 'F:/git/orpah-client-demo/firmware'
 make: Nothing to be done for 'all'.
 make: Leaving directory 'F:/git/orpah-client-demo/firmware'
+```
+
+### 台架判据：SE 唤醒/Random/签名/nonce_src/sign_src/上游收帧（rc=0，PASS）
+
+```
+
+warn 唤醒判据没过（不是），但随后的 `Random` 成功 ⇒ **器件本来就醒着**（这一条只在「它从睡眠里被叫醒」时才有意义）—— 不算失败
+PASS `se` 统计：cmd=87 ok=27 fail=0  ★ crc_mode=crc(响应 35 B)
+PASS 响应字地址 resp_waddr=0x00（公开实现里的正确值）
+PASS 取到 32 B 随机数；前 16 B = BE5736F1F2658082CF78FF9EFCF1D84A
+PASS 两次 `se` 的 16 B 不同（RNG 在动）：BE5736F1F2658082… / B1E5325CA10ADFEA…
+PASS `id` 显示 nonce_src=se（流水线取的是 SE 的随机数）
+PASS `id` 显示签名来源 = SE（level=0 的 ES256 在 SE 里签）
+info `se` 计数：sign_ok=26 sign_fail=0
+PASS 板上那条签名被 **Slot 0 的公钥独立验过**（Prehashed(SHA256)；公钥来源 = 密钥库里登记的（sn=CN-T1AN1V-X3HANM2E20-H ✓））✓
+固件自报：level=1 alg=HS256 nonce=31DA67EB24E88B719B0C65298CE5B86A len=364 build_ms=480
+拿到帧 364 字节（hex 728 字符）
+帧长 364 B  type=ORPAH-ID-REPORT  sn=CN-T1AN1V-X3HANM2E20-H  ts=0  level=1  alg=HS256  nonce=2F9927AB5EB59941727C9F227C5744B1
+cap={'rtc': False}  battery_mv=None  firmware=0.1.0-c4g1  seen_routers=[]
+密钥库：用**真库**（orpah.db）里登记给该 SN 的钥验（ES256 取公钥 / HS256 取降级 HMAC 钥 ✓）
+服务端判定：accepted=True level=1 trust=medium coverage_only=False error=None
+PASS 上游 verify_report 接受这条报文（level=1）
+warn 模组打印口没有任何输出（模组在跑吗？供电/接线/跳线帽）
+============================================================
+★ 本轮实测结论（请填回 docs/atecc608b-se.md §6 的「实测」列）：
+   crc_mode = crc(响应 35 B)
+   nonce_src = se
+   sign_src  = se（★ d 步）
+PASS c4-γ-2 上机判据：nonce 来自 ATECC608B 的 Random(0x1B)，且帧仍被上游接受
+     ★ d 步：`sign_src=se` ✓ 且板上那条签名已被 **Slot 0 的公钥独立验过** ✓（ES256 在 SE 里签、私钥不出芯片）
 ```
 
 ## 需要台架的（不在默认里）

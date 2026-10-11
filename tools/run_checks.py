@@ -120,7 +120,13 @@ def main():
     # ⑥ 台架判据（默认不跑）
     if args.bench:
         res.append(run("台架判据：SE 唤醒/Random/签名/nonce_src/sign_src/上游收帧",
-                       [PY, os.path.join(HERE, "check_c4g2_bench.py"), "--port", args.port]))
+                       [PY, os.path.join(HERE, "check_c4g2_bench.py"), "--port", args.port,
+                        # ★★ 2026-10-12：**默认就用密钥库里的钥验** ✓ —— 原先它默认用
+                        #   `check_c4g2_bench.py` 里**硬编码的 Slot 0 公钥常量** ✗，而那常量
+                        #   只属于**被量过的那一颗** ⇒ 换一颗（或跑 HS256）必然
+                        #   `signature_invalid`：**那是尺子错、不是签名错** ✗
+                        #   （2026-10-12 跑这条闸门时真的抓到了 ✓，见 docs §9.0 第 5 条）。
+                        "--from-keystore"]))
     else:
         skipped.append("台架判据（check_c4g2_bench.py，要接板子 ⇒ 用 --bench）")
 
