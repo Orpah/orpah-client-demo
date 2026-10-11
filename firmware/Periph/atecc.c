@@ -274,11 +274,15 @@ static int wake_reply_read(uint8_t out4[4])
 #define ATECC_READY_POLL_MS   250u
 #define ATECC_READY_GAP_US    300u     /* 两次探地址之间（探一次只要 µs 量级 ✓）*/
 
-/* ★★ 2026-10-11 上机（HS256 从第 3 块起全回 `0x03`）给 SHA/HMAC 序列开的开关：
- *   ① 器件“算完之前地址不 ACK” ⇒ 探地址（`wait_ready`）**本该**是对的；
- *   ② 但 PC 侧早先实测过“**探地址事务本身**会把传输层搞死”（§8.16：3/12 → 改成固定等待 **12/12** ✓）
- *      ⇒ 那边**已经全部用固定等待**（`WAIT_MS_DEFAULT` 20 ms / `WAIT_MS_CRYPTO` 150 ms ✓）。
- *   ⇒ 这里默认仍是“探地址”（其它路径行为**不变** ✗），只在 `atecc_sha_hmac()` 里关掉它 ✓。 */
+/* ★★ `s_poll_ready` = 发送命令后"等就绪"的两条路（2026-10-11 上机后定稿 ✓）：
+ *   ① 器件"算完之前地址不 ACK" ⇒ 探地址（`wait_ready`）= **器件自己的就绪信号** ✓；
+ *   ② PC 侧早先实测过"**探地址事务本身**会把（CH347 的）传输层搞死"（§8.16：3/12 →
+ *      改固定等待 **12/12** ✓）—— ★ 那是 **CH347 自己的毛病、不是器件的要求** ✗（§8.28）：
+ *      它是 **PC 侧的规避**，**固件（nano 直驱）没有这个毛病 ⇒ 就该用 ①** ✓。
+ *   ★ 上机实测（同一颗芯片、同一条 364 B 消息）：SHA 段用探地址 ⇒ `HS256 ok=2 fail=0`，
+ *     报文端到端过 ✓；用固定等待 ⇒ 只能跑到第 4～5 条命令就回 `0x03`/`0xEE` ✗
+ *     （只能猜"等多久才该读"，猜短了就是 `0xEE` 脏字节 ✗）。
+ *   ⚠ 开关保留（控制台 `setime` 可改 ✓），但 **SHA 段的缺省 = 探地址** ✓（见 `s_sha_poll`）。 */
 static int s_poll_ready = 1;
 /* ★★ 固定等待 = **30 ms**（✗ 不是 PC 侧 `WAIT_MS_CRYPTO` 的 150 ms）—— 出处 §8.27：
  *   **器件一旦在 SHA 序列中途睡下去，SHA 上下文就丢了** ✗ ⇒ 后面每条命令都回 `0x03`，
@@ -289,10 +293,18 @@ static int s_poll_ready = 1;
  *   SHA 一条只算 64 B，实测 ~10 ms 就完 ⇒ 30 ms 有余量 ✓（`Sign`/`GenKey` 那类仍走探地址 ✓）。*/
 #define ATECC_READY_FIXED_MS  30u
 /* ★★ 上机扫时序的三个旋钮（缺省 = 上面的常数；控制台 `setime` 可改 ✓，见 `atecc_sha_timing_set`）。
- * `s_sha_poll` = 1 ⇒ SHA 段也用“探地址”当就绪判据（器件原生信号 ✓）；= 0 ⇒ 固定等 `s_sha_ready_ms`。*/
+ * ★★★ `s_sha_poll` 缺省 = **1**（用“探地址”当就绪判据）—— 2026-10-11 上机**实测出来的** ✓：
+ *   `poll=1` ⇒ `se_hits: HS256 ok=2 fail=0`，报文本端到端过（上游 `verify_report`
+ *   `accepted=True / level=1 / trust=medium` ✓，§8.28）；`poll=0`（固定等待）下同样一条消息
+ *   只能跑到第 4～5 条命令就回 `0x03`/`0xEE` ✗。
+ *   ★ 为什么以前把它关掉是**错的** ✗：那个“探地址会把传输层搞死”是 **CH347 自己的毛病**
+ *     （§8.16：3/12 → 固定等待 12/12）✗ —— 它是 **PC 侧的规避**，**不是器件的要求** ✓；
+ *     固件（nano 直驱）跟着关掉 ⇒ 只能猜“等多久才该读”⇒ 猜短了就是 `0xEE`（脏字节）✗。
+ *     而器件**自己会告诉你**：“忙着就不答地址” ✓ ⇒ 用这个信号既不会读早、也不会白等 ✓。
+ *   · `s_sha_ready_ms` 仅在 `poll=0` 时用（缺省 30；保留作为回退/对比 ✓）。*/
 static uint32_t s_sha_ready_ms = ATECC_READY_FIXED_MS;   /* poll=0 时的固定等待 */
 static uint32_t s_sha_gap_ms   = 0u;                     /* = `ATECC_HMAC_STEP_GAP_MS` 的缺省 */
-static int      s_sha_poll     = 0;                      /* 缺省保持“关探地址”的旧行为 ✓ */
+static int      s_sha_poll     = 1;                      /* ★ 缺省 = 探地址（上机实测 ✓，见上）*/
 
 static void gap_ms(uint32_t ms);        /* 定义在后（给“不探地址”那条路用 ✓）*/
 
@@ -793,9 +805,8 @@ static int sha_hmac_body(uint16_t slot, const uint8_t *msg, size_t len,
     return rc;
 }
 
-/* ★★ 对外入口：只是把“探地址”关掉（见 `s_poll_ready` 处为什么 —— PC 侧已证明
- *   探地址事务会把传输层搞死，那边已经全改固定等待；固件这里只改 SHA/HMAC 这一段 ✗，
- *   其它路径（`Random` / `Nonce`+`Sign`）行为**一点不变** ✓）。*/
+/* ★★ 对外入口：把 `s_poll_ready` 临时换成旋钮值（缺省 = 1 = 探地址 ✓），跑完恢复 ✓ ——
+ *   其它路径（`Random` / `Nonce`+`Sign`）的行为**一点不变** ✓。*/
 int atecc_sha_hmac(uint16_t slot, const uint8_t *msg, size_t len,
                    uint8_t out32[ATECC_SHA_DIGEST_BYTES])
 {
