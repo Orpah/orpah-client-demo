@@ -875,6 +875,8 @@ int atecc_diag_probe(void)
     uint8_t hit;
     char hex[ATECC_NONCE_BYTES * 2 + 1];
     int rc, crc_used = 0, rev_ok = 0, cfg_ok = 0;
+    i2c_stats_t sa, sb;                       /* ★ 命令阶段的计数增量（见 ⑤ 之后的结论）*/
+    uint32_t dstart, dnack, dto;
 
     /* 为什么做这条（2026-09-23 现场：接线/供电/总线/时钟/时序全部实测排除，仍永远 NACK）：
      *   · 手册第 13 页：**608B 的 I²C 地址是可编程的** ⇒ 不一定是 0x60；
@@ -933,8 +935,10 @@ int atecc_diag_probe(void)
                                       "也不做下面 ③④ 的判据 ✗\r\n", (unsigned)s_addr);
         }
     } else {
-        uart_printf(CONSOLE_UART, "[sewake] 两遍扫描都无人应答 ⇒ 器件侧确实没反应"
-                                  "（供电/焊接/坏件 —— 但已不可能是「地址写错」）\r\n");
+        /* ★ 2026-10-11 改口径：原来那句“器件侧确实没反应（供电/焊接/坏件）”在
+         *   两种情形下都会把人带偏 ✗（外设卡死时也是这个形状）⇒ 结论交给计数（见 ⑤ 之后）。*/
+        uart_printf(CONSOLE_UART, "[sewake] 两遍扫描都无人应答 —— **先别怪器件** ✗："
+                                  "是「器件侧」还是「**主机这边卡住**」，看 ⑤ 之后的计数 ✓\r\n");
         uart_printf(CONSOLE_UART, "[sewake] 仍在 0x%02x 上直接写一条命令（不等 ACK）"
                                   "—— 万一扫描本身有毛病：\r\n", (unsigned)s_addr);
     }
@@ -965,6 +969,8 @@ int atecc_diag_probe(void)
         }
     }
 
+    i2c_stats(&sa);                  /* ★ 命令阶段起点（⑤ 之后算 Δ）*/
+
     /* ⑤ Random：这才是 c4-γ-2 真正要的那条。**总是试**（走 `random_try` 的宽容唤醒：
      *   令牌没 ACK 不早退）—— 这样两种情形下都有一行结论，明早一颗芯片一眼一句。*/
     rc = random_try(r32, 0);
@@ -976,6 +982,32 @@ int atecc_diag_probe(void)
         uart_printf(CONSOLE_UART, "[sewake] ⑤ Random(0x1B) -> ok：前 16 B = %s\r\n", hex);
     } else {
         uart_printf(CONSOLE_UART, "[sewake] ⑤ Random(0x1B) -> **失败** rc=%d\r\n", rc);
+    }
+
+    /* ★★ 2026-10-11（当日实测）：**结论必须按计数分档** ✗ —— 同一句“器件侧没反应”在两种
+     *   情形下会把排查带反：
+     *     `nack > 0`               ⇒ 地址真发出去了、只是**没人 ACK** ⇒ 器件 / 接线 / **共地** / 上拉 ✓
+     *     `nack = 0 且 timeout > 0` ⇒ **连地址阶段都没走完**（时钟被拉住）⇒ **主机这边卡住** ✗
+     *                                （外设卡死 / 被另一方主机或器件按住）⇒ 先 `seclk 100` 复位再看
+     *     `start = 0`              ⇒ 一个 START 都没发出去（外设没使能 / 更早就返回了）*/
+    i2c_stats(&sb);
+    dstart = sb.start - sa.start;
+    dnack  = sb.nack - sa.nack;
+    dto    = sb.timeout - sa.timeout;
+    uart_printf(CONSOLE_UART, "[sewake] 命令阶段计数（Δ）：start=+%u nack=+%u timeout=+%u ⇒ ",
+                (unsigned)dstart, (unsigned)dnack, (unsigned)dto);
+    if (dnack > 0u) {
+        uart_printf(CONSOLE_UART, "地址发出去了、**没人 ACK** ⇒ 查器件 / 接线 / "
+                                  "**三块板共地** / 上拉 ✓（这时才轮到器件侧）\r\n");
+    } else if (dto > 0u) {
+        uart_printf(CONSOLE_UART, "**连地址阶段都没走完**（时钟被拉住）⇒ 主机这边卡住 ✗："
+                                  "敲 `seclk 100` 复位外设再看（固件已会自愈：连续 %u 次失败"
+                                  "自动复位）；若一直如此，查是不是**另一方主机/器件把线按住**\r\n",
+                    (unsigned)I2C_FAILS_BEFORE_REINIT);
+    } else if (dstart == 0u) {
+        uart_printf(CONSOLE_UART, "一个 START 都没发出去 ⇒ 外设没使能 / 更早就返回了 ✗\r\n");
+    } else {
+        uart_printf(CONSOLE_UART, "计数看着正常但没拿到数据 ⇒ 看上面 ⑤ 的 rc 与响应形状\r\n");
     }
 
     uart_printf(CONSOLE_UART, "[sewake] ===== 结论：addr=0x%02x rev=%s cfg=%s random=%s =====\r\n",

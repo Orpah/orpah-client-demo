@@ -22,6 +22,10 @@
 /* ATECC608B 的 7 位地址（出厂固定 0x60；8 位写地址 = 0xC0）*/
 #define I2C_ADDR_ATECC   0x60u
 
+/* ★ 连续多少次“超时/总线错”就自动复位外设（`i2c.c` 的自愈阈值）——
+ *   `Periph/atecc.c` 的 `sewake` 提示也引这个数，**单一源** ✓（2026-10-11）*/
+#define I2C_FAILS_BEFORE_REINIT  3u
+
 typedef struct {
     uint32_t start;      /* 成功的 START 次数 */
     uint32_t tx_bytes;   /* 写出去的字节数 */

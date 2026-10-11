@@ -16,6 +16,7 @@
 
 #include "board.h"
 #include "gpio.h"
+#include "uart.h"              /* ★ 自愈提示要打一行（2026-10-11）*/
 
 /* 主循环的 1 ms 时基（`Core/main.c` 定义；同 `Core/id_core.c` 的用法）。
  * 用它做**截止时刻**判断 —— 比"数循环次数"可读，也能回答"等了多久"。*/
@@ -35,6 +36,35 @@ extern volatile uint32_t g_tick_ms;
 #define IT_ARB       (-5)
 
 static i2c_stats_t s_st;
+
+/* ★★ 2026-10-11：**连续**超时/总线错 ⇒ **在开始下一条事务之前**自动复位 I²C 外设（SWRST）。
+ *
+ * 为什么需要（2026-10-10 与 2026-10-11 各实测一次）：外设会“**卡住**” —— 之后**所有**
+ *   事务都是 `nack=0 + timeout`（连地址探针都不答、**别的板子也读不到这条总线** ✗），
+ *   而 `seclk <任意>`（= 重做 `i2c_init()`，里面带 SWRST）**立刻恢复** ✓。
+ *   ⇒ 与其每次靠人记得敲 `seclk`，不如在总线层自愈 + 打一行说明 ✓。
+ *
+ * ⚠ 只在**事务之前**复位：事务中途复位会把刚建立的握手打断 ✗。
+ * ⚠ 只把**超时/总线错**算失败：**NACK 是正常答案**（器件不在/刚睡）⇒ 不算 ✗。*/
+static uint32_t s_fails;        /* 连续失败数（成功即清零）*/
+static uint32_t s_reinits;      /* 自愈次数 */
+
+static void maybe_reinit(void)
+{
+    if (s_fails < I2C_FAILS_BEFORE_REINIT) { return; }
+    s_fails = 0u;
+    s_reinits++;
+    uart_printf(CONSOLE_UART, "[i2c] 连续 %u 次超时/总线错 ⇒ 自动复位 I2C 外设（SWRST，第 %u 次）"
+                              "—— 接着重试本事务 ✓\r\n",
+                (unsigned)I2C_FAILS_BEFORE_REINIT, (unsigned)s_reinits);
+    i2c_init();
+}
+
+static void note_rc(int rc)
+{
+    if (rc == IT_OK) { s_fails = 0u; }
+    else if (rc == IT_TIMEOUT || rc == IT_BUSERR || rc == IT_ARB) { s_fails++; }
+}
 
 /* 当前 I²C 速率（工装可改；缺省 = `board.h` 的 `SE_I2C_HZ`）。
  * ⚠ 唤醒令牌按手册必须 ≤100 kHz ⇒ `seclk` 就是为这条准备的。*/
@@ -135,7 +165,7 @@ void i2c_enable(void)
     I2C1->CTLR1 |= (uint32_t)(I2C_CTLR1_PE | I2C_CTLR1_ACK);
 }
 
-int i2c_probe_dir(uint8_t addr7, int read_dir)
+static int probe_dir_raw(uint8_t addr7, int read_dir)
 {
     int rc;
 
@@ -161,12 +191,22 @@ int i2c_probe_dir(uint8_t addr7, int read_dir)
     return rc;
 }
 
+int i2c_probe_dir(uint8_t addr7, int read_dir)
+{
+    int rc;
+
+    maybe_reinit();                     /* ★ 自愈（见 `s_fails` 处）：连续失败后先复位一次 */
+    rc = probe_dir_raw(addr7, read_dir);
+    note_rc(rc);
+    return rc;
+}
+
 int i2c_probe(uint8_t addr7)
 {
     return i2c_probe_dir(addr7, 0);
 }
 
-int i2c_write(uint8_t addr7, const uint8_t *buf, uint32_t n)
+static int write_raw(uint8_t addr7, const uint8_t *buf, uint32_t n)
 {
     uint32_t i;
     int rc;
@@ -236,7 +276,17 @@ int i2c_write(uint8_t addr7, const uint8_t *buf, uint32_t n)
     return IT_OK;
 }
 
-int i2c_read_begin(uint8_t addr7, uint8_t word_addr)
+int i2c_write(uint8_t addr7, const uint8_t *buf, uint32_t n)
+{
+    int rc;
+
+    maybe_reinit();                     /* ★ 自愈（见 `s_fails` 处）*/
+    rc = write_raw(addr7, buf, n);
+    note_rc(rc);
+    return rc;
+}
+
+static int read_begin_raw(uint8_t addr7, uint8_t word_addr)
 {
     int rc;
 
@@ -296,6 +346,16 @@ int i2c_read_begin(uint8_t addr7, uint8_t word_addr)
     (void)I2C1->STAR2;
     I2C1->CTLR1 |= I2C_CTLR1_ACK;        /* 先 ACK，最后一字节前再撤 */
     return IT_OK;
+}
+
+int i2c_read_begin(uint8_t addr7, uint8_t word_addr)
+{
+    int rc;
+
+    maybe_reinit();                     /* ★ 自愈（见 `s_fails` 处）*/
+    rc = read_begin_raw(addr7, word_addr);
+    note_rc(rc);
+    return rc;
 }
 
 int i2c_read_byte(uint8_t *b, int ack)
