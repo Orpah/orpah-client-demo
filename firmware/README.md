@@ -121,6 +121,9 @@ WCHISPTool 流程：按住 `BOOT` → 按/放 `RST` → 松 `BOOT` → 选 `buil
 3. 键 `AT` + 回车 → 回 `OK (rx=N)`；`stat` → 计数器（含 `tick=`/`loops=`，两个都在涨 = 时基与主循环都好）；
 4. **每 3 s** 自动探测数据口：`[mod] tx GET_UART_FIXLEN #N, waiting reply...`，
    模组应答时打 `[mod] ctrl type=3 id=109 status=0 len=2` + `[mod] **DATA PORT IS UP**`；
+   **不应答**时过 3 s 打一条 `[mod] no reply in 3s - check wiring / baud / module fw`
+   （★ 这两句与手动 `ping` 的区别：手动那条打 **`[ping]`**、周期那条打 `[mod]` —— 格式相同，
+   只能靠 tag 认“是谁打的”✓；主循环里“判超时”必须排在“发下一条”**之前**，否则超时那行恒不出现 ✗）；
 5. 模组的 AT/打印口（COM24）同步看到 `[mbus rx] 9 byte(s) ...` 与 `[mbus tx] 14 byte(s) ... resp cmd, ret:2`。
 
 > 判据是"**收到 CMD 应答**"，不是"我们写出去了" —— 与 PC 侧 `tools/hgic_bus.py::ping()` 同一口径。

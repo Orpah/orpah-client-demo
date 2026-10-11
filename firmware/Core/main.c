@@ -140,19 +140,25 @@ static void module_frame(const hgic_hdr_t *h, const uint8_t *payload, size_t ple
     }
 }
 
-static void do_ping(void)
+/* `manual` != 0 ⇒ 是控制台 `ping` 敲出来的那条（打 `[ping]`）。
+ *
+ * ★ 为什么非要分：手动与周期探测**同格式**（2026-10-11 用户就因此认不出
+ *   “哪条是我的 ping 的结果” ✗）⇒ tag 必须写“**这一行是谁打的**”：
+ *   手动 = `[ping]`（命令自己打的）、周期 = `[mod]`（模组口的周期事件）。*/
+static void do_ping(int manual)
 {
+    const char *tag = manual ? "[ping]" : "[mod]";
     int n = hgic_uart_send_cmd(HGIC_CMD_GET_UART_FIXLEN, NULL, 0);
 
     g_ping_seq++;
     if (n < 0) {
-        uart_printf(CONSOLE_UART, "[mod] send GET_UART_FIXLEN failed rc=%d\r\n", n);
+        uart_printf(CONSOLE_UART, "%s send GET_UART_FIXLEN failed rc=%d\r\n", tag, n);
         return;
     }
     g_ping_pending = 1u;
     g_ping_deadline = g_tick_ms + 3000u;   /* 3 s 超时（同 PC 侧 ping 的默认）*/
-    uart_printf(CONSOLE_UART, "[mod] tx GET_UART_FIXLEN #%u, waiting reply...\r\n",
-                (unsigned)g_ping_seq);
+    uart_printf(CONSOLE_UART, "%s tx GET_UART_FIXLEN #%u, waiting reply...\r\n",
+                tag, (unsigned)g_ping_seq);
 }
 
 static void print_stats(void)
@@ -408,7 +414,7 @@ static void run_cmd(const char *cmd)
     if (str_eq(cmd, "AT")) {
         uart_printf(CONSOLE_UART, "\r\nOK (rx=%u)\r\n", (unsigned)g_rx_bytes);
     } else if (str_eq(cmd, "ping")) {
-        do_ping();
+        do_ping(1);
     } else if (str_eq(cmd, "stat")) {
         print_stats();
     } else if (cmd[0] == 's' && cmd[1] == 'e' && cmd[2] == 'n' && cmd[3] == 'd' &&
@@ -596,7 +602,7 @@ int main(void)
     (void)atecc_init();
 
     banner();
-    do_ping();                        /* ★ 上电就探测：模组应答才算数据口通 */
+    do_ping(0);                       /* ★ 上电就探测：模组应答才算数据口通（打 `[mod]`）*/
 
     /* ★ c4-γ-1：已签 ID 上报任务。
      * `boot_entropy` = 上电熵（**几十 bit、非生产强度**，见 proto/id_nonce.h）：
@@ -615,20 +621,24 @@ int main(void)
                          (uint8_t)!gpio_get_pin(LED_HEART_PORT, LED_HEART_PIN));
         }
 
-        /* ★★ 周期探测（c3-2b 上机调试加）：每 3 s 从数据口发一次 ping。
-         *   为什么不用“只开机发一次”：那是一次性证据，PC 侧要恰好在那一下听着才看得到；
-         *   改成周期后 ⇒ 模组 AT/打印口**每 3 s** 会出现 `[mbus rx] 9 byte(s) …`，
-         *   控制台也会周期出现结果 ⇒ **任何时刻都能验证数据口通不通**。*/
-        if ((int32_t)(g_tick_ms - last_ping) >= 3000) {
-            last_ping = g_tick_ms;
-            do_ping();
-        }
-
-        /* 探测超时：**如实报“没应答”**（不静默等）*/
+        /* ★★ **顺序不能反**（2026-10-11 修了一个真 bug ✗）：先判“上一条没应答”，
+         *   再发下一条 —— 两个判断都是 3 s：若把周期探测放前面，`do_ping()` 会把
+         *   `g_ping_deadline` 又推后 3 s ⇒ 紧接着的超时判断**恒为假** ⇒
+         *   这句“没应答”**永远打不出来** ✗（现场现象：只看到 `waiting reply...`）。*/
         if (g_ping_pending && (int32_t)(g_tick_ms - g_ping_deadline) >= 0) {
             g_ping_pending = 0u;
             uart_printf(CONSOLE_UART,
                         "[mod] no reply in 3s - check wiring / baud / module fw\r\n");
+        }
+
+        /* ★★ 周期探测（c3-2b 上机调试加）：每 3 s 从数据口发一次 ping。（`do_ping(0)` ⇒
+         *   打 `[mod]`：这是**模组口的周期事件**，不是某条命令的读数。）
+         *   为什么不用“只开机发一次”：那是一次性证据，PC 侧要恰好在那一下听着才看得到；
+         *   改成周期后 ⇒ 模组 AT/打印口**每 3 s**会出现 `[mbus rx] 9 byte(s) …`，
+         *   控制台也会周期出现结果 ⇒ **任何时刻都能验证数据口通不通**。*/
+        if ((int32_t)(g_tick_ms - last_ping) >= 3000) {
+            last_ping = g_tick_ms;
+            do_ping(0);
         }
 
         /* ★ c4-γ-1：已签 ID 上报（``IDC_INTERVAL_MS` 到点就发；组装/签名会阻塞一会儿，
