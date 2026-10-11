@@ -1070,6 +1070,7 @@ int atecc_diag_scan_stats(uint32_t rounds)
 int atecc_line_test(uint32_t seconds)
 {
     uint32_t n, deadline, half = 250u;      /* 半周期 250 ms ⇒ ~2 Hz（200 ms/div 也好看）*/
+    uint32_t bad = 0u;                      /* ★ 2026-10-11：驱动电平与**读回**不符的拍数 */
 
     if (seconds == 0u) { seconds = 10u; }
     if (seconds > 30u) { seconds = 30u; }
@@ -1083,23 +1084,37 @@ int atecc_line_test(uint32_t seconds)
     uart_printf(CONSOLE_UART, "\r\n[line] SCL(PB%u) **2 Hz** / SDA(PB%u) **1 Hz**，翻转 %u s\r\n"
                              "       两条线用**不同频率**是有意的：逐只点芯片的脚时，\r\n"
                              "       快翻转的那只 = SCL 网、慢翻转的那只 = SDA 网\r\n"
-                             "       （恒定高 = VCC、恒定低 = GND、不动 = NC）—— 不需要知道脚号\r\n",
+                             "       （恒定高 = VCC、恒定低 = GND、不动 = NC）—— 不需要知道脚号\r\n"
+                             "       ★ 每拍还**读回**实际电平：驱动 0 读到 1 / 驱动 1 读到 0 ⇒\r\n"
+                             "         有东西顶着线（两线互短 / 被别的源拉死）—— 这是**固件能判**的那半边 ✓\r\n"
+                             "       ⚠ “线有没有接到板子上”**这个判不了**（悬空的脚会跟着驱动走 ✗）\r\n"
+                             "         ⇒ 那一条仍要万用表量通断（蜂鸣档）\r\n",
                 (unsigned)SE_SCL_PIN, (unsigned)SE_SDA_PIN, (unsigned)seconds);
 
     for (n = 0u; n < seconds * 4u; n++) {
         uint8_t scl = (n & 1u) ? 1u : 0u;           /* 每 250 ms 翻一次 = 2 Hz */
         uint8_t sda = ((n >> 1) & 1u) ? 1u : 0u;    /* 每 500 ms 翻一次 = 1 Hz（SCL 的一半）*/
+        uint8_t rscl, rsda;
 
         gpio_set_pin(SE_I2C_PORT, SE_SCL_PIN, scl);
         gpio_set_pin(SE_I2C_PORT, SE_SDA_PIN, sda);
-        uart_printf(CONSOLE_UART, "[line] %u/%u  SCL=%u SDA=%u\r\n",
+        i2c_delay_us(50u);              /* 给上拉一点时间（同 `lines_free()` 的口径 ✓）*/
+        rscl = gpio_get_pin(SE_I2C_PORT, SE_SCL_PIN);
+        rsda = gpio_get_pin(SE_I2C_PORT, SE_SDA_PIN);
+        if (rscl != scl || rsda != sda) { bad++; }
+        uart_printf(CONSOLE_UART, "[line] %u/%u  SCL=%u SDA=%u  读回 %u/%u%s\r\n",
                     (unsigned)(n + 1u), (unsigned)(seconds * 4u),
-                    (unsigned)scl, (unsigned)sda);
+                    (unsigned)scl, (unsigned)sda, (unsigned)rscl, (unsigned)rsda,
+                    (rscl != scl || rsda != sda) ? "  ← **不一致**（有线被顶着）✗" : "");
         deadline = g_tick_ms + half;
         while ((int32_t)(g_tick_ms - deadline) < 0) { }
     }
 
     i2c_init();                     /* 恢复：复用开漏 + 外设（单一源在 i2c.c）*/
-    uart_printf(CONSOLE_UART, "[line] done（已恢复 I2C 复用；接着敲 `se` 继续）\r\n");
+    uart_printf(CONSOLE_UART, "[line] done（已恢复 I2C 复用；接着敲 `se` 继续）"
+                              "读回不一致 %u/%u 拍%s\r\n", (unsigned)bad,
+                (unsigned)(seconds * 4u),
+                (bad != 0u) ? " ✗（有线被顶着：短路 / 两线互短 / 被别的源拉死）"
+                            : " ✓（但**不等于**线接好了：悬空的脚也会跟着驱动走 ✗）");
     return 0;
 }
