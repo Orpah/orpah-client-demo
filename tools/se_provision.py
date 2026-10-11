@@ -120,6 +120,9 @@ WAKE_REPLY = b"\x04\x11\x33\x43"
 SELFTEST_FAIL = b"\x04\x07\xC4\x40"
 # ★ 响应里的“无错误”状态（出处 `calib_command.h`：`CMD_STATUS_OK 0x00` ✓）
 ATECC_STATUS_OK = 0x00
+# ★ “刚被唤醒”的状态（出处同上：`CMD_STATUS_WAKEUP 0x11` ✓；唤醒应答 `04 11 33 43` 里就是它 ✓）
+#   2026-10-11 实测：命令响应里读到它 = 读到了**旧的唤醒应答**（不是这条命令的响应 ✗）⇒ 重同步 ✓
+ATECC_STATUS_WAKEUP = 0x11
 SELFTEST_MSG = b"ORPAH d-step probe v1"     # 与固件 `se` 自检签的同一条摘要 ✓
 # 只读半证的**第二条消息**：100 B > 64 ⇒ 能多走一轮 `SHA HMAC_UPDATE` ✓（1×64 + 36 B 尾巴）
 # （第一条 23 B 只走 START + END ⇒ 两条合起来把 UPDATE 那条路也盖住 ✓）
@@ -274,6 +277,15 @@ class Se:
                 nm = rct.py_atecc_status_name(st) if HAVE_RCT else "?"
                 if st == ATECC_STATUS_OK:
                     return 0, raw[:4], "状态包：状态 0x00（ok，无数据）"
+                if st == ATECC_STATUS_WAKEUP:
+                    # ★ 0x11 = **“刚被唤醒”** ⇒ 读回来的是**唤醒应答**，不是这条命令的响应 ✗ ——
+                    #   器件输出缓冲里还留着旧内容（§8.8 那条教训的同一形状 ✓）。
+                    #   2026-10-11 实测踩到：中途"重开会话"自愈之后，`HMAC_START` 读回 0x11 ✗。
+                    #   ⇒ **不当错误** ✗：重新同步（下一轮会重发唤醒令牌 + 重发本命令 ✓）
+                    if self.verbose:
+                        print("      · 读到唤醒应答（状态 0x11）⇒ 缓冲里是旧内容，"
+                              "重新同步后重发本命令")
+                    continue
                 return 2, raw[:4], "4 字节错误包：状态 0x%02X（%s）" % (st, nm)
             if len(raw) < cnt:
                 return 2, raw, "读回 %d 字节 < count %d" % (len(raw), cnt)
@@ -446,16 +458,39 @@ def cfg_ident_diff(cfg):
     return [i for i in range(16) if cfg[i] != ref[i]]
 
 
-def cfg_func_diff(cfg):
+def cfg_func_diff(cfg, against=None):
     """**功能位段**（`cfg[16..127]`，跳过 86/87 两个锁字节）与参照的差异 —— **这才是判据** ✓。
 
     为什么到 16 开始 ✓：`SlotConfig`(20..51) + 计数器 + `KeyConfig`(96..127) 全在里面 ——
     产线流程**只依赖这些**（槽能不能读/写、钥类型、地址…）✓；
     而 `0..15` 是每颗都不同的身份字节 ⇒ 排除 ✗（理由见 `cfg_ident_diff()`）。
     锁字节 86/87 排除 ✗ —— 它们本来就会因**锁/未锁**而变（`55`↔`00` ✓）。
+
+    `against` = 要比对的那份参照（缺省 = 出厂那份 ✓）；可用 `ref_variants()` 里的任一合法态 ✓。
     """
-    ref = bytes.fromhex(REF_CONFIG_HEX)
+    ref = bytes.fromhex(REF_CONFIG_HEX) if against is None else against
     return [i for i in range(16, 128) if i not in (86, 87) and cfg[i] != ref[i]]
+
+
+def ref_variants():
+    """可接受的**功能位段参照**（多种**已知好**状态 ⇒ 逐字节比时**任一命中即可** ✓）。
+
+    为什么不止一份 ✗：`config-hmac` 会**按设计**改掉 slot 4 的两个字节
+    （`byte 28/29`：`8F 8F`(WriteConfig=8) → `0F 8F`(WriteConfig=0) ✓）⇒
+    只拿“出厂那份”去比，会把**我们自己改对的地方**判成不一致 ✗
+    （2026-10-11 `all` 续跑实测踩到：`read` 在**已经跑过 config-hmac** 的片上报 FAIL ✓）。
+    两份 = ① 出厂（`8`）② 已打补丁（`0`，正是 `config-hmac` 的目标态 ✓）。
+    ⚠ 槽 4 那两个字节的合法性另有**专门判据**（`step_config_hmac` 查 `wc ∈ {8, 0}` ✓ +
+      写后读回不变量 ✓）⇒ 这里放两个合法态不会放过乱改 ✗。
+    """
+    ref = bytearray(bytes.fromhex(REF_CONFIG_HEX))
+    out = [("出厂（slot 4 WriteConfig=8）", bytes(ref))]
+    off = HMAC_SLOT_BYTE
+    w = (ref[off] | (ref[off + 1] << 8)) & 0xFFFF
+    w = (w & ~HMAC_WC_MASK & 0xFFFF) | (HMAC_WRITECONFIG_CLEAR << HMAC_WC_SHIFT)
+    ref[off], ref[off + 1] = w & 0xFF, (w >> 8) & 0xFF
+    out.append(("已跑 config-hmac（WriteConfig=0）", bytes(ref)))
+    return out
 
 
 def slotcfg_decode(cfg, slot):
@@ -520,13 +555,17 @@ def step_read(se, args):
         print("       （序列号段每颗都不同 ✓ —— 实测两颗同型号的差异**恰好全落在 0..15**，"
               "功能位段全同 ✓）")
     diff = cfg_func_diff(cfg)
-    if not diff:
-        print("PASS 功能位段（cfg[16..127]，跳 86/87 锁字节）与**参照配置**逐字节一致 ✓"
-              "（2026-10-11 参照片，§8.4）")
+    hits = [nm for nm, rf in ref_variants() if not cfg_func_diff(cfg, rf)]
+    if hits:
+        print("PASS 功能位段（cfg[16..127]，跳 86/87 锁字节）与**已知好参照**逐字节一致 ✓"
+              "（匹配：%s）" % " / ".join(hits))
         print("     ⇒ 这颗与参照是**同型号/同批**、位段没被动过 ✓（锁状态按上面那两行判）")
         return 0, cfg
-    print("FAIL 功能位段与参照有 %d 处不同（前几处：%s）"
-          % (len(diff), ", ".join("cfg[%d] %02X→%02X" % (i, ref[i], cfg[i]) for i in diff[:6])))
+    best = min(ref_variants(), key=lambda kv: len(cfg_func_diff(cfg, kv[1])))
+    diff = cfg_func_diff(cfg, best[1])
+    print("FAIL 功能位段与**任何已知好参照**都不一致（最接近的一份 = %s，仍差 %d 处：%s）"
+          % (best[0], len(diff),
+             ", ".join("cfg[%d] %02X→%02X" % (i, best[1][i], cfg[i]) for i in diff[:6])))
     print("     ⇒ **先停下** ✗：这颗芯片的**位段**被动过 / 不是同型号。\n"
           "       要么人工核过再说，要么别锁（锁是不可逆的 ✗）。")
     return 2, cfg
@@ -553,7 +592,9 @@ def step_lock_config(se, args, cfg=None):
         return 2
     print("PASS 锁后读回：LockConfig = 0x00 ✓（LockValue = 0x%02X ⇒ 数据区%s）"
           % (lv, "仍未锁 ✓（故意留的）" if lv != 0x00 else "也已锁"))
-    return 0
+    # ★ 把**锁后的 cfg** 交给调用方 ✓：后面几步（如 `write-hmac` 的守卫）判的是**当前状态**，
+    #   拿“锁之前那份快照”会误报 ✗（2026-10-11 `all` 实测踩到：守卫看到 `0x55` 就拦下了 ✓）。
+    return 0, cfg2
 
 
 def step_genkey(se, args):
@@ -717,28 +758,33 @@ def step_config_hmac(se, args, cfg=None):
     ⚠ **只在配置区未锁时可行** ✓（锁了就永远改不了 ✗）。改动是**可重复**的（未锁时可覆盖 ✓）。"""
     print("  ⚙ 改 slot %d 的 WriteConfig：%d → %d" % (HMAC_SLOT, HMAC_WRITECONFIG_FACTORY,
                                                    HMAC_WRITECONFIG_CLEAR))
+    # ★ 看**当前状态**（不赌快照 ✗）：本步可能在同一次 `all` 里被“续跑”，传下来的 cfg 可能旧 ✓
+    cfg, note = se.read_config()
     if cfg is None:
-        cfg, note = se.read_config()
-        if cfg is None:
-            print("FAIL 读配置失败：%s" % note)
-            return 2, None
+        print("FAIL 读配置失败：%s" % note)
+        return 2, None
+    off = HMAC_SLOT_BYTE
+    word = cfg[off] | (cfg[off + 1] << 8)
+    wc = (word & HMAC_WC_MASK) >> HMAC_WC_SHIFT
+    if wc == HMAC_WRITECONFIG_CLEAR:
+        # ★ **幂等**（必须先判它 ✓）：已经放开了（哪怕配置区后来锁了 ✓）⇒ 本步无事可做 ✓ ——
+        #   否则“已锁 + 已完成”的片子在续跑/重跑 `all` 时会被误判成 FAIL ✗。
+        print("PASS slot %d 已经是明文可写（WriteConfig = %d）⇒ 不必改 ✓" % (HMAC_SLOT, wc))
+        return 0, cfg
     lv, lc = lock_state(cfg)
     if lc != 0x55:
         print("FAIL 配置区已经锁了（LockConfig = 0x%02X）⇒ 改不了 ✗" % lc)
         print("     （这一步必须赶在 `lock-config` **之前** ✓；已锁的片子只能重换一颗 ✗）")
         return 2, cfg
     ref = bytes.fromhex(REF_CONFIG_HEX)
-    diff = cfg_func_diff(cfg)
+    # ⚠ 比对时**排掉本步要管的那两个字节**（`HMAC_SLOT_BYTE`/`+1` ✗）—— 它们已经被我们改成
+    #   “明文可写”了 ⇒ 拿出厂参照去比只会把**我们自己改对的地方**报成不一致 ✗（续跑时必踩 ✓）。
+    #   这两个字节的合法性由**上面那条 wc 检查 + 下面的读回不变量**守 ✓（不是不判 ✗）。
+    diff = [i for i in cfg_func_diff(cfg) if i not in (off, off + 1)]
     if diff:
         print("FAIL 功能位段与参照不一致（%d 处，如 %s）⇒ 先停下 ✗（不改来历不明的片子）"
               % (len(diff), ", ".join("cfg[%d] %02X→%02X" % (i, ref[i], cfg[i]) for i in diff[:4])))
         return 2, cfg
-    off = HMAC_SLOT_BYTE
-    word = cfg[off] | (cfg[off + 1] << 8)
-    wc = (word & HMAC_WC_MASK) >> HMAC_WC_SHIFT
-    if wc == HMAC_WRITECONFIG_CLEAR:
-        print("PASS slot %d 已经是明文可写（WriteConfig = %d）⇒ 不必改 ✓" % (HMAC_SLOT, wc))
-        return 0, cfg
     if wc != HMAC_WRITECONFIG_FACTORY:
         print("FAIL slot %d 的 WriteConfig = %d（既非出厂 %d 也非目标 %d）⇒ 先停下问人 ✗"
               % (HMAC_SLOT, wc, HMAC_WRITECONFIG_FACTORY, HMAC_WRITECONFIG_CLEAR))
@@ -774,11 +820,12 @@ def step_write_hmac(se, args, cfg=None):
       所以这里必须整块写、不能按字写 ✗。
     ⚠★ **必须在 `lock-config` 之后** ✗：未锁配置时器件直接回 `0x0F cannot execute` ✓
       （2026-10-11 实测：slot 4 与 slot 8 **都**被拒 ⇒ 与槽无关 ✓，见 §8.18）⇒ 先在这里拦下 ✓。"""
+    # ★ 看**当前状态**（自己重读一遍 ✓）：调用方传下来的 cfg 可能是**锁之前**的快照 ✗
+    #   （2026-10-11 `all` 实测：`lock-config` 之后仍传旧快照 ⇒ 守卫误报、把好片子拦下 ✓）。
+    cfg, note = se.read_config()
     if cfg is None:
-        cfg, note = se.read_config()
-        if cfg is None:
-            print("FAIL 读配置失败：%s" % note)
-            return 2, None
+        print("FAIL 读配置失败：%s" % note)
+        return 2, None
     lv, lc = lock_state(cfg)
     if lc != 0x00:
         print("FAIL 配置区**还没锁**（LockConfig = 0x%02X）⇒ 现在写数据槽器件会拒 ✗" % lc)
@@ -1091,7 +1138,7 @@ def main():
                 elif s == "hmac-verify":
                     rc, cfg = step_hmac_verify(se, args, cfg)
                 elif s == "lock-config":
-                    rc = step_lock_config(se, args, cfg)
+                    rc, cfg = step_lock_config(se, args, cfg)
                 elif s == "genkey":
                     rc, pub = step_genkey(se, args)
                 elif s == "lock-data":
@@ -1112,7 +1159,7 @@ def main():
         elif args.step == "hmac-readonly":
             rc, cfg = step_hmac_readonly(se, args, cfg)
         elif args.step == "lock-config":
-            rc = step_lock_config(se, args, cfg)
+            rc, cfg = step_lock_config(se, args, cfg)
         elif args.step == "genkey":
             rc, pub = step_genkey(se, args)
         elif args.step == "lock-data":
