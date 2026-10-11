@@ -633,8 +633,15 @@ int atecc_sign_pre(uint8_t out64[ATECC_SIGN_BYTES], const void *pre, size_t prel
  */
 #define ATECC_HMAC_STEP_GAP_MS   0u    /* ★ 0 = 故意不等（见上；与 PC 侧 `HMAC_STEP_GAP_MS` 同源 ✓）*/
 #define ATECC_SHA_ATTEMPTS       3u    /* 只盖“事务级”的毛刺（唤醒/IO）✗ 不管 0x03 */
-#define ATECC_HMAC_RESTARTS      4u    /* ★ 整条重来上限（= PC 侧 `HMAC_RETRIES` ✓）*/
-#define ATECC_RESTART_GAP_MS    20u    /* 重来之前的一小段（器件刚拒过 ⇒ 让它先缓一下 ✓）*/
+#define ATECC_HMAC_RESTARTS      4u    /* ★ 整条重来上限（= PC 侧 `HMAC_RETRIES` ✓）—— 缺省值，
+                                        *   运行时可被 `s_restarts` 改（控制台 `setime` ✓）*/
+#define ATECC_RESTART_GAP_MS    20u    /* 重来之前的一小段（器件刚拒过 ⇒ 让它先缓一下 ✓）
+                                        *   ★ 这里“多等”**没有** §8.27 那个副作用 ✓ ——
+                                        *   重来是从 `START` 重新开始，此时本来就没有上下文可丢 ✓
+                                        *   ⇒ 是**安全的可以调大**的参数（待扫）。*/
+/* ★★ 上机扫参数用的运行期副本（缺省 = 上面两个常数；控制台 `setime` 可改 ✓）*/
+static uint32_t s_restarts       = ATECC_HMAC_RESTARTS;
+static uint32_t s_restart_gap_ms = ATECC_RESTART_GAP_MS;
 
 /* 用主循环的 1 ms 时基等一段（只给"给器件收尾"用；调用方在主循环上下文 ✓）*/
 static void gap_ms(uint32_t ms)
@@ -782,7 +789,7 @@ static int sha_hmac_body(uint16_t slot, const uint8_t *msg, size_t len,
     uint32_t k;
     int rc = ATECC_E_RESP;
 
-    for (k = 0u; k < ATECC_HMAC_RESTARTS; k++) {
+    for (k = 0u; k < s_restarts; k++) {
         rc = sha_hmac_once(slot, msg, len, out32);
         if (rc == 0) {
             if (k != 0u) {
@@ -794,11 +801,11 @@ static int sha_hmac_body(uint16_t slot, const uint8_t *msg, size_t len,
             s_st.hmac_slot = (uint32_t)slot;
             return 0;
         }
-        if (k + 1u < ATECC_HMAC_RESTARTS) {
+        if (k + 1u < s_restarts) {
             uart_printf(CONSOLE_UART,
                         "[se] HMAC 第%u趟失败（rc=%d）⇒ **从 START 整条重来** ✓\r\n",
                         (unsigned)(k + 1u), rc);
-            gap_ms(ATECC_RESTART_GAP_MS);
+            gap_ms(s_restart_gap_ms);
         }
     }
     s_st.hmac_fail++;
@@ -820,18 +827,24 @@ int atecc_sha_hmac(uint16_t slot, const uint8_t *msg, size_t len,
 }
 
 /* ★★ 上机扫时序的旋钮（见 `atecc.h` 的声明与 `s_sha_*` 处）—— 只影响 SHA/HMAC 这一段 ✓。*/
-void atecc_sha_timing_set(int poll, uint32_t ready_ms, uint32_t gap_ms)
+void atecc_sha_timing_set(int poll, uint32_t ready_ms, uint32_t gap_ms,
+                          uint32_t restart_gap_ms, uint32_t restarts)
 {
-    s_sha_poll     = (poll != 0) ? 1 : 0;
-    s_sha_ready_ms = ready_ms;
-    s_sha_gap_ms   = gap_ms;
+    s_sha_poll       = (poll != 0) ? 1 : 0;
+    s_sha_ready_ms   = ready_ms;
+    s_sha_gap_ms     = gap_ms;
+    if (restart_gap_ms > 0u) { s_restart_gap_ms = restart_gap_ms; }
+    if (restarts > 0u)       { s_restarts = restarts; }
 }
 
-void atecc_sha_timing_get(int *poll, uint32_t *ready_ms, uint32_t *gap_ms)
+void atecc_sha_timing_get(int *poll, uint32_t *ready_ms, uint32_t *gap_ms,
+                          uint32_t *restart_gap_ms, uint32_t *restarts)
 {
-    if (poll != 0)     { *poll = s_sha_poll; }
-    if (ready_ms != 0) { *ready_ms = s_sha_ready_ms; }
-    if (gap_ms != 0)   { *gap_ms = s_sha_gap_ms; }
+    if (poll != 0)           { *poll = s_sha_poll; }
+    if (ready_ms != 0)       { *ready_ms = s_sha_ready_ms; }
+    if (gap_ms != 0)         { *gap_ms = s_sha_gap_ms; }
+    if (restart_gap_ms != 0) { *restart_gap_ms = s_restart_gap_ms; }
+    if (restarts != 0)       { *restarts = s_restarts; }
 }
 
 /* 固件里没有 strcmp（-nostdlib）—— 就地比一下那两个短名字（口径 = `proto/id_report.h` ✓）*/

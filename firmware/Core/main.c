@@ -398,7 +398,8 @@ static void print_help(void)
     uart_printf(CONSOLE_UART, "  idmodes      -> 8.2 fault-injection modes -> level\r\n");
     uart_printf(CONSOLE_UART, "  idlevel <m>  -> set mode: auto|sign_fail|se_fail|no_key\r\n");
     uart_printf(CONSOLE_UART, "  idsn <SN>    -> rebuild pipeline with this SN (真片入库的那颗；不用重烧)\r\n");
-    uart_printf(CONSOLE_UART, "  setime [<poll> [<ready_ms> [<gap_ms>]]] -> SHA/HMAC 时序旋钮（不用重烧）\r\n");
+    uart_printf(CONSOLE_UART, "  setime [<poll> [<ready_ms> [<gap_ms> [<restart_gap_ms> [<restarts>]]]]]"
+                              " -> SHA/HMAC 时序旋钮（不用重烧）\r\n");
     uart_printf(CONSOLE_UART, "  se           -> bench: wake + Random(0x1B) + Sign(slot 0) r||s\r\n");
     uart_printf(CONSOLE_UART, "  seline [1-30]-> bench: toggle SCL/SDA as GPIO open-drain (~2 Hz; reads back)\r\n");
     uart_printf(CONSOLE_UART, "  sewake       -> bench: scan addr 0x01-0x7F (before/after pulse), then\r\n");
