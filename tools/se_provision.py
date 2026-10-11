@@ -467,7 +467,12 @@ def main():
     print("⚠ 台架规矩：**nano 必须断电 / 按住 RST**（同一时刻只让一个 I²C 主机干活 ✗）")
     print("⚠ 先关掉其它 CH347 工装（一个进程独占 CH347 ✗ —— 2026-09-23 踩过）")
 
-    se = Se(args.index, args.clk, addr, with_crc=not args.no_crc)
+    try:
+        se = Se(args.index, args.clk, addr, with_crc=not args.no_crc)
+    except ci.cs.Ch347Error as exc:
+        print("FAIL CH347 打不开（iIndex=%d）：%s" % (args.index, exc))
+        print("⇒ 先跑 `python tools\\ch347_i2c.py list` 看它在不在 ✗")
+        return 2
     rc, cfg, pub = 0, None, None
     try:
         ok, four = se.wake()
@@ -505,6 +510,15 @@ def main():
             rc = step_lock_data(se, args, cfg)
         else:
             rc, pub = step_verify(se, args, pub)
+    except ci.cs.Ch347Error as exc:
+        # ★ 实测踩过（2026-10-12）：总线上没有器件应答时 DLL 只报 "CH347StreamI2C 失败" ✗ ——
+        #   抛 traceback 对现场毫无帮助 ✓ ⇒ 一行判语 + 下一步该查什么 ✓。
+        print("FAIL I²C/USB 层失败：%s" % exc)
+        print("⇒ 查三件事：① nano 断电 / 按住 RST ✓ ② 只有一个进程用 CH347 ✓"
+              " ③ SDA/SCL/3V3/GND 还接着吗 ✓")
+        print("   `python tools\\ch347_i2c.py list` = CH347 在不在；"
+              "`… scan` = 总线上有没有器件（两个都空 = 线/供电的问题 ✗）")
+        return 2
     finally:
         se.close()
 
