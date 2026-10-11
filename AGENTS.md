@@ -314,7 +314,11 @@ orpah-client-demo/
      ⚠ 但**不能去掉唤醒** ✗（去了连 100 B 也挂 ⇒ 器件在间隙会睡）。
      落实：`HMAC_STEP_GAP_MS=0`、`WAIT_MS_SHA=30`（与 `WAIT_MS_CRYPTO`=150 分开）、`HMAC_RETRIES=4`；
      验收 `tools/se_provision.py hmac-readonly` **PASS** ✓（250 B 靠第 2 次整条重来成功 ✓）。
-     ⚠ **固件侧同步未做** ✗（`firmware/Periph/atecc.c` 的 `sha_hmac_body()` / `ATECC_READY_FIXED_MS`）—— 下一步。
+     ★ **两侧已同源改完** ✓：PC 侧 `HMAC_STEP_GAP_MS=0` / `WAIT_MS_SHA=30` / `HMAC_RETRIES=4`；
+     固件侧 `ATECC_HMAC_STEP_GAP_MS=0` / `ATECC_READY_FIXED_MS=30` / `ATECC_HMAC_RESTARTS=4`
+     （`sha_hmac_body()` = 单趟 `sha_hmac_once()` + 外层整条重来；`0x03` **不再在本命令上重发** ✗）。
+     ⚠ **固件侧只编译过（零 warning ✓）、未上机** ✗ —— 下一步 = 烧进去后 `idlevel l1` + `idsend`，
+     把 `idhex` 的帧喂上游 `verify_report`，必须 **accepted / alg=HS256 / trust=medium** ✓。
   ⚠ **边界**：长消息的**成功率**靠“整条重来”兜 ✓，但它两次成功之间仍有失败 ⇒ **机理是“别让器件睡”**，
      不是“重试万能” ✓；详见 **§8.27**。
   ③ 别把旧注释那句“无间隔会 9/19 失败 ⇒ 加 50/150 ms”当真 ✗ —— 那是 `param2` 还写错（0）时量的，**已作废** ✗。

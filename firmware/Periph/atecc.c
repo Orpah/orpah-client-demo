@@ -280,7 +280,14 @@ static int wake_reply_read(uint8_t out4[4])
  *      ⇒ 那边**已经全部用固定等待**（`WAIT_MS_DEFAULT` 20 ms / `WAIT_MS_CRYPTO` 150 ms ✓）。
  *   ⇒ 这里默认仍是“探地址”（其它路径行为**不变** ✗），只在 `atecc_sha_hmac()` 里关掉它 ✓。 */
 static int s_poll_ready = 1;
-#define ATECC_READY_FIXED_MS  150u     /* = PC 侧 `WAIT_MS_CRYPTO`（同源 ✓）*/
+/* ★★ 固定等待 = **30 ms**（✗ 不是 PC 侧 `WAIT_MS_CRYPTO` 的 150 ms）—— 出处 §8.27：
+ *   **器件一旦在 SHA 序列中途睡下去，SHA 上下文就丢了** ✗ ⇒ 后面每条命令都回 `0x03`，
+ *   而且**重发那一条永远救不回来**（得从 `START` 整条重来 ✓）⇒ 等待本身就是“给器件睡下去的窗口” ✗。
+ *   实测（PC 侧，同一颗芯片）：命令间 **800 ms** ⇒ 连两条命令的 23 B 也挂 ✗✗；
+ *   **150 ms** ⇒ 时好时坏 ✗；**0 ms + 30 ms 就绪等待** ⇒ 364 B（5 条 UPDATE）2/3 ✓；
+ *   再加“整条重来 ≤4 次” ⇒ **6/6** ✓。
+ *   SHA 一条只算 64 B，实测 ~10 ms 就完 ⇒ 30 ms 有余量 ✓（`Sign`/`GenKey` 那类仍走探地址 ✓）。*/
+#define ATECC_READY_FIXED_MS  30u
 
 static void gap_ms(uint32_t ms);        /* 定义在后（给“不探地址”那条路用 ✓）*/
 
@@ -585,27 +592,32 @@ int atecc_sign_pre(uint8_t out64[ATECC_SIGN_BYTES], const void *pre, size_t prel
 /* 三条命令（`SHA HMAC_START` → `HMAC_UPDATE` → `608 HMAC_END`）的形状/外部锚点在
  * `proto/atecc_msg.h`；本文件只管**收发 + 时序 + 重发口径**。
  *
- * ★★ 为什么两条命令之间要等一段（`ATECC_HMAC_STEP_GAP_MS`）：那不是 CH347 的毛病 ✗，
- *   而是**器件自己的收尾时间** —— 命令之间不留间隔时，PC 侧实测（2026-10-11，§8.24）
- *   19 个长度里 **9 个失败** ✗，且失败与"上一次成功/失败"**严格交替** ⇒ 器件还在给上一条收尾时，
- *   新命令被判 `0x03 parse error` ✗。我们这套主机比 CH347 快 ⇒ **更容易撞上** ✗ ⇒ 必须等 ✓。
- *   （`transact()` 里的 `wait_ready()` 等的是"器件肯答地址 ⇒ 可以读响应"，那是**读之前**；
- *     这里是**读完响应之后**、发下一条**之前** ⇒ 两处都要 ✓。）
+ * ★★★ 为什么两条命令之间**不能等**（`ATECC_HMAC_STEP_GAP_MS` = **0**）—— 2026-10-11 深夜实测 ✓：
+ *   **器件一旦在 SHA 序列中途睡下去，SHA 上下文就没了** ✗ ⇒ 后面每条命令都回 `0x03`，
+ *   而且**重发那一条永远救不回来** ✗（上下文已经没了 ⇒ 只能从 `START` 整条重来 ✓）。
+ *   这解释了之前所有怪现象：**挂第 1 条 / 挂第 2 条 / 挂 `END` 都是随机位置** ✓。
+ *   ⇒ “多等一会儿”在这里是**反向操作** ✗（旧注释那句“无间隔会 9/19 失败 ⇒ 加 50/150 ms”
+ *     是在 `HMAC_UPDATE` 的 `param2` 还写错（0）时量的，**已作废** ✗）。实测：
+ *     | 命令间等待 | 结果 |
+ *     | **800 ms** | ✗✗ 连 23 B（只两条命令）也挂 |
+ *     | 150 ms（旧值）| ✗ 时好时坏 |
+ *     | **0 ms** | ✓ 364 B（5 条 UPDATE）2/3、加“整条重来”后 **6/6** ✓ |
+ *   ⚠ 但**也不能完全不醒来** ✗：`cmd` 前面那条 `atecc_wake()` 必须留着（器件在间隙会睡 ✓）。
  *
- * ★ 收到 `0x03` 就**等一段再重发本命令**（递增退避 ✓）。重发安全的依据（同 PC 侧）：
- *   器件只回了一个状态包 ⇒ 它**没有执行**本命令 ⇒ 不存在"喂两遍" ✓；
- *   而且最终正确性由**另一把尺子**判（上机 = 上游 `verify_report` 收不收 ✓）—— 不靠自证 ✓。
- *
- * ⚠ `UPDATE`/`END` **自己就是数据** ⇒ 只有确认"没执行"（`0x03`）才允许重发 ✗；
- *   其它失败（CRC 不符 / 形状不对）一律**如实报错退出**，不再猜 ✗。
+ * ★★ `0x03` ⇒ **不在本命令上重发** ✗，而是**从 `START` 整条重来** ✓（见 `sha_hmac_body()`）：
+ *   重发那一条实测**连拒 3 次也回不来** ✗ —— 上下文丢了，重发没有意义 ✓。
+ *   重来**语义安全** ✓：HMAC 除“输出寄存器”外**不改器件任何东西**（不写槽、不改配置 ✓）；
+ *   而且最终正确性由**另一把尺子**判（与软件 HMAC **逐字节相同** ✓ / 上机 = 上游
+ *   `verify_report` 收不收 ✓）—— 不靠自证 ✓。
  *
  * ⚠ `Sign(0x41)` 之后**不需要** PC 侧那个 `SIGN_SETTLE_MS = 1200`：它存在的理由是让
  *   **紧接着的下一条命令**不被拒 ✓；而本固件一条报文只签一次（ES256 或 HS256 二选一 ✓），
  *   签完就发帧 ⇒ 中间不再发命令 ⇒ 那个等待**没有意义** ✓（省下的 1.2 s 直接体现在 build_ms ✓）。
  */
-#define ATECC_HMAC_STEP_GAP_MS  150u   /* = PC 侧 `HMAC_STEP_GAP_MS`（同源，出处 §8.24）*/
-#define ATECC_PARSE_RETRY_MS    600u   /* 0x03 后：第 k 次重发前等 (k+1)× 它 */
-#define ATECC_SHA_ATTEMPTS      3u
+#define ATECC_HMAC_STEP_GAP_MS   0u    /* ★ 0 = 故意不等（见上；与 PC 侧 `HMAC_STEP_GAP_MS` 同源 ✓）*/
+#define ATECC_SHA_ATTEMPTS       3u    /* 只盖“事务级”的毛刺（唤醒/IO）✗ 不管 0x03 */
+#define ATECC_HMAC_RESTARTS      4u    /* ★ 整条重来上限（= PC 侧 `HMAC_RETRIES` ✓）*/
+#define ATECC_RESTART_GAP_MS    20u    /* 重来之前的一小段（器件刚拒过 ⇒ 让它先缓一下 ✓）*/
 
 /* 用主循环的 1 ms 时基等一段（只给"给器件收尾"用；调用方在主循环上下文 ✓）*/
 static void gap_ms(uint32_t ms)
@@ -659,21 +671,21 @@ static int sha_txn(const uint8_t *pkt, uint32_t pklen, int want_status,
         if (want_status) {
             if (atecc_msg_err_pkt_status(resp, (size_t)replen, &st) == 0 &&
                 st == ATECC_STATUS_OK) {
-                gap_ms(ATECC_HMAC_STEP_GAP_MS);   /* 发下一条之前给它收尾的时间 ✓ */
+                /* ★ 故意**不再等**（`ATECC_HMAC_STEP_GAP_MS` = 0）：多等 ⇒ 器件睡 ⇒ 上下文丢 ✗ */
+                gap_ms(ATECC_HMAC_STEP_GAP_MS);
                 return 0;
             }
         } else if (atecc_msg_resp_sha(resp, (size_t)replen, out32) == 0) {
             return 0;
         }
-        /* ★ 只有 `0x03`（还在收尾、**没执行**）才重发 ✓ —— 别的都别猜 ✗ */
+        /* ★★★ `0x03` ⇒ **不在本命令上重发** ✗（§8.27）：上下文一丢，重发这一条**永远**救不回来
+         *   （实测：等 600/1200/1800 ms 连拒 3 次 ✗）⇒ 直接退出，让**外层整条重来** ✓。*/
         if (atecc_msg_err_pkt_status(resp, (size_t)replen, &st) == 0 &&
             st == ATECC_STATUS_PARSE) {
             uart_printf(CONSOLE_UART,
-                        "[se] SHA 第%u次：器件回 0x03（还在收尾、本条未执行）⇒ 等 %u ms 重发\r\n",
-                        (unsigned)(attempt + 1u),
-                        (unsigned)(ATECC_PARSE_RETRY_MS * (attempt + 1u)));
-            gap_ms(ATECC_PARSE_RETRY_MS * (attempt + 1u));
-            continue;
+                        "[se] SHA 第%u次：器件回 0x03（上下文丢 / 还在收尾）⇒ 交给整条重来\r\n",
+                        (unsigned)(attempt + 1u));
+            break;
         }
         if (st != 0u) {
             uart_printf(CONSOLE_UART, "[se] SHA 第%u次：器件回状态 0x%02x（%s）\r\n",
@@ -691,8 +703,8 @@ static int sha_txn(const uint8_t *pkt, uint32_t pklen, int want_status,
     return ATECC_E_RESP;
 }
 
-/* ★ 真正的活：三条命令的编排（`atecc_sha_hmac()` 包一层，为的是在这一段里关掉“探地址”）。*/
-static int sha_hmac_body(uint16_t slot, const uint8_t *msg, size_t len,
+/* ★ 真正的活：三条命令的编排（**单趟**，不整条重来 —— 那层在 `sha_hmac_body()` 里 ✓）。*/
+static int sha_hmac_once(uint16_t slot, const uint8_t *msg, size_t len,
                          uint8_t out32[ATECC_SHA_DIGEST_BYTES])
 {
     uint8_t pkt[ATECC_CMD_LEN_SHA_DATA_CRC];   /* ★ 71 = **最长包**（UPDATE 满块）——
@@ -710,7 +722,6 @@ static int sha_hmac_body(uint16_t slot, const uint8_t *msg, size_t len,
     if (pklen == 0u) { return ATECC_E_ARG; }
     rc = sha_txn(pkt, pklen, 1, out32);
     if (rc != 0) {
-        s_st.hmac_fail++;
         uart_printf(CONSOLE_UART, "[se] HMAC_START 失败（slot %u）\r\n", (unsigned)slot);
         return rc;
     }
@@ -725,7 +736,6 @@ static int sha_hmac_body(uint16_t slot, const uint8_t *msg, size_t len,
         if (pklen == 0u) { return ATECC_E_ARG; }
         rc = sha_txn(pkt, pklen, 1, out32);
         if (rc != 0) {
-            s_st.hmac_fail++;
             uart_printf(CONSOLE_UART, "[se] HMAC_UPDATE@%u 失败\r\n", (unsigned)off);
             return rc;
         }
@@ -737,13 +747,44 @@ static int sha_hmac_body(uint16_t slot, const uint8_t *msg, size_t len,
     if (pklen == 0u) { return ATECC_E_ARG; }
     rc = sha_txn(pkt, pklen, 0, out32);
     if (rc != 0) {
-        s_st.hmac_fail++;
         uart_printf(CONSOLE_UART, "[se] HMAC_END 失败\r\n");
         return rc;
     }
-    s_st.hmac_ok++;
-    s_st.hmac_slot = (uint32_t)slot;
     return 0;
+}
+
+/* ★★ 对外干活的那一层：**整条重来**（失败就从 `START` 重算）—— 见文件头那段说明 ✓。
+ *   为什么必须有它 ✗：器件在序列中途一睡就把 SHA 上下文丢了 ⇒ 重发“那一条”永远回不来 ✗；
+ *   而 **HMAC 是无副作用的原子操作**（除输出寄存器外不改器件任何东西 ✓）
+ *   ⇒ “重算一遍”语义安全 ✓（不像 `GenKey(创建)` / `Write` 那种有状态命令 ✗）。
+ *   统计的口径：`hmac_ok`/`hmac_fail` = **按每次调用**（含重来的最终结果 ✓），不是按趟 ✗。*/
+static int sha_hmac_body(uint16_t slot, const uint8_t *msg, size_t len,
+                         uint8_t out32[ATECC_SHA_DIGEST_BYTES])
+{
+    uint32_t k;
+    int rc = ATECC_E_RESP;
+
+    for (k = 0u; k < ATECC_HMAC_RESTARTS; k++) {
+        rc = sha_hmac_once(slot, msg, len, out32);
+        if (rc == 0) {
+            if (k != 0u) {
+                uart_printf(CONSOLE_UART,
+                            "[se] HMAC 第%u次“整条重来”成功 ✓（前一趟：上下文丢）\r\n",
+                            (unsigned)(k + 1u));
+            }
+            s_st.hmac_ok++;
+            s_st.hmac_slot = (uint32_t)slot;
+            return 0;
+        }
+        if (k + 1u < ATECC_HMAC_RESTARTS) {
+            uart_printf(CONSOLE_UART,
+                        "[se] HMAC 第%u趟失败（rc=%d）⇒ **从 START 整条重来** ✓\r\n",
+                        (unsigned)(k + 1u), rc);
+            gap_ms(ATECC_RESTART_GAP_MS);
+        }
+    }
+    s_st.hmac_fail++;
+    return rc;
 }
 
 /* ★★ 对外入口：只是把“探地址”关掉（见 `s_poll_ready` 处为什么 —— PC 侧已证明

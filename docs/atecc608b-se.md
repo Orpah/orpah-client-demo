@@ -1607,10 +1607,13 @@ ATCA_STATUS calib_sha_hmac_finish(...)   // 收尾：
 （`health` 100% ✓）、主机差异（PC 与固件**都挂** ⇒ 共性在**器件侧** ✓）、`param2` 口径
 （按原厂源码改成 64 后单块仍全通、多块仍挂 ✗ ⇒ 不是（唯一）成因 ✓ —— 它仍是**必须**改对的 ✓）。
 
-★ 落实：`HMAC_STEP_GAP_MS = 0`、`WAIT_MS_SHA = 30`（与 `WAIT_MS_CRYPTO`=150 分开 ✗ —— `Sign` 要跑
-~1 s 才需要长等 ✓）、`HMAC_RETRIES = 4`（`Se.sha_hmac()` 外层整条重来 ✓）。
-⚠ **固件侧同样要改** ✗（`firmware/Periph/atecc.c` 的 `sha_hmac_body()` / `ATECC_READY_FIXED_MS`）——
-**下一步** ✓。
+★ 落实（**两侧同源** ✓）：PC 侧 `HMAC_STEP_GAP_MS = 0`、`WAIT_MS_SHA = 30`（与 `WAIT_MS_CRYPTO`=150
+分开 ✗ —— `Sign` 要跑 ~1 s 才需要长等 ✓）、`HMAC_RETRIES = 4`（`Se.sha_hmac()` 外层整条重来 ✓）；
+固件侧 `ATECC_HMAC_STEP_GAP_MS = 0`、`ATECC_READY_FIXED_MS = 30`、`ATECC_HMAC_RESTARTS = 4`
+（`sha_hmac_body()` 拆成“单趟 `sha_hmac_once()` + 外层整条重来” ✓；`0x03` **不再在本命令上重发** ✗
+—— 实测重发那一條连拒 3 次也回不来 ✓）。
+⚠ **固件侧只编译通过（零 warning ✓），尚未上机** ✗ —— 下一步 = 烧进去后 `idlevel l1` + `idsend`，
+把 `idhex` 的帧喂上游，必须 **accepted / alg=HS256 / trust=medium** ✓（见 §8.25 ✓）。
 
 **③ 工装变化** ✓：`hmac-readonly` 现在跑 **三条**消息（23 / 100 / **250 B**）—— 第三条是**决定性**的那条 ✓
 （前两条即使口径写错也能过 ✗，见上面那条教训 ✓）。
