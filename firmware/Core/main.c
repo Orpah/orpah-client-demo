@@ -381,6 +381,7 @@ static void i2c_bench(const char *args, int is_read)
 static void print_help(void)
 {
     uart_printf(CONSOLE_UART, "\r\ncommands:\r\n");
+    uart_printf(CONSOLE_UART, "  help         -> this list\r\n");
     uart_printf(CONSOLE_UART, "  AT           -> OK (console self-test)\r\n");
     uart_printf(CONSOLE_UART, "  ping         -> send GET_UART_FIXLEN, prove module is alive\r\n");
     uart_printf(CONSOLE_UART, "  stat         -> module-port counters (incl. dropped bytes)\r\n");
@@ -390,6 +391,7 @@ static void print_help(void)
     uart_printf(CONSOLE_UART, "  idhex        -> dump last frame as hex (paste into PC judge)\r\n");
     uart_printf(CONSOLE_UART, "  idmodes      -> 8.2 fault-injection modes -> level\r\n");
     uart_printf(CONSOLE_UART, "  idlevel <m>  -> set mode: auto|sign_fail|se_fail|no_key\r\n");
+    uart_printf(CONSOLE_UART, "  se           -> bench: wake + Random(0x1B) + Sign(slot 0) r||s\r\n");
     uart_printf(CONSOLE_UART, "  seline [1-9] -> bench: toggle SCL/SDA as GPIO open-drain (~2 Hz)\r\n");
     uart_printf(CONSOLE_UART, "  sewake       -> bench: scan addr 0x01-0x7F (before/after pulse), then\r\n");
     uart_printf(CONSOLE_UART, "                  Info(0x30) + Read cfg lock + Random -> one verdict line\r\n");
