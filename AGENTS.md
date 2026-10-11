@@ -317,8 +317,13 @@ orpah-client-demo/
      ★ **两侧已同源改完** ✓：PC 侧 `HMAC_STEP_GAP_MS=0` / `WAIT_MS_SHA=30` / `HMAC_RETRIES=4`；
      固件侧 `ATECC_HMAC_STEP_GAP_MS=0` / `ATECC_READY_FIXED_MS=30` / `ATECC_HMAC_RESTARTS=4`
      （`sha_hmac_body()` = 单趟 `sha_hmac_once()` + 外层整条重来；`0x03` **不再在本命令上重发** ✗）。
-     ⚠ **固件侧只编译过（零 warning ✓）、未上机** ✗ —— 下一步 = 烧进去后 `idlevel l1` + `idsend`，
-     把 `idhex` 的帧喂上游 `verify_report`，必须 **accepted / alg=HS256 / trust=medium** ✓。
+     ⚠ **固件侧已上机首测（2026-10-11 22:48）** ✓：**确实进步了** —— 以前第 2 条命令就挂 ✗，
+     现在能跑到**第 4～5 条**（且失败状态从 `0x03`（上下文丢）**变成 `0xEE`（读回来是脏字节）**
+     ⇒ “别让它睡”这条修对了，**剩下的问题是读早了/读晚了** ✗）。当次判据仍
+     `signature_invalid`（`HMAC_END` 没过 ⇒ 没有真 HMAC ✓）。
+     ★ **下一步的做法是“烧一次 + 控制台扫参数”** ✓：固件新增 `setime [<poll> [<ready_ms> [<gap_ms>]]]`
+     （`atecc_sha_timing_set/get`，只影响 SHA 段 ✓，`id` 状态里会打出当前值 ✓）——
+     免得每个参数都让你重烧一次固件 ✓。
   ⚠ **边界**：长消息的**成功率**靠“整条重来”兜 ✓，但它两次成功之间仍有失败 ⇒ **机理是“别让器件睡”**，
      不是“重试万能” ✓；详见 **§8.27**。
   ③ 别把旧注释那句“无间隔会 9/19 失败 ⇒ 加 50/150 ms”当真 ✗ —— 那是 `param2` 还写错（0）时量的，**已作废** ✗。

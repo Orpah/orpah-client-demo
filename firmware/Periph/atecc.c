@@ -288,6 +288,11 @@ static int s_poll_ready = 1;
  *   再加“整条重来 ≤4 次” ⇒ **6/6** ✓。
  *   SHA 一条只算 64 B，实测 ~10 ms 就完 ⇒ 30 ms 有余量 ✓（`Sign`/`GenKey` 那类仍走探地址 ✓）。*/
 #define ATECC_READY_FIXED_MS  30u
+/* ★★ 上机扫时序的三个旋钮（缺省 = 上面的常数；控制台 `setime` 可改 ✓，见 `atecc_sha_timing_set`）。
+ * `s_sha_poll` = 1 ⇒ SHA 段也用“探地址”当就绪判据（器件原生信号 ✓）；= 0 ⇒ 固定等 `s_sha_ready_ms`。*/
+static uint32_t s_sha_ready_ms = ATECC_READY_FIXED_MS;   /* poll=0 时的固定等待 */
+static uint32_t s_sha_gap_ms   = 0u;                     /* = `ATECC_HMAC_STEP_GAP_MS` 的缺省 */
+static int      s_sha_poll     = 0;                      /* 缺省保持“关探地址”的旧行为 ✓ */
 
 static void gap_ms(uint32_t ms);        /* 定义在后（给“不探地址”那条路用 ✓）*/
 
@@ -355,7 +360,7 @@ static int transact(const uint8_t *pkt, uint32_t pktlen,
             }
         } else {
             /* ★ SHA/HMAC 序列走这条：固定等一段（同 PC 侧口径 ✓，见 `s_poll_ready` 处）*/
-            gap_ms(ATECC_READY_FIXED_MS);
+            gap_ms(s_sha_ready_ms);
         }
         /* ★ 读前判据：两线真被放开才读。若有线被按住 ⇒ **不读**（否则必是 BERR）⇒
          *   返回错误、交给上层 `random_try()` 重试（那里会重做唤醒序列）。*/
@@ -671,8 +676,9 @@ static int sha_txn(const uint8_t *pkt, uint32_t pklen, int want_status,
         if (want_status) {
             if (atecc_msg_err_pkt_status(resp, (size_t)replen, &st) == 0 &&
                 st == ATECC_STATUS_OK) {
-                /* ★ 故意**不再等**（`ATECC_HMAC_STEP_GAP_MS` = 0）：多等 ⇒ 器件睡 ⇒ 上下文丢 ✗ */
-                gap_ms(ATECC_HMAC_STEP_GAP_MS);
+                /* ★ 故意**不再等**（`ATECC_HMAC_STEP_GAP_MS` 缺省 = 0，可用 `setime` 改）：
+                 *   多等 ⇒ 器件睡 ⇒ 上下文丢 ✗ */
+                gap_ms(s_sha_gap_ms);
                 return 0;
             }
         } else if (atecc_msg_resp_sha(resp, (size_t)replen, out32) == 0) {
@@ -793,12 +799,28 @@ static int sha_hmac_body(uint16_t slot, const uint8_t *msg, size_t len,
 int atecc_sha_hmac(uint16_t slot, const uint8_t *msg, size_t len,
                    uint8_t out32[ATECC_SHA_DIGEST_BYTES])
 {
+    int saved = s_poll_ready;
     int rc;
 
-    s_poll_ready = 0;
+    s_poll_ready = s_sha_poll;          /* ★ 由旋钮定（缺省 0 = 关探地址）*/
     rc = sha_hmac_body(slot, msg, len, out32);
-    s_poll_ready = 1;
+    s_poll_ready = saved;               /* 其它路径的行为**一点不变** ✓ */
     return rc;
+}
+
+/* ★★ 上机扫时序的旋钮（见 `atecc.h` 的声明与 `s_sha_*` 处）—— 只影响 SHA/HMAC 这一段 ✓。*/
+void atecc_sha_timing_set(int poll, uint32_t ready_ms, uint32_t gap_ms)
+{
+    s_sha_poll     = (poll != 0) ? 1 : 0;
+    s_sha_ready_ms = ready_ms;
+    s_sha_gap_ms   = gap_ms;
+}
+
+void atecc_sha_timing_get(int *poll, uint32_t *ready_ms, uint32_t *gap_ms)
+{
+    if (poll != 0)     { *poll = s_sha_poll; }
+    if (ready_ms != 0) { *ready_ms = s_sha_ready_ms; }
+    if (gap_ms != 0)   { *gap_ms = s_sha_gap_ms; }
 }
 
 /* 固件里没有 strcmp（-nostdlib）—— 就地比一下那两个短名字（口径 = `proto/id_report.h` ✓）*/

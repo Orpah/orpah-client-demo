@@ -271,6 +271,16 @@ static void cmd_status(void)
                     (unsigned)ATECC_SIGN_SLOT, (unsigned)st.sign_ok, (unsigned)st.sign_fail,
                     (unsigned)ATECC_HMAC_SLOT, (unsigned)st.hmac_ok, (unsigned)st.hmac_fail);
     }
+    /* ★★ SHA/HMAC 的时序旋钮（`setime` 可改 ✓）—— 放在状态里，好让现场确认“这次跑的是哪组参数” ✓ */
+    {
+        int poll;
+        uint32_t ready, gap;
+
+        atecc_sha_timing_get(&poll, &ready, &gap);
+        uart_printf(CONSOLE_UART,
+                    "[id] sha timing: poll=%d ready_ms=%u gap_ms=%u（setime 可改 ✓）\r\n",
+                    poll, (unsigned)ready, (unsigned)gap);
+    }
     /* ⚠ 如实：软熵后端只保证"同一 boot 内不重复"。**跨 boot 若上电熵撞了，整段 nonce 会重**
      *   ⇒ 服务端按重放丢弃（= 漏报）。把这个值打出来，好让人一眼看出撞了没。*/
     uart_printf(CONSOLE_UART, "[id] boot_entropy=0x%08x (soft; 跨 boot 撞了整段 nonce 会重)\r\n",
@@ -380,6 +390,50 @@ int idc_console(const char *cmd, uint32_t now_ms)
         }
         lvl = idl_pick(se, sg, hm, &why);
         uart_printf(CONSOLE_UART, "\r\n[id] mode=%s -> L%d (%s)\r\n", s_mode, lvl, why);
+        return 1;
+    }
+    /* ★★ 2026-10-11 深夜（上机扫时序）：`setime [<poll> [<ready_ms> [<gap_ms>]]]`
+     *   为什么做成控制台可调 ✗：SHA/HMAC 的“就绪等待 / 命令间间隔 / 要不要探地址”
+     *   要试好几个组合，而每次试都要重新烧固件 ⇒ 一轮几分钟；做成旋钮后
+     *   **烧一次、之后每轮只要敲一行** ✓。不带参数就只打印当前值 ✓。*/
+    if (str_prefix(cmd, "setime")) {
+        const char *arg = cmd + 6;
+        long v[3];
+        int n = 0;
+
+        while (n < 3) {
+            long x = 0;
+            int got = 0;
+
+            while (*arg == ' ') { arg++; }
+            while (*arg >= '0' && *arg <= '9') {
+                x = x * 10 + (long)(*arg - '0');
+                got = 1;
+                arg++;
+            }
+            if (!got) { break; }
+            v[n++] = x;
+        }
+        if (n >= 1) {
+            int poll;
+            uint32_t ready, gap;
+
+            atecc_sha_timing_get(&poll, &ready, &gap);
+            poll = (int)v[0];
+            if (n >= 2) { ready = (uint32_t)v[1]; }
+            if (n >= 3) { gap = (uint32_t)v[2]; }
+            atecc_sha_timing_set(poll, ready, gap);
+        }
+        {
+            int poll;
+            uint32_t ready, gap;
+
+            atecc_sha_timing_get(&poll, &ready, &gap);
+            uart_printf(CONSOLE_UART,
+                        "\r\n[id] sha timing: poll=%d ready_ms=%u gap_ms=%u"
+                        "（用法：setime <poll 0|1> <ready_ms> <gap_ms>）\r\n",
+                        poll, (unsigned)ready, (unsigned)gap);
+        }
         return 1;
     }
     return 0;

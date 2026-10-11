@@ -148,6 +148,13 @@ void    atecc_set_addr(uint8_t addr7);
 uint8_t atecc_get_addr(void);
 void atecc_stats(atecc_stats_t *out);
 
+/* ★★ 2026-10-11 深夜（上机扫时序）：SHA/HMAC 序列的**时序旋钮**（控制台可改 ✓）。
+ * 为什么做成可调 ✗：“就绪等待 / 命令间间隔 / 要不要探地址”要试好几个组合，
+ *   而每次试都要重新烧固件 ⇒ 一轮要几分钟；做成旋钮后**烧一次、之后每轮只要敲一行** ✓。
+ * `poll` = 1 ⇒ 用“探地址”当就绪判据（器件的原生就绪信号 ✓）；= 0 ⇒ 固定等 `ready_ms`。*/
+void atecc_sha_timing_set(int poll, uint32_t ready_ms, uint32_t gap_ms);
+void atecc_sha_timing_get(int *poll, uint32_t *ready_ms, uint32_t *gap_ms);
+
 /* 给 `proto/id_build.c` 用的 nonce provider（`idb_nonce_fn` 的形状）：
  * 取 32 字节随机数的**前 16 字节** → 32 个大写十六进制字符 + NUL。
  * ⚠ 为什么只用 16 字节：与软熵后端同长度 ⇒ 报文（和已入库的黄金向量）形状不变。
