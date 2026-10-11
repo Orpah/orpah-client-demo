@@ -41,14 +41,27 @@
 #define IDR_E_JCS      (-3)     /* 预像/编码出错（arena 或缓冲不够）*/
 #define IDR_E_CAP      (-4)     /* 输出缓冲不够 */
 
-/* ★★ d 步：ES256 的**签名器可注入**（真机 = ATECC608B 的 `Sign(0x41)`）。
- * 形状：给定**签名预像字节**（JCS 后的 `{"hdr":…,"payload":…}`，还没哈希），
- *       写满 `r||s` 64 B（各 32 B 大端）并返回 0；否则返回非 0
- *       （调用方按 §8.2 Step2 降到 L1 —— 即 `IDR_E_ES256` 那条路）。
- * ★ 传进来的是**预像**而不是摘要：哈希由 provider 自己决定 ——
- *   SE 那条路是「固件 SHA-256 → `Nonce(0x16)` 把 32 B 当摘要装进去 → `Sign(0x41)`」
- *   （见 `docs/atecc608b-se.md` §8.10；哈希在 MCU 里做、私钥在芯片里，两边都不出芯片外的秘密 ✓）。*/
-typedef int (*idr_sign_fn)(unsigned char out64[64], const void *pre, size_t prelen, void *ctx);
+/* ★★ d 步：签名器可注入（真机 = ATECC608B 的一颗芯片）。
+ * 形状（2026-10-11 起改成**按算法分流**，方案 A）——
+ *   `alg`   : `IDR_ALG_ES256` / `IDR_ALG_HS256`（只会是这两个 ✓）
+ *   `out`   : 输出缓冲；`outcap` = 容量；`*outlen` = 实际写出的字节数
+ *             · ES256 ⇒ 写满 **`r||s` 64 B**（各 32 B 大端 ✓）
+ *             · HS256 ⇒ 写 **32 B**（HMAC-SHA256 原文，b64url 之前 ✓）
+ *   返回 0 成功；非 0 = 该算法这条路失败（ES256 ⇒ 调用方按 §8.2 Step2 降到 L1 ✓；
+ *   HS256 ⇒ `idr_build` 返回 `IDR_E_ARG` ✗）。
+ * ★ 为什么带 `alg`（而不是再加一个注入点）：一个 provider = **一块 SE** ✓，两种算法是同一颗
+ *   芯片的两条命令（`Sign(0x41)` / `SHA+HAMAC` ✓）⇒ 一个点最省、语义也最清 ✓。
+ * ★ 传进来的是**预像**（JCS 后的 `{"hdr":…,"payload":…}`，还没哈希）：哈希归 provider 自己 ——
+ *   ES256 ⇒ 固件 SHA-256 → `Nonce(0x16)` 装摘要 → `Sign(0x41)` ✓；HS256 ⇒ 预像直接喂
+ *   `SHA(HMAC_START/UPDATE/608_HMAC_END)` ✓。
+ * ★★ 时序（**真机两条路都要** ✗）：SE provider 内部必须留足器件收尾时间 ——
+ *   SHA/HMAC 三步之间 ≥150 ms、**`Sign` 之后 ≈1.2 s**、收到 `0x03` 要**递增退避后重发** ✓
+ *   （出处与完整实测见 `tools/se_provision.py` 的同名常量 `HMAC_STEP_GAP_MS` / `SIGN_SETTLE_MS`
+ *   与 `docs/atecc608b-se.md` §8.24 ✓）—— 否则 `0x03` 会连拒 ✓。
+ */
+typedef int (*idr_sign_fn)(const char *alg,
+                           unsigned char *out, size_t outcap, size_t *outlen,
+                           const void *pre, size_t prelen, void *ctx);
 
 /* 组装并输出**报文 JSON 字节**（信封那层由 msg_id_report() 再包）。
  *   nonce            : 32 个十六进制字符（16 字节）——设备侧生成规则见 ROADMAP §五

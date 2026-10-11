@@ -36,7 +36,8 @@ int idr_build(jcs_ctx_t *c,
         return IDR_E_ARG;
     }
     if (idr_alg_of(level) == NULL) return IDR_E_ARG;
-    if ((level == 1 || level == 2) && (hmac_key == NULL || hmac_keylen == 0)) {
+    if ((level == 1 || level == 2) && sign_fn == NULL
+            && (hmac_key == NULL || hmac_keylen == 0)) {
         return IDR_E_ARG;
     }
     /* level=0：两条路**二选一** ——
@@ -104,7 +105,9 @@ int idr_build(jcs_ctx_t *c,
             unsigned char raw[ECDSA_BYTES];
 
             if (sign_fn != 0) {
-                if (sign_fn(raw, pre, (size_t)pn, sign_ctx) != 0) {
+                size_t sl = 0u;
+                if (sign_fn(IDR_ALG_ES256, raw, sizeof(raw), &sl, pre, (size_t)pn,
+                            sign_ctx) != 0 || sl != sizeof(raw)) {
                     return IDR_E_ES256;
                 }
             } else if (ecdsa_sign_p256_msg(raw, ec_priv, pre, (size_t)pn) != 0) {
@@ -112,8 +115,28 @@ int idr_build(jcs_ctx_t *c,
             }
             m = b64url_encode(raw, sizeof(raw), sig_b64, sizeof(sig_b64));
         } else {
+            /* HS256：**优先用注入的签名器**（真机 = SE 内部的 HMAC 钥 ⇒ 钥不进 MCU 的 RAM ✓）；
+             * 它没注入、或它失败时，退回软件 HMAC（用本地 `hmac_key` ✓）。
+             * ★ 为什么"失败也要退回"（2026-10-11 交叉测试抓出来的 ✗）：
+             *   注入器失败模拟的是"**SE 不答**" ✗ ⇒ 那是 **ES256 这条路**走不通 ✓ ⇒
+             *   协议 §8.2 Step2 对它的处理**正是降到 L1** ✓ ⇒ 若降级后仍只认那个坏掉的注入器，
+             *   "降级"就永远救不了场（实测：`id-cli selfcheck` rc=-104 ✗）。
+             *   ★ 真机上 `hmac_key` 是 NULL（降级钥在 SE slot 4、读不出来 ✓）⇒ **不会**回退
+             *     ⇒ SE 真坏了时失败如实暴露 ✓，不会被这层回退悄悄掩盖 ✓。*/
             unsigned char mac[SHA256_DIGEST_LEN];
-            hmac_sha256(hmac_key, hmac_keylen, (const unsigned char *)pre, (size_t)pn, mac);
+            int got = 0;
+
+            if (sign_fn != 0) {
+                size_t sl = 0u;
+                if (sign_fn(IDR_ALG_HS256, mac, sizeof(mac), &sl, pre, (size_t)pn,
+                            sign_ctx) == 0 && sl == sizeof(mac)) {
+                    got = 1;
+                }
+            }
+            if (got == 0) {
+                if (hmac_key == NULL || hmac_keylen == 0) { return IDR_E_ARG; }
+                hmac_sha256(hmac_key, hmac_keylen, (const unsigned char *)pre, (size_t)pn, mac);
+            }
             m = b64url_encode(mac, sizeof(mac), sig_b64, sizeof(sig_b64));
         }
         if (m < 0) return IDR_E_CAP;

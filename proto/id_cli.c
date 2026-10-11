@@ -23,6 +23,7 @@
 #include "id_build.h"
 #include "id_keys.h"
 #include "id_level.h"
+#include "hmac.h"              /* HS256 的 PC 侧替身要用 hmac_sha256 ✓ */
 #include "p256.h"
 
 #define LINE_MAX 8192
@@ -105,18 +106,42 @@ static long from_hex_bytes(const char *hex, unsigned char *out, size_t cap)
 /* ★★ d 步的 PC 侧替身：一个"外部签名器"（**不装进固件**，只在 PC 上证明"注入这条路"通）。
  *   把它装进 `idb_t` 后，流水线应当产出与软件替身**逐字节相同**的帧 ✓；
  *   另一个变体恒失败，用来证明"签名器报错 ⇒ 按 §8.2 Step2 降到 L1" ✓。
- *   ⚠ 固件里注入的是 `Periph/atecc.c` 的 `atecc_sign_pre()`（SE 真签）——两者形状相同、实现不同。*/
-static int _prov_soft(unsigned char out64[64], const void *pre, size_t prelen, void *ctx)
+ *   ⚠ 固件里注入的是 `Periph/atecc.c` 的 `atecc_sign_any()`（SE 真签 / 真 HMAC）
+ *     ——**形状相同、实现不同** ✓。
+ * ★ 2026-10-11 形状改成**按算法分流**（`idr_sign_fn` 带 `alg` ✓）：
+ *   · ES256 ⇒ 还是软件 P-256（用 `b->ec` ✓）；
+ *   · HS256 ⇒ 用 **demo 派生钥**算 HMAC ⇒ 与"不注入"那条路**逐字节相同** ✓（所以交叉测试不变 ✓）；
+ *     它证明的是"注入这条路真的被走通了"✓，**不是**"钥在 SE 里"（那要固件 + 真芯片 ✓）。*/
+static int _prov_soft(const char *alg,
+                      unsigned char *out, size_t outcap, size_t *outlen,
+                      const void *pre, size_t prelen, void *ctx)
 {
     idb_t *b = (idb_t *)ctx;
+    uint8_t key[32];
 
-    if (out64 == 0 || b == 0) { return -1; }
-    return (ecdsa_sign_p256_msg(out64, b->ec, pre, prelen) == 0) ? 0 : -1;
+    if (alg == 0 || out == 0 || outlen == 0 || b == 0) { return -1; }
+    if (strcmp(alg, IDR_ALG_ES256) == 0) {
+        if (outcap < 64u) { return -1; }
+        if (ecdsa_sign_p256_msg(out, b->ec, pre, prelen) != 0) { return -1; }
+        *outlen = 64u;
+        return 0;
+    }
+    if (strcmp(alg, IDR_ALG_HS256) == 0) {
+        if (outcap < 32u) { return -1; }
+        if (idk_demo_hmac(b->sn, b->gen, key) != 0) { return -1; }
+        hmac_sha256(key, sizeof(key), (const unsigned char *)pre, prelen, out);
+        *outlen = 32u;
+        return 0;
+    }
+    return -1;                       /* 别的 alg 不支持 ✗ */
 }
 
-static int _prov_fail(unsigned char out64[64], const void *pre, size_t prelen, void *ctx)
+static int _prov_fail(const char *alg,
+                      unsigned char *out, size_t outcap, size_t *outlen,
+                      const void *pre, size_t prelen, void *ctx)
 {
-    (void)out64; (void)pre; (void)prelen; (void)ctx;
+    (void)alg; (void)out; (void)outcap; (void)outlen;
+    (void)pre; (void)prelen; (void)ctx;
     return -1;                       /* 模拟"SE 不答/签不动" */
 }
 
