@@ -947,10 +947,13 @@ def py_atecc_cmd_nonce(digest32, with_crc):
 
 
 def py_atecc_cmd_sign(slot, with_crc):
-    """★ d 步：`Sign(0x41)`（外部消息档）—— param2 = **槽号**。"""
+    """★ d 步：`Sign(0x41)`（外部消息档）—— param2 = **槽号**，**小端**。
+
+    小端的依据 = `Read` 的**实测外部锚点**（2026-10-11，原厂栈实发 `07 02 80 08 00 0A 4D`
+    ⇒ 字地址 8 在线上是 `08 00`）：param2 是同一个 16 位字段 ⇒ 一律小端 ✓（同 C 侧一份规则）。"""
     pkt = bytearray([ATECC_CMD_LEN_CRC if with_crc else ATECC_CMD_LEN_NOCRC,
                      ATECC_OP_SIGN, ATECC_SIGN_MODE_EXTERNAL,
-                     (slot >> 8) & 0xFF, slot & 0xFF])
+                     slot & 0xFF, (slot >> 8) & 0xFF])
     if with_crc:
         c = py_crc16(bytes(pkt))
         pkt += bytes([c & 0xFF, (c >> 8) & 0xFF])

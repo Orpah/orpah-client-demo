@@ -4,7 +4,10 @@
 #include "crc16.h"
 
 /* 一条"无数据命令"的包：count + opcode + param1 + param2(2 B) + [CRC]。
- * Random / Info / Read 全是一个形状（区别只在 opcode 与 param）⇒ 只写一份。*/
+ * Random / Info / Read / Sign / GenKey / Lock 全是一个形状（区别只在 opcode 与参数）⇒ 只写一份。
+ * ★★ 2026-10-11 **实测纠正**：param2 是**小端**（低字节在前）✗ —— 原厂栈读配置区第 1 块
+ *   实发 `07 02 80 08 00 0A 4D`（`Read` 的字地址 8 ⇒ `08 00`）✓；此前验过的包里 param2
+ *   恰好全是 0，所以大端/小端看不出区别 ⇒ 一直没暴露 ✗（一上机读非零地址就报 `0x03` parse）。*/
 static size_t cmd5(uint8_t *out, size_t cap, uint8_t op, uint8_t p1, uint16_t p2, int with_crc)
 {
     size_t n = with_crc ? ATECC_CMD_LEN_CRC : ATECC_CMD_LEN_NOCRC;
@@ -15,8 +18,8 @@ static size_t cmd5(uint8_t *out, size_t cap, uint8_t op, uint8_t p1, uint16_t p2
     out[0] = (uint8_t)n;                 /* count：含 count 自身与 CRC */
     out[1] = op;
     out[2] = p1;                         /* param1 */
-    out[3] = (uint8_t)(p2 >> 8);         /* param2 高 */
-    out[4] = (uint8_t)(p2 & 0xFFu);      /* param2 低 */
+    out[3] = (uint8_t)(p2 & 0xFFu);      /* param2 低字节（**小端**）*/
+    out[4] = (uint8_t)(p2 >> 8);         /* param2 高字节 */
     if (with_crc) {
         /* CRC 覆盖 count..param2（即前 5 字节），不含 CRC 自身 */
         crc16_atca_le(out, ATECC_CMD_LEN_NOCRC, &out[5]);
@@ -58,8 +61,8 @@ size_t atecc_msg_nonce_load(uint8_t *out, size_t cap,
     out[0] = (uint8_t)n;
     out[1] = ATECC_OP_NONCE;
     out[2] = ATECC_NONCE_MODE_MSGDIGBUF;
-    out[3] = 0x00u;
-    out[4] = 0x00u;
+    out[3] = 0x00u;                      /* param2 低（小端；这里恒 0）*/
+    out[4] = 0x00u;                      /* param2 高 */
     for (i = 0u; i < ATECC_NONCE_DIGEST_BYTES; i++) {
         out[5u + i] = digest32[i];
     }

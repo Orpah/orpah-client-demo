@@ -438,13 +438,46 @@ static int selfcheck(void)
        n == ATECC_CMD_LEN_CRC && pkt[0] == 7u &&
        pkt[5] == (uint8_t)(crc16_atca(pkt, 5u) & 0xFFu) &&
        pkt[6] == (uint8_t)(crc16_atca(pkt, 5u) >> 8));
-    n = atecc_msg_read(pkt, sizeof(pkt), ATECC_ZONE_CONFIG, ATECC_CFG_ADDR_LOCK, 0);
-    ck("Read 配置区 @0x54 无 CRC：op 0x02 / param1=zone 0x00 / 地址大端 00 54",
+    n = atecc_msg_read(pkt, sizeof(pkt), ATECC_ZONE_CONFIG, ATECC_CFG_WORD_LOCK, 0);
+    ck("Read 配置区锁字 0x15 无 CRC：op 0x02 / param1=zone 0x00 / param2 小端 = 15 00",
        n == ATECC_CMD_LEN_NOCRC && pkt[1] == ATECC_OP_READ && pkt[2] == ATECC_ZONE_CONFIG &&
-       pkt[3] == 0x00u && pkt[4] == 0x54u);
-    n = atecc_msg_read(pkt, sizeof(pkt), ATECC_ZONE_CONFIG, 0x0154u, 1);
-    ck("Read 地址 0x0154 带 CRC：地址字节 = 01 54（大端）",
-       n == ATECC_CMD_LEN_CRC && pkt[3] == 0x01u && pkt[4] == 0x54u);
+       pkt[3] == 0x15u && pkt[4] == 0x00u);
+    /* ★★ 外部锚点（2026-10-11 实测）：**原厂栈读配置区**实发的四条 `Read` ——
+     *   实测原样（`docs/atecc608b-se.md` §8.8 / §8.12）：
+     *     `07 02 80 00 00 09 AD`、`07 02 80 08 00 0A 4D`、
+     *     `07 02 80 10 00 0A 1D`、`07 02 80 18 00 09 FD`
+     *   ⇒ 两条可钉死的事实：
+     *     ① **param2 = 字地址**（0x00/0x08/0x10/0x18 = 4 块 32 B，不是字节 0x00/0x20/0x40/0x60）；
+     *     ② **param2 小端**（字 8 在线上是 `08 00`）。
+     *   ⚠ param1 两家写法不同、**都实测可用**（不要拿它当锚点）✗：
+     *     原厂 = `0x80`（"32 字节块读"那档，见 §8.8 注）；
+     *     本仓 = zone（配置区 `0x00`）+ 字数 —— 本机实测可用（固件读锁字 / `tools/se_provision.py
+     *     read` 读全 128 B 都对得上 ✓）。
+     *   ⇒ **CRC 锚点用原厂那 5 字节原样算**（这样锚的是「我们的 CRC ↔ 器件真回/真发」，
+     *     跟我们的包构造无关 ✓）；**包构造**那条只钉 param2 两个字节 ✓。*/
+    {
+        static const uint8_t rd1[5] = { 0x07u, 0x02u, 0x80u, 0x00u, 0x00u };
+        static const uint8_t rd2[5] = { 0x07u, 0x02u, 0x80u, 0x08u, 0x00u };
+        uint8_t crc[2];
+
+        crc16_atca_le(rd1, 5u, crc);
+        ck("外部锚点：CRC16(07 02 80 00 00) = 09 AD（原厂实发包尾）",
+           crc[0] == 0x09u && crc[1] == 0xADu);
+        crc16_atca_le(rd2, 5u, crc);
+        ck("外部锚点：CRC16(07 02 80 08 00) = 0A 4D（原厂实发包尾）",
+           crc[0] == 0x0Au && crc[1] == 0x4Du);
+    }
+    {
+        uint8_t p7[ATECC_CMD_LEN_CRC];
+        int ok;
+
+        n = atecc_msg_read(p7, sizeof(p7), ATECC_ZONE_CONFIG, 0x0000u, 1);
+        ok = (n == 7u) && (p7[3] == 0x00u) && (p7[4] == 0x00u);
+        ck("Read 字地址 0 → param2 = 00 00（小端；同外部锚点 ①）", ok);
+        n = atecc_msg_read(p7, sizeof(p7), ATECC_ZONE_CONFIG, 0x0008u, 1);
+        ok = (n == 7u) && (p7[3] == 0x08u) && (p7[4] == 0x00u);
+        ck("Read 字地址 8 → param2 = 08 00（**小端** ✓；同外部锚点 ②）", ok);
+    }
     ck("容量不够（cap=5 却要带 CRC）-> 0",
        atecc_msg_info(pkt, 5u, 0x00u, 1) == 0u);
 

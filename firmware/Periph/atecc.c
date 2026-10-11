@@ -952,7 +952,7 @@ int atecc_diag_probe(void)
         }
 
         /* ④ Read 配置区 word 0x15（字节地址 0x54）⇒ LockValue：`0x55` = 未锁。*/
-        cfg_ok = (diag_cmd4(ATECC_OP_READ, ATECC_ZONE_CONFIG, ATECC_CFG_ADDR_LOCK, cfg,
+        cfg_ok = (diag_cmd4(ATECC_OP_READ, ATECC_ZONE_CONFIG, ATECC_CFG_WORD_LOCK, cfg,
                             &crc_used) == 0);
         if (cfg_ok) {
             uart_printf(CONSOLE_UART, "[sewake] ④ Read cfg@0x54 -> ok(%s)：%02x %02x %02x %02x"

@@ -164,8 +164,14 @@ class Ch347I2c(cs.Ch347):
 
 # ---------------------------------------------------------------------- 报文
 def atecc_pkt(op, p1=0x00, p2=0x0000, with_crc=False, extra=b""):
-    """组一条 ATECC 风格命令包（形状照 `proto/atecc_msg.c`，**同一套规则**）。"""
-    body = bytearray([op & 0xFF, p1 & 0xFF, (p2 >> 8) & 0xFF, p2 & 0xFF]) + bytearray(extra)
+    """组一条 ATECC 风格命令包（形状照 `proto/atecc_msg.c`，**同一套规则**）。
+
+    ★★ **param2 是小端**（低字节在前）—— 2026-10-11 实测：原厂栈读配置区第 1 块发的是
+      `07 02 80 08 00 0A 4D`（`Read` 的 param2 = 字地址 8 ⇒ **`08 00`**）✓；
+      ✗ 我们原来写大端（`00 08`）⇒ 器件回 **`0x03` parse error**（验过的包里 param2 恰好
+      全是 0，所以一直没暴露 ✗）。
+    """
+    body = bytearray([op & 0xFF, p1 & 0xFF, p2 & 0xFF, (p2 >> 8) & 0xFF]) + bytearray(extra)
     pkt = bytearray([len(body) + 1 + (2 if with_crc else 0)]) + body
     if with_crc:
         if not HAVE_RCT:

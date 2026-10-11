@@ -191,8 +191,23 @@ orpah-client-demo/
   再读同一地址」的对照）。SE 供电实测 **3.29 V 稳定**（"没供电"已排除）；取电点现在是
   `P5` 第 4 脚 `VIO` —— **下次应改回 `P2` 末端的 3V3**（见该文档 §5）。
   ★ 教训：**同一时刻只允许一个进程**碰 CH347（当天两个后台工装互相踩，现象与"夹具脆弱"无法区分）。
+- **2026-10-11（SE 全线通 + 产线流程入库）**：d 步完成 —— **ES256 的签名在 ATECC608B 里做**
+  （私钥物理不出芯片），上游 `verify_report` 收下 SE 签的整帧（`level=0`/`trust=high`，
+  `build_ms≈1031`，原来软件 P-256 约 9 s）；同批上机：**Config 与 Data 双锁**、`Random` 真随机、
+  `nonce_src=se sign_src=se`。**产线流程入库 = `tools/se_provision.py`**
+  （`read`/`lock-config`/`genkey`/`lock-data`/`verify`/`all` + `--yes` + `--record` + 离线 `--selftest`）。
+  ★★ **报文层三处口径改为"实测钉死"**（`docs/atecc608b-se.md` **§8.12**）：`param2` **小端**、
+  `Read` 的地址是**字地址**（锁字 = **word `0x15`**，不是字节 `0x54`）、`param1` 两家写法不同
+  但都实测可用 ⇒ **锚点 = 原厂/器件实发实回的字节**（`atecc_cli selfcheck` + `se_provision.py --selftest`）。
+  ★ 一次真漂移由**交叉测试**抓到：C 侧改小端后 `test_vectors_atecc.txt` **29 行有 2 行不符**
+  （`sign 2 1`/`sign 15 1`）—— 根因是 **Python 参考还是大端** ⇒ **改线上字节序后必须立刻跑交叉测试** ✓。
+  ⚠ 仍未实测：`Lock(Data)` 的 param1 = `0x00` 是**推断** ⇒ 第一颗新片上机时先抓原厂真包再照抄；
+  7 颗新片还没配；**HMAC 降级密钥**仍是演示派生（下一步：也放进 SE）。
+  ★ 现场踩坑：**同步终端会卡死**（现象 = 之后每个命令都无输出）⇒ 换异步终端、只用外部 exe
+  （该终端里 PS cmdlet 起不来，但 `python.exe`/`git.exe` 正常）。
 - **未做**：b 步的物理传输（USB→SPI 走 MACBUS 或 RJ45 桥，**通路未定**）、固件主循环/状态机、
-  SE（ATECC608B）驱动、产线烧录流程、低功耗与取能标定、与 `orpah-over-halow`（服务端/仿真器）
+  ~~SE（ATECC608B）驱动~~（**2026-10-11 已做 ✓**，见上）、~~产线烧录流程~~（工具已入库 ✓，
+  7 颗新片**未配** ✗）、低功耗与取能标定、与 `orpah-over-halow`（服务端/仿真器）
   联调、与 `orpah-openwrt-demo`（路由器侧）对接、真机烧录实测。
 
 ## 9. 文档/README：图文并茂（2026-09-21 用户定，适用于所有项目）

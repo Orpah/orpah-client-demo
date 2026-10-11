@@ -112,6 +112,12 @@ openocd -f interface/wch-link.cfg -f target/ch32v20x.cfg \
 接上板子再加 `--bench`（跑 `tools/check_c4g2_bench.py`：SE 唤醒·真随机数·**Slot 0 签名 + 上位机
 独立验签**·`nonce_src`/`sign_src`·上游 `verify_report` 收帧）。
 
+**产线流程（2026-10-11 入库）= `python tools\se_provision.py <step>`** —— 步骤
+`read`（逐字节核对出厂配置）/ `lock-config` ✗ / `genkey` ✗ / `lock-data` ✗ / `verify` / `all`；
+不可逆步骤要 `--yes`，可 `--record <日志>` 留台账（登记公钥用）。
+**离线自检 = `python tools\se_provision.py --selftest`**（9 条锚点：原厂/器件**实发实回**的字节，
+含四条 `Read` —— 它钉住 `param2` 是**字地址**且**小端**，见 `docs/atecc608b-se.md` §8.12 ✓）。
+
 - **协议内核跨语言零偏差**：同一批黄金样本/向量，Python 参考实现（`orpah-over-halow`）vs
   本仓 C 实现 —— 直接跑 **`python proto\run_cross_test.py`**（实测 **exit 0**；含 ATECC608B 报文层
   与**外部锚点**：器件/原厂实回的字节对）。
@@ -121,7 +127,8 @@ openocd -f interface/wch-link.cfg -f target/ch32v20x.cfg \
 
 - **b 步的物理通路**（数据面走哪一条：USB→SPI MACBUS / RJ45 桥）——**尚未定** ✗（控制面 + 回程已通，见 `ROADMAP.md` §二）；
 - 与 `orpah-over-halow`（服务端/仿真器）、`orpah-openwrt-demo`（路由器侧）的**真机联调**（e 步）；
-- 功耗实测（免电池取能曲线）、产线烧录流程落地（手上剩 **7 颗** SE 要按同一套流程配+登记公钥）、
+- 功耗实测（免电池取能曲线）、**产线流程在真片上跑完**（工具已入库 `tools/se_provision.py` ✓，
+  但手上剩 **7 颗** SE 还没配 —— 第一颗上机时要顺带**抓原厂 `Lock(Data)` 的真包**，因为那一档还是推断 ✗）；
 **HMAC 降级密钥**目前在固件里是**演示派生**（规范 §6 的真机该把它也放进 SE）。
 
 （**已完成、别再说「未做」**：`proto/` 协议内核（与 Python 参考零偏差）、

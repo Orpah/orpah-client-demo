@@ -54,12 +54,14 @@
 #define ATECC_MODE_SEED_UPDATE   0x00u
 #define ATECC_MODE_NO_SEED_UPDATE 0x01u
 
-/* 配置区 word 0x15（LockValue/LockConfig/LockData…）的**字节地址** = 0x15 × 4 = 0x54。
- * 依据：`Read` 的地址是**字节地址且必须是 4 的倍数**（0x15 不是 4 的倍数），
- * 而 CryptoAuthLib `atcab_is_locked()` 读的就是这一处：**response[0] == 0x55 ⇒ 配置区未锁**。
- * （我们读出来的是不是 `55 00 …`，本身就能反证这个地址推得对不对。）*/
+/* 配置区 **word 0x15**（LockValue/LockConfig/LockData…）——
+ * ★★ 2026-10-11 **实测纠正**：`Read` 的 param2 是**字地址**（word），**不是字节地址** ✗ ——
+ *   原厂栈读配置区时实发 `07 02 80 00 00 09 AD` / `07 02 80 08 00 0A 4D` / …
+ *   （四块 = 字地址 0x00 / 0x08 / 0x10 / 0x18 = 每块 8 个字 ✓）⇒ 锁字节在
+ *   **字节 0x54 = 字 0x15** ⇒ param2 要写 **0x15** ✓（原来写 0x54 = 字 0x54 = 字节 0x150 ✗ 跑到区外了 ✗）。
+ *   出处：`atcab_is_locked()` 读的就是这一处、`response[0] == 0x55 ⇒ 配置区未锁` ✓。*/
 #define ATECC_ZONE_CONFIG        0x00u
-#define ATECC_CFG_ADDR_LOCK      0x54u
+#define ATECC_CFG_WORD_LOCK      0x15u   /* ★ 字地址（= 字节地址 0x54 / 4） */
 
 #define ATECC_RANDOM_BYTES       32u
 #define ATECC_CMD_LEN_NOCRC      5u    /* count+opcode+param1+param2 */
