@@ -178,7 +178,10 @@ int atecc_msg_resp_sign(const uint8_t *resp, size_t n, uint8_t out64[ATECC_SIGN_
  *   · `atecc_msg_sha_start(slot)`            = 5/7（无数据命令）
  *   · `atecc_msg_sha_update(blk, n)`         = 69/71（`n` 应为 `ATECC_SHA_BLOCK` = 64）
  *   · `atecc_msg_sha_hmac_end(tail, n)`      = `n + 5`/`n + 7`（`n` < 64）
- * ⚠ `n` 必须 ≤ `ATECC_SHA_BLOCK`（超过就该分块 ✗ —— 器件一次只吃 64 B）。*/
+ * ⚠ `n` 必须 ≤ `ATECC_SHA_BLOCK`（超过就该分块 ✗ —— 器件一次只吃 64 B）。
+ * ★★ **`param2` 的填法不统一，是实测出来的**（2026-10-11 ✗）：`START` = key slot ✓、
+ *   **`UPDATE` = 0** ✓（✗ 填 64 会让器件把后面任一条命令判错 —— 长度已经在 `count` 里 ✓）、
+ *   `END` = 尾块长度 ✓。三者都对得上“器件内 HMAC = 软件 HMAC”那条判据 ✓。*/
 size_t atecc_msg_sha_start(uint8_t *out, size_t cap, uint16_t key_slot, int with_crc);
 size_t atecc_msg_sha_update(uint8_t *out, size_t cap,
                             const uint8_t *blk, size_t n, int with_crc);

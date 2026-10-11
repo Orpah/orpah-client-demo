@@ -89,7 +89,9 @@ MODE_READ_32 = 0x80     # `Read`/`Write` 的 32 B 位（`ATCA_ZONE_READWRITE_32`
 ZONE32_CONFIG = 0x00 | MODE_READ_32      # = 0x80
 ZONE32_DATA = 0x02 | MODE_READ_32        # = 0x82
 SHA_MODE_HMAC_START = 0x04   # param1；param2 = **key slot**（原厂 `calib_sha_hmac_init()` ✓）
-SHA_MODE_HMAC_UPDATE = 0x01  # param1；param2 = 64（一次一块 ✓）
+SHA_MODE_HMAC_UPDATE = 0x01  # param1；★ param2 = **0**（✗ 不是块长 64）—— 2026-10-11 实测：
+                             #   同一条 100 B 消息，param2=64 会失败、param2=0 逐字节相同 ✓；
+                             #   长度本来就在 count 里（count = 1+4+数据+2）✓；START/END 的 param2 都对 ✓ 别一起改 ✗
 SHA_MODE_608_HMAC_END = 0x02 # ★ 608 的 HMAC 结束码（`calib_sha_hmac_finish()` 里按器件选 ✓）
 SHA_TARGET_TEMPKEY = 0x00    # 结果落点（0x00 = TempKey：同 `NONCE/KDF_MODE_TARGET_TEMPKEY` ✓）；
                              # 响应里总是会回 32 B 摘要 ✓ ⇒ 落点不影响我们取值 ✓
@@ -484,7 +486,8 @@ class Se:
         off = 0
         while len(msg) - off >= SHA_BLOCK:
             self._settle(HMAC_STEP_GAP_MS)
-            pkt = ci.atecc_pkt(OP_SHA, SHA_MODE_HMAC_UPDATE, SHA_BLOCK, self.crc,
+            # ★ param2 = **0**（不是 SHA_BLOCK ✗）—— 2026-10-11 实测，见 `SHA_MODE_HMAC_UPDATE` 处
+            pkt = ci.atecc_pkt(OP_SHA, SHA_MODE_HMAC_UPDATE, 0, self.crc,
                                extra=bytes(msg[off:off + SHA_BLOCK]))
             # ★ UPDATE **不自动重发** ✗：重发会把同一段数据再喂一遍 ⇒ 摘要就错了 ✗✗
             rc, resp, note = self.cmd(pkt, 4, wait_ms=WAIT_MS_CRYPTO, retry_write=False)

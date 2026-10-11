@@ -684,10 +684,10 @@ static int selfcheck(void)
         ck("外部锚点：SHA(HMAC_START, slot 4) 包 = 真机实发的 0747040400ae47",
            n == ATECC_CMD_LEN_CRC && strcmp(hex, start4want) == 0);
         n = atecc_msg_sha_update(pkt71, sizeof(pkt71), blk64, ATECC_SHA_BLOCK, 1);
-        ck("外部锚点：SHA(HMAC_UPDATE, 64 B) 包长 = 0x47(71) 且 param2 = 0x40(64)（小端）",
+        ck("SHA(HMAC_UPDATE, 64 B)：包长 = 0x47(71)、param2 = **0**（实测 ✗ 不是 64）",
            n == ATECC_CMD_LEN_SHA_DATA_CRC && pkt71[0] == 0x47u && pkt71[1] == ATECC_OP_SHA &&
            pkt71[2] == ATECC_SHA_MODE_HMAC_UPDATE &&
-           pkt71[3] == (uint8_t)ATECC_SHA_BLOCK && pkt71[4] == 0x00u);
+           pkt71[3] == 0x00u && pkt71[4] == 0x00u);
         {
             uint8_t crc[2];
             int cok;

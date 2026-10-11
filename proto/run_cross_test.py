@@ -1017,8 +1017,13 @@ def py_atecc_cmd_sha_start(slot, with_crc):
 
 
 def py_atecc_cmd_sha_update(blk, with_crc):
-    """`SHA(HMAC_UPDATE, param2=**本块字节数**) + 该块`（≤ 64 B ✓）"""
-    return py_atecc_pkt(ATECC_OP_SHA, ATECC_SHA_MODE_HMAC_UPDATE, len(blk), with_crc, blk)
+    """`SHA(HMAC_UPDATE, param2=**0**) + 该块`（≤ 64 B ✓）。
+
+    ★★ `param2` = **0**，不是块长 —— **2026-10-11 上机实测** ✗：
+      同一条 100 B 消息，`param2=64` 失败、`param2=0` 时器件内 HMAC 与软件**逐字节相同** ✓。
+      长度本来就在 `count` 里（`count = 1+4+数据+2`）✓。
+    ⚠ `START` 的 param2（key slot）与 `END` 的 param2（尾块长度）**都对** ✓，别一起改 ✗。"""
+    return py_atecc_pkt(ATECC_OP_SHA, ATECC_SHA_MODE_HMAC_UPDATE, 0, with_crc, blk)
 
 
 def py_atecc_cmd_sha_end(tail, with_crc):

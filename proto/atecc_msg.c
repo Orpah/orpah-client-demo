@@ -85,9 +85,16 @@ size_t atecc_msg_sha_update(uint8_t *out, size_t cap,
     if (n > ATECC_SHA_BLOCK) {
         return 0u;                       /* 器件一次只吃 64 B ⇒ 超过就是调用方该分块 ✗ */
     }
-    /* param2 = **本块字节数**（实测：块长 `0x40` = 64 ✓ 就在 param2 里）*/
+    /* ★★ `param2` 必须填 **0**（不是 64）—— **2026-10-11 上机实测** ✗：
+     *   同一条 100 B 的消息（slot 8、可读钥 ⇒ 能自己判对错 ✓）：
+     *     · `param2 = 64` ⇒ 失败（`0x03` / `0x0F` 不定）✗；
+     *     · `param2 = 0`  ⇒ ★ 器件内 HMAC 与软件 HMAC **逐字节相同** ✓。
+     *   原因：数据长度**已经在 `count` 里**（`count = 1+4+数据+2`，器件也靠它 + 回车读）
+     *   ⇒ 多填一个 64 反而被器件当成*别的*参数解析 ⇒ 后续任一条命令被拒 ✓。
+     * ⚠ `START` 的 `param2`（= key slot）与 `END` 的 `param2`（= 尾块长度）**都是对的** ✓
+     *   （实测 21/100/129 B 三种长度都逐字节相同 ✓）⇒ 别“顺手统一”成 0 ✗。*/
     return cmd_data(out, cap, ATECC_OP_SHA, ATECC_SHA_MODE_HMAC_UPDATE,
-                    (uint16_t)n, blk, n, with_crc);
+                    0x0000u, blk, n, with_crc);
 }
 
 size_t atecc_msg_sha_hmac_end(uint8_t *out, size_t cap,
