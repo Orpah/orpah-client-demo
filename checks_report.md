@@ -1,6 +1,6 @@
 # checks_report.md —— `tools/run_checks.py` 的输出（**入库**，同隔壁仓惯例）
 
-跑的时间：2026-10-11 17:56:48
+跑的时间：2026-10-11 18:11:46
 
 判定口径：**退出码 0 且输出里没有 `FAIL` / `Traceback`**（只看退出码会漏 —— 有些脚本自己吞异常）。
 
@@ -20,22 +20,22 @@
 ```
 C 侧已编译：P-256 曲线（cl (vcvars64, /std:c11)）
 PASS C selfcheck（P-256 不变量）  ->  PASS selfcheck（不变量全过）
-PASS C pubkey-selftest（公钥派生向量）  ->  PASS 14/14 行（F:\git\orpah-client-demo\proto\test_vectors_p256.txt）
+PASS C pubkey-selftest（公钥派生向量）  ->  PASS 14/14 行（f:\git\orpah-client-demo\proto\test_vectors_p256.txt）
 C 侧已编译：ECDSA/RFC6979（cl (vcvars64, /std:c11)）
 PASS C selfcheck（ECDSA/RFC6979 不变量）  ->  PASS selfcheck（ECDSA/RFC6979 不变量）
-PASS C k-selftest（RFC 6979 官方 k 向量）  ->  PASS k-selftest 2/2 行（F:\git\orpah-client-demo\proto\test_vectors_ecdsa_rfc6979.txt）
-PASS C sign-selftest（RFC 6979 官方 r||s 向量）  ->  PASS sign-selftest 2/2 行（F:\git\orpah-client-demo\proto\test_vectors_ecdsa_rfc6979.txt）
-PASS C sign-selftest（本仓 ECDSA 向量）  ->  PASS sign-selftest 25/25 行（F:\git\orpah-client-demo\proto\test_vectors_ecdsa.txt）
+PASS C k-selftest（RFC 6979 官方 k 向量）  ->  PASS k-selftest 2/2 行（f:\git\orpah-client-demo\proto\test_vectors_ecdsa_rfc6979.txt）
+PASS C sign-selftest（RFC 6979 官方 r||s 向量）  ->  PASS sign-selftest 2/2 行（f:\git\orpah-client-demo\proto\test_vectors_ecdsa_rfc6979.txt）
+PASS C sign-selftest（本仓 ECDSA 向量）  ->  PASS sign-selftest 25/25 行（f:\git\orpah-client-demo\proto\test_vectors_ecdsa.txt）
 C 侧已编译：ID 流水线（§8.2 选级 / 演示密钥 / nonce / 整帧）（cl (vcvars64, /std:c11)）
 PASS C selfcheck（选级/nonce/流水线不变量）  ->  PASS id-cli selfcheck（选级/nonce/流水线/降级路径/签名器注入/缓冲不够报错）
-PASS C keys-selftest（演示密钥向量）  ->  PASS keys-selftest 4/4 行（F:\git\orpah-client-demo\proto\test_vectors_id_keys.txt）
-PASS C level-selftest（选级向量）  ->  PASS level-selftest 13/13 行（F:\git\orpah-client-demo\proto\test_vectors_id_level.txt）
-PASS C nonce-selftest（nonce 向量）  ->  PASS nonce-selftest 5/5 行（F:\git\orpah-client-demo\proto\test_vectors_id_nonce.txt）
-PASS C frame-selftest（整帧向量）  ->  PASS frame-selftest 5/5 行（F:\git\orpah-client-demo\proto\test_vectors_id_frame.txt）
+PASS C keys-selftest（演示密钥向量）  ->  PASS keys-selftest 4/4 行（f:\git\orpah-client-demo\proto\test_vectors_id_keys.txt）
+PASS C level-selftest（选级向量）  ->  PASS level-selftest 13/13 行（f:\git\orpah-client-demo\proto\test_vectors_id_level.txt）
+PASS C nonce-selftest（nonce 向量）  ->  PASS nonce-selftest 5/5 行（f:\git\orpah-client-demo\proto\test_vectors_id_nonce.txt）
+PASS C frame-selftest（整帧向量）  ->  PASS frame-selftest 5/5 行（f:\git\orpah-client-demo\proto\test_vectors_id_frame.txt）
 C 侧已编译：ATECC608B 报文层（cl (vcvars64, /std:c11)）
 PASS C selfcheck（CRC 外部锚点 + Random 包 + 响应解析）  ->  PASS ATECC608B 报文层自检（★ 原厂 atCRC 口径的 CRC + Random/Info/Read + Nonce/Sign 包 + 响应解析（含签名 r||s），共 10 类）
-PASS C crc-selftest（CRC16 向量）  ->  PASS F:\git\orpah-client-demo\proto\test_vectors_crc16.txt：7 行全部一致
-PASS C msg-selftest（Random 包/响应向量）  ->  PASS F:\git\orpah-client-demo\proto\test_vectors_atecc.txt：29 行全部一致
+PASS C crc-selftest（CRC16 向量）  ->  PASS f:\git\orpah-client-demo\proto\test_vectors_crc16.txt：7 行全部一致
+PASS C msg-selftest（Random 包/响应向量）  ->  PASS f:\git\orpah-client-demo\proto\test_vectors_atecc.txt：29 行全部一致
    [info] L3(alg=none) 服务端判定：accepted=True trust=none coverage_only=True
 PASS 服务端验签 C 产出的报文（verify_report 接受 6 条 level=0/1/2）
 PASS OpenSSL 验签通过 C 产出的 r||s（2 条 RFC 官方向量）
@@ -49,7 +49,7 @@ PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 /
 
 ```
 ========================================================================================
-cstep-nanoch32-atecc608b.fzz -> F:\git\orpah-client-demo\hardware\wiring\cstep-nanoch32-atecc608b.fzz
+cstep-nanoch32-atecc608b.fzz -> f:\git\orpah-client-demo\hardware\wiring\cstep-nanoch32-atecc608b.fzz
   实例： PCB1=5783, U5=86334118, Breadboard1=86334129, R1=86334204, R2=86334316, IMG1=86334537, U6=86334794
   实际网表（9 个网）：
     Breadboard1.A4  <->  Breadboard1.E4  <->  U5.GND  <->  U6.GND  <->  U6.VSSA  <->  U6.VSS_1  <->  U6.VSS_2  <->  U6.VSS_3
@@ -110,9 +110,9 @@ cstep-nanoch32-atecc608b.fzz -> F:\git\orpah-client-demo\hardware\wiring\cstep-n
 ### 固件编译（riscv-none-embed-gcc，要求零 warning）（rc=0，PASS）
 
 ```
-make: Entering directory 'F:/git/orpah-client-demo/firmware'
+make: Entering directory 'f:/git/orpah-client-demo/firmware'
 make: Nothing to be done for 'all'.
-make: Leaving directory 'F:/git/orpah-client-demo/firmware'
+make: Leaving directory 'f:/git/orpah-client-demo/firmware'
 ```
 
 ## 需要台架的（不在默认里）
