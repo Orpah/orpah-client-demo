@@ -296,7 +296,8 @@ class Se:
             time.sleep(0.002)
         return False, last
 
-    def cmd(self, pkt, want_len, tries=3, wait_ms=WAIT_MS_DEFAULT, retry_write=True):
+    def cmd(self, pkt, want_len, tries=3, wait_ms=WAIT_MS_DEFAULT, retry_write=True,
+            wake=True):
         """发一条命令、读一条响应。返回 (rc, resp, note)；rc==0 且 len(resp)==want_len 才算好。
 
         `want_len` = **期望的完整响应长度**（含 1 字节 count）。4 字节错误包会被翻成状态文字 ✓。
@@ -311,11 +312,21 @@ class Se:
         ★ `retry_write=False` = **写被 DLL 报错时不许重发本命令** ✗（有状态的命令：如
           `GenKey(创建)` 会重新生成钥、`SHA UPDATE` 会把同一段数据再喂一遍 ⇒ 结果错 ✗✗）。
 
-        ★★ 唤醒令牌**必须每轮都发** ✓（实测 2026-10-11：去掉它之后**连 100 B 都挂** ✗
-          —— 器件会在命令间隙睡下去 ⇒ 下一条读不到响应 ✓）。
+        ★★ 唤醒令牌发不发由 `wake` 定 ✓（2026-10-11 实测，§8.29）—— **不能“每轮都发”** ✗：
+          器件本来就醒着时，那个令牌是**白送的额外 I²C 事务**，而它是 SHA 序列里
+          **唯一的多余动作** ⇒ 它会把 **SHA 上下文随机打断** ✗（`0x03` 上下文丢 / `0xEE` 脏字节）
+          ⇒ 所以 SHA 序列里：**首条（`START`）发** ✓、**中间的不发**（`wake=False`）✗。
+          （实测：固件侧同样一条 364 B 消息，中间的令牌一发就要 2～3 趟“整条重来”
+             （`build_ms` 3983 ms）；不发 ⇒ **单趟就成**（480 ms）✓。）
+        ⚠ 但**首条必须发** ✗：PC 侧实测“一条都不发”连 100 B 也挂 ✗（器件在命令间隙会睡 ✓）。
+        ⚠ **本改动（`wake=False`）在 PC 侧尚未验证** ✗ —— 当时 `P5` 的 I²C 跳线是**摘掉的**
+          （那是 CH347F 接到 SE 的那两根 ⇒ CH347 看不到 SE，**设计如此**：那一刻 nano 才是主机 ✓）。
+          判据 = `tools/se_provision.py hmac-readonly` 能**单趟**过 250 B（不再出现“整条重来成功”）；
+          做法 = 把 `P5` 接回 + **把 nano 按住 RST / 掉电**（同一时刻只让一个 I²C 主机 ✓）。
         """
         for k in range(tries):
-            self.wake()
+            if wake:
+                self.wake()
             try:
                 ack = self.dev.write_only(self.addr, pkt, WADDR_CMD, ret_ack=True)
             except ci.cs.Ch347Error as exc:
@@ -545,17 +556,17 @@ class Se:
             # ★ param2 = **本块字节数**（= SHA_BLOCK，喂满 64 B 块）—— 原厂 `calib_sha_hmac_update()` ✓
             pkt = ci.atecc_pkt(OP_SHA, SHA_MODE_HMAC_UPDATE, SHA_BLOCK, self.crc,
                                extra=bytes(msg[off:off + SHA_BLOCK]))
-            # ★ UPDATE **不自动重发** ✗：重发会把同一段数据再喂一遍 ⇒ 摘要就错了 ✗✗
-            rc, resp, note = self.cmd(pkt, 4, wait_ms=WAIT_MS_SHA, retry_write=False)
+            # ★ UPDATE **不自动重发** ✗ 且 **不发唤醒令牌** ✗（§8.29：中间那个令牌会把上下文打断）
+            rc, resp, note = self.cmd(pkt, 4, wait_ms=WAIT_MS_SHA, retry_write=False, wake=False)
             if rc != 0:
                 return None, "HMAC_UPDATE@%d：%s" % (off, note)
             off += SHA_BLOCK
         self._settle(HMAC_STEP_GAP_MS)
         pkt = ci.atecc_pkt(OP_SHA, SHA_MODE_608_HMAC_END | SHA_TARGET_TEMPKEY, len(tail),
                            self.crc, extra=tail)
-        # ★ END 同样**不自动重发** ✗（它会消耗/结束那段上下文 ⇒ 重发语义不明）
+        # ★ END 同样**不自动重发** ✗ 且**不发唤醒令牌** ✗（同上）
         rc, resp, note = self.cmd(pkt, 1 + 32 + (2 if self.crc else 0),
-                                  wait_ms=WAIT_MS_SHA, retry_write=False)
+                                  wait_ms=WAIT_MS_SHA, retry_write=False, wake=False)
         if rc != 0:
             return None, "HMAC_END：" + note
         return resp[1:33], note
