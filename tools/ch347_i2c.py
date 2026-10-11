@@ -64,6 +64,8 @@ WADDR_RESP = 0x00       # 响应（读）
 class Ch347I2c(cs.Ch347):
     """在 `ch347_spi.Ch347` 上加 I²C 部分（同一把 DLL、同一个 `iIndex`）。"""
 
+    clk_mode = 1        # 最近一次 `i2c_set()` 用的速度档（`reopen()` 照它重设 ✓）
+
     def _bind(self):
         super()._bind()
         d = self.dll
@@ -91,6 +93,7 @@ class Ch347I2c(cs.Ch347):
         """`mode` 的低 2 位 = 速度（0=20k / 1=100k / 2=400k / 3=750k）。"""
         if not self.dll.CH347I2C_Set(self.index, mode):
             return False
+        self.clk_mode = mode
         if stretch is not None and hasattr(self.dll, "CH347I2C_SetStretch"):
             self.dll.CH347I2C_SetStretch(self.index, 1 if stretch else 0)
         if delay_ms and hasattr(self.dll, "CH347I2C_SetDelaymS"):
@@ -130,10 +133,35 @@ class Ch347I2c(cs.Ch347):
         """只发地址字节，看器件 ACK 了没有（用 `RetACK` 的 ACK 计数，**独立于我们固件**）。
 
         返回 `True` = 收到 ACK；`False` = 没收着 ACK（地址没人应答）。
+
+        ⚠ **别在“等器件算完”里循环调它** ✗（2026-10-11 实测，`docs/atecc608b-se.md` §8.16）：
+        这条“只有地址、不带数据”的事务会把 **CH347 的 I²C 引擎搞死** —— 之后连板载 `0x50`
+        都读不到，且**只有关掉再打开设备会话**（`reopen()`）能救 ✓。本函数自身没错（扫描要用它），
+        错的是“拿它当就绪判据” ✗。
         """
         byte = ((addr7 << 1) | (1 if read_dir else 0)) & 0xFF
         _rd, ack = self.xfer([byte], 0, ret_ack=True)
         return ack >= 1
+
+    def reopen(self, clk=None):
+        """**关掉设备会话再重开**（`CH347CloseDevice` + `CH347OpenDevice` + I²C 初始化）。
+
+        ★★ 为什么必须有它（2026-10-11 实测，`docs/atecc608b-se.md` §8.16）：
+          一次 I²C 事务失败之后，**重设速度救不回来** ✗ —— 实测 `CH347I2C_Set` 返回成功、
+          而地址依旧 NACK（连板载 `0x50` 都读不到 ✗）；而**关掉再打开立刻恢复** ✓
+          （同一次实测：重开后 `0x50 = 11 22 33 07`、`0x60 = ACK` ✓）。
+        ⇒ **所有“失败后重试”的路径都必须走这里**，不是重设速度 ✗。
+        返回 True = 重开后 I²C 可用。
+        """
+        try:
+            self.close()
+        except Exception:                    # noqa: BLE001  关不掉也照样往下试开
+            pass
+        try:
+            self.open()
+        except cs.Ch347Error:
+            return False
+        return bool(self.i2c_usable(self.clk_mode if clk is None else clk))
 
     def write_read(self, addr7, payload, read_len, waddr=None):
         """CryptoAuth 风格的一次事务：`[addr|0][字地址][payload]` 写完，再读 `read_len`。
@@ -222,9 +250,19 @@ def cmd_scan(args):
         print("扫描 0x01~0x7F（写方向 + 读方向各一次；ACK 用 CH347StreamI2C_RetACK 的计数判）")
         print("时钟：%s（CH347I2C_Set mode=%d）" % (I2C_CLK.get(args.clk, "?"), args.clk))
         hits = []
+        reopens = 0
         for a in range(0x01, 0x80):
-            w = dev.probe(a, read_dir=False)
-            r = dev.probe(a, read_dir=True)
+            w = r = False
+            for k in range(2):                      # 引擎卡住 ⇒ 重开会话，**同一个地址重试一次** ✓
+                try:
+                    w = dev.probe(a, read_dir=False)
+                    r = dev.probe(a, read_dir=True)
+                    break
+                except cs.Ch347Error:
+                    if k:
+                        break                       # 重开过一次还错 ⇒ 这个地址就只当"没应答"
+                    reopens += 1
+                    dev.reopen(args.clk)
             if w or r:
                 hits.append((a, w, r))
                 print("  0x%02X：写方向 %s / 读方向 %s%s"
@@ -232,8 +270,13 @@ def cmd_scan(args):
                          "   ← 两个方向都 ACK = 真从机" if (w and r) else ""))
         if not hits:
             print("  没有任何地址应答（两个方向都空）")
+            print("  ★ 预期有器件却没报出来 ⇒ **先拔插一次 CH347 的 USB 再扫**：桥卡死时"
+                  "**后面所有地址都会被漏判成“没应答”** ✗（2026-10-11 踩过，§8.16）")
         else:
             print("共 %d 个地址有应答" % len(hits))
+        if reopens:
+            print("  ⚠ 扫描中途引擎卡住、重开了 %d 次会话 ✓（每次重开后**重探同一个地址** ✓）"
+                  % reopens)
         return 0
 
 
@@ -319,7 +362,7 @@ def cmd_health(args):
             except Exception as exc:                       # noqa: BLE001
                 fail += 1
                 first_err = first_err or str(exc)
-                dev.i2c_usable(args.clk)                   # 失败即重初始化（防卡死）
+                dev.reopen(args.clk)                   # ★ 失败必须“重开会话”（重设速度救不回来 ✗）
         rate = 100.0 * ok / max(1, args.n)
         print("总线健康度：读正对照 0x50（板载 24C02）%d 次 → 成功 %d / 失败 %d（约 %.0f%%）"
               % (args.n, ok, fail, rate))
@@ -327,6 +370,8 @@ def cmd_health(args):
             print("  首次失败：%s" % first_err)
         print("  判读：≈100% = 总线干净；明显偏低 ⇒ 有东西在拖总线（器件/焊接/接触）；"
               "0x50 不在线 ⇒ 连正对照都没了，先查桥自己那一侧。")
+        print("  ★ 若连正对照都不应答（0%）⇒ **先拔插一次 CH347 的 USB**：实测“重开会话”"
+              "救不回来 ✗（详见 docs/atecc608b-se.md §8.16）")
         return 0 if rate >= 95.0 else 1
 
 

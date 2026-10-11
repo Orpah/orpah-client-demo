@@ -118,6 +118,16 @@ WAKE_REPLY = b"\x04\x11\x33\x43"
 SELFTEST_FAIL = b"\x04\x07\xC4\x40"
 SELFTEST_MSG = b"ORPAH d-step probe v1"     # 与固件 `se` 自检签的同一条摘要 ✓
 
+# ★★ 等器件算完的**固定等待**（2026-10-11 起不再“轮询地址” ✗）
+#   起因（实测，§8.16）：那条“探地址”事务（`START + 地址 + STOP`、**不带数据**）会把
+#   **CH347 的 I²C 引擎搞死** —— 之后连板载 `0x50` 都读不到，且**只有关掉再打开设备会话**
+#   能救 ✓（重设速度无效 ✗）。同条件下实测：带“探地址” 3/12 成功 ✗、改固定等待 **12/12** ✓
+#   （整份 128 B（4 块 × 5 轮）**20/20** ✓）。
+#   ⚠ 下面两个数是**台面余量**，不是数据手册的 tEXEC ⇒ 宁多勿少：多等无害 ✓；
+#     少等会读到 NACK、把引擎又搞死 ✗。将来有实测值再收窄 ✓。
+WAIT_MS_DEFAULT = 20     # Read/Info/Random/Write/Lock：实测 ~3.5 ms 就绪 ⇒ 20 ms 有余量 ✓
+WAIT_MS_CRYPTO = 150     # Sign / GenKey / HMAC-END 这类要算 ECC/SHA 的（一次 0.15 s，台面可接受）
+
 # ---- 参照：2026-10-11 那颗的**出厂配置** 128 B（`docs/atecc608b-se.md` §8.4 实测记录）----
 # 用途：新片先跟它逐字节比 —— 一致才敢往下锁 ✗（不一致 = 这批芯片被动过/不是同型号 ⇒ 停下问人 ✓）。
 REF_CONFIG_HEX = (
@@ -142,6 +152,8 @@ class Se:
         self.addr = addr7
         self.crc = with_crc
         self.verbose = verbose
+        self.clk = clk                    # 重开会话时要按同一个速度档重设 ✓
+        self.reopens = 0                  # 传输层累计重开会话次数（可观测 ✓）
         self.dev = ci.Ch347I2c(index=index)
         self.dev.__enter__()
         if not self.dev.i2c_usable(clk):
@@ -154,16 +166,45 @@ class Se:
             pass
 
     # ---- 传输层 ----------------------------------------------------------
+    def _dll(self, fn, what, tries=3):
+        """跑一次 DLL 事务；失败就**关设备 + 重开**再试（有界 ✓ 计数可见 ✓）。
+
+        ★ 2026-10-11 实测（§8.16）：CH347 的 I²C 引擎一报错就**卡住** —— 之后连板载 `0x50`
+        都读不到 ✗；**只有关掉再打开设备会话能救** ✓（`i2c_usable()` 重设速度**无效** ✗）。
+        ⇒ 一次毛刺不再等于整条流程失败 ✗⇒✓。
+        ⚠ 本函数只包**一次传输调用**（如“读响应”）—— 它**不会重发命令**：
+          重发与否由调用方定（有状态的命令不能瞎重发 ✗，见 `cmd()` 的 `retry_write`）。"""
+        last = ""
+        for k in range(tries):
+            try:
+                return fn()
+            except ci.cs.Ch347Error as exc:
+                last = str(exc)
+                self.reopens += 1
+                if self.verbose:
+                    print("      · DLL 报错（%s）⇒ 重开 CH347 会话后重试本步（累计第 %d 次）"
+                          % (exc, self.reopens))
+                if not self.dev.reopen(self.clk):
+                    time.sleep(0.05)
+        raise ci.cs.Ch347Error("%s：重开 %d 次仍失败（%s）" % (what, tries, last))
+
+    def _settle(self, ms):
+        """等器件算完：**固定等待**（取代原来的“轮询地址直到 ACK” ✗，见文件头那段说明）。"""
+        if ms > 0:
+            time.sleep(ms / 1000.0)
+
     def wake(self, tries=6):
         """唤醒 + **把 4 字节唤醒应答读掉**（不读掉它，后面读响应会把旧包读回来 ✗，见 §8.2）。
 
         返回 (ok, 读到的 4 字节)。⚠ 器件**本来就醒着**时这里拿不到 `04 11 33 43`（读到的是
-        输出缓冲里的旧内容）⇒ **不当失败** ✓（同 `docs/atecc608b-se.md` §8.8 那条教训）。"""
+        输出缓冲里的旧内容）⇒ **不当失败** ✓（同 `docs/atecc608b-se.md` §8.8 那条教训）。
+        ★ 唤醒令牌（对地址 `0x00` 写 0 字节）与“探地址”**形状相近、但没有那个副作用** ✓
+          （2026-10-11 实测：去掉它成功率反而更低 ⇒ 该发还得发 ✓）。"""
         last = b""
         for _ in range(tries):
-            self.dev.xfer([0x00], 0)         # 唤醒令牌 = 对地址 0x00 写 0 字节
+            self._dll(lambda: self.dev.xfer([0x00], 0), "发唤醒令牌")
             time.sleep(0.002)
-            last = self.dev.read_from(self.addr, WADDR_RESP, 4)
+            last = self._dll(lambda: self.dev.read_from(self.addr, WADDR_RESP, 4), "读唤醒应答")
             if last[:4] == WAKE_REPLY:
                 return True, last
             if last[:4] == SELFTEST_FAIL:
@@ -171,16 +212,7 @@ class Se:
             time.sleep(0.002)
         return False, last
 
-    def _ready(self, ms=250):
-        """等器件备好：**轮询地址直到 ACK**（它算完之前根本不答地址 ✓ —— 原厂 HAL 也这样）。"""
-        end = time.monotonic() + ms / 1000.0
-        while time.monotonic() < end:
-            if self.dev.probe(self.addr):
-                return True
-            time.sleep(0.001)
-        return False
-
-    def cmd(self, pkt, want_len, tries=3):
+    def cmd(self, pkt, want_len, tries=3, wait_ms=WAIT_MS_DEFAULT, retry_write=True):
         """发一条命令、读一条响应。返回 (rc, resp, note)；rc==0 且 len(resp)==want_len 才算好。
 
         `want_len` = **期望的完整响应长度**（含 1 字节 count）。4 字节错误包会被翻成状态文字 ✓。
@@ -189,20 +221,35 @@ class Se:
         不能“先读 1 字节 count、再去读剩下的” ✗：那第二次会**重发字地址 0x00** ⇒
         器件以为“从头读” ⇒ 读到的是 `count` 开头的一整份新流（错位）⇒ CRC 必错 ✗
         （2026-10-11 实测踩到：`Read` 命令被完整 ACK、回 35 B、但 CRC 不对 ✓）。
-        多读的字节（器件回短响应时）是 don't-care ✓，只按 `count` 取前面那一段用 ✓。"""
+        多读的字节（器件回短响应时）是 don't-care ✓，只按 `count` 取前面那一段用 ✓。
+
+        ★ 就绪等待 = **固定等 `wait_ms`**（不再“探地址” ✗，见文件头那段）。
+        ★ `retry_write=False` = **写被 DLL 报错时不许重发本命令** ✗（有状态的命令：如
+          `GenKey(创建)` 会重新生成钥、`SHA UPDATE` 会把同一段数据再喂一遍 ⇒ 结果错 ✗✗）。
+        """
         for k in range(tries):
             self.wake()
-            ack = self.dev.write_only(self.addr, pkt, WADDR_CMD, ret_ack=True)
+            try:
+                ack = self.dev.write_only(self.addr, pkt, WADDR_CMD, ret_ack=True)
+            except ci.cs.Ch347Error as exc:
+                self.reopens += 1
+                self.dev.reopen(self.clk)
+                if not retry_write:
+                    raise ci.cs.Ch347Error(
+                        "写命令时 DLL 报错（%s）—— 本步属**有状态命令、不自动重发** ✗；"
+                        "先人工确认器件状态，再决定要不要重跑" % exc)
+                if self.verbose:
+                    print("      · 写命令 DLL 报错（%s）⇒ 重开会话后**重发本命令**（累计第 %d 次）"
+                          % (exc, self.reopens))
+                continue
             if self.verbose:
                 print("      · 写命令 %s（ACK=%s，期望 %d）"
                       % (hexs(pkt), ack, 2 + len(pkt)))
-            if ack is not None and ack < 2 + len(pkt):
+            if ack < 2 + len(pkt):
                 continue                     # 中途被 NACK（通常是包长/CRC 不对）
-            if not self._ready():
-                if self.verbose:
-                    print("      · 器件 250 ms 内不答地址（还没算完/没接上）⇒ 重试")
-                continue
-            raw = self.dev.read_from(self.addr, WADDR_RESP, max(4, want_len))
+            self._settle(wait_ms)
+            raw = self._dll(lambda: self.dev.read_from(self.addr, WADDR_RESP, max(4, want_len)),
+                            "读响应")
             if not raw:
                 continue
             cnt = raw[0]                     # ★ count 只占 1 字节
@@ -242,14 +289,22 @@ class Se:
     def lock_zone(self, zone):
         pkt = ci.atecc_pkt(OP_CMD, zone, 0x0000, self.crc)
         # Lock 成功时回的是 **4 字节状态包且状态 0x00**（`04 00 …`）——所以不能按 want_len 判 ✓
+        # ★ `Lock` 是**幂等**的（已锁过 ⇒ 器件回 `0x0F` cannot execute ✓ 不是坏）⇒ 这里可以重发 ✓
         for k in range(3):
             self.wake()
-            ack = self.dev.write_only(self.addr, pkt, WADDR_CMD, ret_ack=True)
+            try:
+                ack = self.dev.write_only(self.addr, pkt, WADDR_CMD, ret_ack=True)
+            except ci.cs.Ch347Error as exc:
+                self.reopens += 1
+                self.dev.reopen(self.clk)
+                if self.verbose:
+                    print("      · 写 %s：DLL 报错（%s）⇒ 重开会话后重发（累计第 %d 次）"
+                          % (hexs(pkt), exc, self.reopens))
+                continue
             if self.verbose:
                 print("      · 写 %s（ACK=%s）" % (hexs(pkt), ack))
-            if not self._ready():
-                continue
-            resp = self.dev.read_from(self.addr, WADDR_RESP, 4)
+            self._settle(WAIT_MS_DEFAULT)
+            resp = self._dll(lambda: self.dev.read_from(self.addr, WADDR_RESP, 4), "读状态包")
             if len(resp) == 4 and resp[0] == 4:
                 st = resp[1]
                 nm = rct.py_atecc_status_name(st) if HAVE_RCT else "?"
@@ -258,9 +313,16 @@ class Se:
         return None, "没读到 4 字节状态包"
 
     def genkey(self, slot, mode=GENKEY_MODE_PRIVATE):
-        """`mode` 缺省 = **创建**（0x04）。只想按已存的钥算公钥就传 `GENKEY_MODE_PUBLIC` ✓。"""
+        """`mode` 缺省 = **创建**（0x04）。只想按已存的钥算公钥就传 `GENKEY_MODE_PUBLIC` ✓。
+
+        ★ **创建那一步（0x04）不许自动重发** ✗（`retry_write=False`）：重发会把槽里的私钥
+        **重新生成** ⇒ 已经登记进密钥库的公钥就对不上了 ✗✗（而“只算公钥”的 `0x00` 无所谓 ✓）。
+        失败就**停下来报错**，让人先确认槽里到底有没有钥，再决定下一步 ✓。
+        """
         pkt = ci.atecc_pkt(OP_GENKEY, mode, slot, self.crc)
-        rc, resp, note = self.cmd(pkt, 1 + 64 + (2 if self.crc else 0))
+        rc, resp, note = self.cmd(pkt, 1 + 64 + (2 if self.crc else 0),
+                                 wait_ms=WAIT_MS_CRYPTO,
+                                 retry_write=(mode != GENKEY_MODE_PRIVATE))
         if rc != 0:
             return None, note
         return resp[1:65], note
@@ -296,7 +358,7 @@ class Se:
           `SHA(608_HMAC_END | TEMPKEY, 余下<64 B)` ⇒ 响应 32 B 摘要 ✓。
         ★ 这个函数的**判据在调用方**：算出来的必须与软件 HMAC 逐字节相同 ✓（不靠“长得对”✓）。"""
         pkt = ci.atecc_pkt(OP_SHA, SHA_MODE_HMAC_START, slot, self.crc)
-        rc, resp, note = self.cmd(pkt, 4)
+        rc, resp, note = self.cmd(pkt, 4, wait_ms=WAIT_MS_CRYPTO)
         if rc != 0:
             return None, "HMAC_START：" + note
         rest = len(msg) % SHA_BLOCK if len(msg) else 0
@@ -304,25 +366,28 @@ class Se:
         while len(msg) - off >= SHA_BLOCK:
             pkt = ci.atecc_pkt(OP_SHA, SHA_MODE_HMAC_UPDATE, SHA_BLOCK, self.crc,
                                extra=bytes(msg[off:off + SHA_BLOCK]))
-            rc, resp, note = self.cmd(pkt, 4)
+            # ★ UPDATE **不自动重发** ✗：重发会把同一段数据再喂一遍 ⇒ 摘要就错了 ✗✗
+            rc, resp, note = self.cmd(pkt, 4, wait_ms=WAIT_MS_CRYPTO, retry_write=False)
             if rc != 0:
                 return None, "HMAC_UPDATE@%d：%s" % (off, note)
             off += SHA_BLOCK
         tail = bytes(msg[off:off + rest])
         pkt = ci.atecc_pkt(OP_SHA, SHA_MODE_608_HMAC_END | SHA_TARGET_TEMPKEY, len(tail),
                            self.crc, extra=tail)
-        rc, resp, note = self.cmd(pkt, 1 + 32 + (2 if self.crc else 0))
+        # ★ END 同样**不自动重发** ✗（它会消耗/结束那段上下文 ⇒ 重发语义不明）
+        rc, resp, note = self.cmd(pkt, 1 + 32 + (2 if self.crc else 0),
+                                  wait_ms=WAIT_MS_CRYPTO, retry_write=False)
         if rc != 0:
             return None, "HMAC_END：" + note
         return resp[1:33], note
 
     def sign_digest(self, digest32, slot=SIGN_SLOT):
         pkt = ci.atecc_pkt(OP_NONCE, NONCE_MODE_MSGDIGBUF, 0x0000, self.crc, extra=digest32)
-        rc, resp, note = self.cmd(pkt, 4 if not self.crc else 4)
+        rc, resp, note = self.cmd(pkt, 4)
         if rc != 0:
             return None, "Nonce：" + note
         pkt = ci.atecc_pkt(OP_SIGN, SIGN_MODE_EXTERNAL, slot, self.crc)
-        rc, resp, note = self.cmd(pkt, 1 + 64 + (2 if self.crc else 0))
+        rc, resp, note = self.cmd(pkt, 1 + 64 + (2 if self.crc else 0), wait_ms=WAIT_MS_CRYPTO)
         if rc != 0:
             return None, "Sign：" + note
         return resp[1:65], note
@@ -790,6 +855,9 @@ def main():
           % (args.step, addr, ci.I2C_CLK.get(args.clk, "?"), "不带" if args.no_crc else "带", args.index))
     print("⚠ 台架规矩：**nano 必须断电 / 按住 RST**（同一时刻只让一个 I²C 主机干活 ✗）")
     print("⚠ 先关掉其它 CH347 工装（一个进程独占 CH347 ✗ —— 2026-09-23 踩过）")
+    print("⚠ 本步**不探地址**（用固定等待 ✓）：2026-10-11 实测，把“探地址”当就绪判据会把"
+          "CH347 的 I²C 引擎搞死 ✗（详见 docs/atecc608b-se.md §8.16）")
+    print("⚠ 万一卡死（连 `0x50` 都不应答）：**拔插一次 CH347 的 USB** —— 软重开会话救不回来 ✗")
 
     try:
         se = Se(args.index, args.clk, addr, with_crc=not args.no_crc)
@@ -861,6 +929,9 @@ def main():
     print("=" * 78)
     print("%s：step=%s%s" % ("PASS" if rc == 0 else "FAIL", args.step,
                              "" if rc == 0 else "（rc=%d ⇒ 看上面的判语）" % rc))
+    if se.reopens:
+        print("（传输层：中途重开 CH347 会话 %d 次 ✓ —— 2026-10-11 实测：引擎卡住后**只有重开会话能救** ✗）"
+              % se.reopens)
     if args.record and rc == 0:
         # ★ 台账只记**指纹**（HMAC 钥是密钥材料 ⇒ 不许写进文件 ✗；§2「仓库里绝不放真实私钥/密钥文件」同理 ✓）
         fp = "-"
