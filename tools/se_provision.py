@@ -571,6 +571,26 @@ def step_genkey(se, args):
     print("                Y = %s" % hexs(pub[32:]))
     print("PASS 公钥已导出（hex = %s）" % pub.hex())
     print("     ⇒ 拿它去密钥库登记（见 `--record`；登记后再 `lock-data` ✗）")
+    # ★★ **关键闸门**（2026-10-11 加）：创建完**立刻**用“只算公钥”那档（`mode 0x00`）**再算一遍**
+    #   并逐字节比对 ⇒ 证明“创建那步**真的把私钥写进槽里了**” ✓
+    #   ⚠ 为什么要有它 ✗：“创建”那档 `0x04` 只是**引原厂源码**（`calib_genkey.c`）、**未实测** ✗；
+    #     若它其实“只算公钥、不创建”，**只有到 `lock-data` 之后重算才会发现** ✗ ——
+    #     那时槽 0 里没钥、**这颗片子就废了** ✗✗。本闸门在**锁数据之前**就能判 ✓，
+    #     判不过就停下 ⇒ 片子**还救得回来** ✓。
+    #   ★ 用来重算的 `GenKey(0x00)` 包字节 `07 40 00 00 00 00 05` 是**原厂栈实发**（§8.10）⇒ 有实测支撑 ✓。
+    pub2, note2 = se.genkey(SIGN_SLOT, GENKEY_MODE_PUBLIC)
+    if pub2 is None:
+        print("FAIL 创建后用 `GenKey(0x00)` 重算公钥失败：%s" % note2)
+        print("     ⇒ **先别锁数据区** ✗：说明槽 0 里可能没有那把私钥")
+        return 2, pub
+    if pub2 != pub:
+        print("FAIL 创建时导出的公钥 ≠ 槽内重算的公钥 ✗")
+        print("      创建：%s" % pub.hex())
+        print("      重算：%s" % pub2.hex())
+        print("     ⇒ `GenKey(0x04)` 那步**没有真把钥写进槽** ✗（或模式写错）⇒ **别锁数据区** ✗")
+        return 2, pub2
+    print("PASS 创建后重算公钥 = 创建时导出的公钥 ✓（逐字节相同）⇒ 槽 0 里**确实有**那把私钥 ✓")
+    print("     ⇒ 这才敢往下走 `lock-data` ✓（锁数据后 `verify` 会再验一次 ✓）")
     return 0, pub
 
 
@@ -1005,6 +1025,9 @@ def main():
     ap.add_argument("--hmac-key-file", help="32 B 降级 HMAC 钥（hex 文本或原始 32 B；**不入库 ✗**）")
     ap.add_argument("--slot", type=int, default=HMAC_RO_SLOT,
                     help="`hmac-readonly` 用哪个槽（缺省 %d：出厂那颗上它是可读的 ✓）" % HMAC_RO_SLOT)
+    ap.add_argument("--pub-hex",
+                    help="登记在案的公钥（128 位 hex = X||Y 各 32 B）—— 给了就**单独跑 `verify` 也能比对** ✓"
+                         "（不给就只能“报公钥”、比不了 ✗）")
     ap.add_argument("--gen-hmac-key", action="store_true",
                     help="密钥文件不存在时就地生成 32 B 随机并写进它（首次上机用 ✓）")
     args = ap.parse_args()
@@ -1037,6 +1060,15 @@ def main():
         print("⇒ 先跑 `python tools\\ch347_i2c.py list` 看它在不在 ✗")
         return 2
     rc, cfg, pub = 0, None, None
+    if getattr(args, "pub_hex", None):
+        # ★ 让**单独跑 `verify`** 也能做“与登记公钥对比”那条判据 ✓
+        #   （不然只有 `all`（`genkey` → … → `verify` 同一进程）才带得上那个对照 ✗ —— 2026-10-11 实测踩到）
+        hx = "".join(c for c in args.pub_hex if c in "0123456789abcdefABCDEF")
+        if len(hx) != 128:
+            print("FAIL `--pub-hex` 不是 128 位 hex（应为 X||Y 各 32 B = 64 B）")
+            return 1
+        pub = bytes.fromhex(hx)
+        print("登记公钥（由 `--pub-hex` 给）：%s…" % hx[:32])
     try:
         ok, four = se.wake()
         print("唤醒：%s（读到 %s%s）" % ("拿到 04 11 33 43 ✓" if ok else "没拿到唤醒应答（器件可能本来就醒着 ✓ 或没接 ✗）",
