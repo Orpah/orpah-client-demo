@@ -116,7 +116,15 @@ SIGN_MODE_EXTERNAL = 0xA0
 SIGN_SLOT = 0x0000
 WAKE_REPLY = b"\x04\x11\x33\x43"
 SELFTEST_FAIL = b"\x04\x07\xC4\x40"
+# ★ 响应里的“无错误”状态（出处 `calib_command.h`：`CMD_STATUS_OK 0x00` ✓）
+ATECC_STATUS_OK = 0x00
 SELFTEST_MSG = b"ORPAH d-step probe v1"     # 与固件 `se` 自检签的同一条摘要 ✓
+# 只读半证的**第二条消息**：100 B > 64 ⇒ 能多走一轮 `SHA HMAC_UPDATE` ✓（1×64 + 36 B 尾巴）
+# （第一条 23 B 只走 START + END ⇒ 两条合起来把 UPDATE 那条路也盖住 ✓）
+HMAC_RO_MSG2 = bytes(range(100))
+# 只读半证的**默认槽**：出厂这颗 slot 8 的 `SlotConfig = 0x0000`
+# （byte 36/37 ⇒ `IsSecret=0`、`ReadKey=0` = 允许明文读 ✓；`KeyConfig = 0x003C` ⇒ KeyType=7 = SHA/HMAC ✓）
+HMAC_RO_SLOT = 8
 
 # ★★ 等器件算完的**固定等待**（2026-10-11 起不再“轮询地址” ✗）
 #   起因（实测，§8.16）：那条“探地址”事务（`START + 地址 + STOP`、**不带数据**）会把
@@ -254,8 +262,16 @@ class Se:
                 continue
             cnt = raw[0]                     # ★ count 只占 1 字节
             if cnt == 4:
+                # ★★ 4 字节包 = **状态包**：**状态 0x00 就是“成功、无数据”** ✓（不是错误 ✗）——
+                #   很多命令（`Write` / `Lock` / `SHA HMAC_START` / `HMAC_UPDATE` / `Nonce`）
+                #   成功时就只回这 4 字节 ✓。
+                #   ★ 口径与**固件同一份** ✓：`firmware/Periph/atecc.c:502`
+                #     `atecc_msg_err_pkt_status(…) == 0 && st == ATECC_STATUS_OK` = 成功的状态包 ✓
+                #   （2026-10-11 实测踩到：`HMAC_START` 明明成功，却在这里被当成错误 ✗）
                 st = raw[1]
                 nm = rct.py_atecc_status_name(st) if HAVE_RCT else "?"
+                if st == ATECC_STATUS_OK:
+                    return 0, raw[:4], "状态包：状态 0x00（ok，无数据）"
                 return 2, raw[:4], "4 字节错误包：状态 0x%02X（%s）" % (st, nm)
             if len(raw) < cnt:
                 return 2, raw, "读回 %d 字节 < count %d" % (len(raw), cnt)
@@ -350,6 +366,21 @@ class Se:
             return None, note
         return resp, note
 
+    def read_slot(self, slot, block=0):
+        """读一个 **数据槽** 的 32 B（`Read` 的 data 区 32 B 块：param1 = **0x82**、param2 = **slot<<3 | block<<8** ✓）。
+
+        出处（与文件头常量同源 ✓）：原厂 `calib_read_zone()` ：“If there are 32 bytes to write,
+        then xor the bit into the mode”（⇒ param1 = `ATCA_ZONE_DATA(0x02) | 0x80`）+ `calib_get_addr()`
+        对 `ATCA_ZONE_DATA` 的地址算法（`slot<<3 | block<<8 | offset`）✓。
+
+        ⚠ **不是所有槽都能读** ✗ —— 能不能读由 `SlotConfig` 的 `IsSecret`/`ReadKey` 定
+        （见 `slotcfg_decode()`）⇒ 调用方**先判再读** ✓（别把私钥槽读出来 ✗）。"""
+        pkt = ci.atecc_pkt(OP_READ, ZONE32_DATA, (slot << 3) | (block << 8), self.crc)
+        rc, resp, note = self.cmd(pkt, 1 + 32 + (2 if self.crc else 0))
+        if rc != 0:
+            return None, note
+        return resp[1:33], note
+
     def sha_hmac(self, slot, msg):
         """在器件里算 HMAC-SHA256（密钥在 `slot` 里、**不出芯片** ✓）。
 
@@ -397,6 +428,23 @@ class Se:
 def lock_state(cfg):
     """配置区字节 86/87 = LockValue / LockConfig（`0x55` = 未锁、`0x00` = 已锁 ✓，§8.4）。"""
     return cfg[86], cfg[87]
+
+
+def slotcfg_decode(cfg, slot):
+    """解 `SlotConfig[slot]` 的位段；越界返回 None。
+
+    **位段口径已在仓内核对过** ✓（不是猜的）：`SlotConfig` 从 **byte 20** 起、每槽 **2 B**、小端；
+    位段 = `ReadKey(0-3) NoMac(4) LimitedUse(5) EncryptRead(6) **IsSecret(7)**
+    WriteKey(8-11) **WriteConfig(12-15)**` ✓ —— 对账：出厂这颗 slot 4 = `8F 8F`(LE 0x8F8F)
+    ⇒ `WriteConfig = 8` ✓，与原厂结构体解出来的值一致（§8.14 + `HMAC_SLOT_BYTE` 那段注释）✓。
+    """
+    if not 0 <= slot <= 15:
+        return None
+    off = 20 + 2 * slot
+    w = cfg[off] | (cfg[off + 1] << 8)
+    return {"word": w, "off": off, "ReadKey": w & 0xF, "NoMac": (w >> 4) & 1,
+            "LimitedUse": (w >> 5) & 1, "EncryptRead": (w >> 6) & 1, "IsSecret": (w >> 7) & 1,
+            "WriteKey": (w >> 8) & 0xF, "WriteConfig": (w >> 12) & 0xF}
 
 
 def verify_sig(pub64, digest32, sig64):
@@ -711,8 +759,75 @@ def step_hmac_verify(se, args, cfg=None):
     return 0, cfg
 
 
+def step_hmac_readonly(se, args, cfg=None):
+    """★ **只读半证**（2026-10-11 用户选 B）：**不往芯片写任何字节**，只验“HMAC 命令序列”对不对。
+
+    为什么值得单列 ✗：`Se.sha_hmac()` 的三条命令（`SHA HMAC_START` → `UPDATE` → `608 HMAC_END`）
+    是**照原厂源码写的、到现在还没在硬件上跑过** ✗（`hmac-verify` 得先把钥写进槽 ⇒ 只能在新片上跑）。
+    而**已锁的片子**写不了：数据区锁了 ✗、配置区也锁了 ⇒ 连 `WriteConfig` 都改不了 ✗
+    ⇒ 换一条**不需要写**的路：
+
+      ① 挑一个**可读**的槽（默认 slot 8：出厂 `SlotConfig = 0x0000` ⇒ `IsSecret=0`/`ReadKey=0` ✓），
+         把它的 32 B **读出来**当“已知钥” ✓；
+      ② 在**器件里**算 HMAC（钥不出芯片 ✓）；
+      ③ PC 侧用**同一把钥**算 HMAC（标准库 `hmac` ✓）⇒ **逐字节比对** ✓；
+      ④ 两条消息各跑一遍：**23 B**（只走 START+END）与 **100 B**（多走一轮 `HMAC_UPDATE` ✓）。
+
+    过了就证明：命令档 / 包形状 / `param2 = 槽号` / 多块 UPDATE / END 的取法**都对** ✓
+    —— 而这几条恰好是**引原厂源码、未经硬件验证**的部分 ✗ ⇒ 本条正好把它们钉住 ✓。
+
+    ⚠ 只允许读 **`IsSecret = 0` 且 `ReadKey = 0`** 的槽 ✓（私钥槽一律拒 ✗ —— 别把钥读出来 ✗）。
+    ⚠ 判据**不是**“器件回了 32 B” ✗，而是**与软件 HMAC 逐字节相同** ✓。
+    """
+    slot = args.slot
+    if cfg is None:
+        cfg, note = se.read_config()
+        if cfg is None:
+            print("FAIL 读配置失败：%s" % note)
+            return 2, None
+    sc = slotcfg_decode(cfg, slot)
+    if sc is None:
+        print("FAIL slot 越界（%d）" % slot)
+        return 2, cfg
+    print("  slot %d 的 SlotConfig[byte %d..%d] = 0x%04X ⇒ ReadKey=%d IsSecret=%d NoMac=%d "
+          "LimitedUse=%d EncryptRead=%d WriteKey=%d WriteConfig=%d"
+          % (slot, sc["off"], sc["off"] + 1, sc["word"], sc["ReadKey"], sc["IsSecret"],
+             sc["NoMac"], sc["LimitedUse"], sc["EncryptRead"], sc["WriteKey"], sc["WriteConfig"]))
+    if sc["IsSecret"] or sc["ReadKey"] != 0:
+        print("FAIL 这个槽**不允诺明文读**（IsSecret=%d / ReadKey=%d）⇒ 拒 ✗（别把私钥读出来）"
+              % (sc["IsSecret"], sc["ReadKey"]))
+        print("     ⇒ 换一个 `IsSecret=0 且 ReadKey=0` 的槽（出厂那颗上 slot 8..14 都是 ✓）")
+        return 2, cfg
+    key, note = se.read_slot(slot)
+    if key is None:
+        print("FAIL 读 slot %d 失败：%s" % (slot, note))
+        return 2, cfg
+    print("  槽内 32 B 已读出（%s）—— 指纹 %s…（**不打印钥本身 ✗**）"
+          % (note, hashlib.sha256(key).hexdigest()[:8]))
+    for name, msg in (("23 B（只走 START+END）", SELFTEST_MSG),
+                      ("100 B（多走一轮 HMAC_UPDATE）", HMAC_RO_MSG2)):
+        got, note = se.sha_hmac(slot, msg)
+        if got is None:
+            print("FAIL 器件内 HMAC 失败（%s）：%s" % (name, note))
+            return 2, cfg
+        want = hmac.new(key, msg, hashlib.sha256).digest()
+        if got != want:
+            print("FAIL %s：器件 %s" % (name, hexs(got)))
+            print("                   软件 %s" % hexs(want))
+            return 2, cfg
+        print("PASS %s：器件内 HMAC = 软件 HMAC ✓（%s…）" % (name, hexs(got[:8])))
+    print("⇒ **只读半证通过** ✓：HMAC 命令序列（START / UPDATE / END）在这台台上**可用** ✓"
+          "（本步**一个字节也没写进芯片** ✓）")
+    return 0, cfg
+
+
 STEPS = ("read", "config-hmac", "write-hmac", "hmac-verify",
          "lock-config", "genkey", "lock-data", "verify")
+
+
+# ★ `hmac-readonly` **故意不放进 `STEPS`** ✗ —— 它是“已锁的片子也能跑”的**只读**验证，
+#   不属于产线顺序（`all` 里插它会改变 `all` 的行为 ✗）。用法单独给 ✓。
+EXTRA_STEPS = ("hmac-readonly",)
 
 # ---- HMAC 槽的字节位置（★ 不是猜的：由原厂结构体的字段顺序**推**、并与它自己的解码结果对账 ✓）----
 #   `Atecc608Config` 字段顺序 ⇒ SlotConfig 从 **byte 20** 开始、每槽占 **2 B**、小端：
@@ -824,8 +939,8 @@ def selftest():
 
 def main():
     ap = argparse.ArgumentParser(description="ATECC608B 产线流程（读配置→锁Config→GenKey→锁Data→复验）")
-    ap.add_argument("step", nargs="?", choices=list(STEPS) + ["all"],
-                    help="要跑哪一步；只跑离线自检时省略它 ✓")
+    ap.add_argument("step", nargs="?", choices=list(STEPS) + list(EXTRA_STEPS) + ["all"],
+                    help="要跑哪一步；只跑离线自检时省略它 ✓（`hmac-readonly` = 只读半证，已锁的片也能跑 ✓）")
     ap.add_argument("--selftest", action="store_true", help="离线自检组包/CRC（不碰硬件）")
     ap.add_argument("--yes", action="store_true", help="不可逆步骤（lock-config / lock-data / genkey / all）必须显式给")
     ap.add_argument("--index", type=int, default=0, help="CH347 的 iIndex（缺省 0）")
@@ -834,6 +949,8 @@ def main():
     ap.add_argument("--no-crc", action="store_true", help="命令包不挂 CRC（**默认挂**：实测这颗要挂 ✓）")
     ap.add_argument("--record", help="把结果（公钥/锁状态/时间）**追加**写进这个文件（产线台账 ✓）")
     ap.add_argument("--hmac-key-file", help="32 B 降级 HMAC 钥（hex 文本或原始 32 B；**不入库 ✗**）")
+    ap.add_argument("--slot", type=int, default=HMAC_RO_SLOT,
+                    help="`hmac-readonly` 用哪个槽（缺省 %d：出厂那颗上它是可读的 ✓）" % HMAC_RO_SLOT)
     ap.add_argument("--gen-hmac-key", action="store_true",
                     help="密钥文件不存在时就地生成 32 B 随机并写进它（首次上机用 ✓）")
     args = ap.parse_args()
@@ -906,6 +1023,8 @@ def main():
             rc, cfg = step_write_hmac(se, args, cfg)
         elif args.step == "hmac-verify":
             rc, cfg = step_hmac_verify(se, args, cfg)
+        elif args.step == "hmac-readonly":
+            rc, cfg = step_hmac_readonly(se, args, cfg)
         elif args.step == "lock-config":
             rc = step_lock_config(se, args, cfg)
         elif args.step == "genkey":

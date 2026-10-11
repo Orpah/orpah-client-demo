@@ -1096,6 +1096,46 @@ PASS 反例（摘要翻 1 bit）被拒 ✓ ⇒ 上面那条是真验签 ✓
 2. **没有软件复位手段** ⇒ 遇到"重卡死"只能**拔插 USB**（`i2c_usable()` 重设速度 ✗、`reopen()` ✗
    都试过）。
 
+### 8.17 ★★★ 2026-10-11（当夜）：**只读 HMAC 半证**过关 + 它当场抓出一个真 bug（`count=4` 的状态包被当成错误 ✗）
+
+**背景**：`Se.sha_hmac()` 的三条命令（`SHA HMAC_START` → `HMAC_UPDATE` → `608 HMAC_END`）是
+**照原厂源码（`calib_sha_hmac_{init,update,finish}`）写的、此前从未在硬件上跑过** ✗ ——
+`hmac-verify` 得先把钥写进槽 4 ⇒ 只能在**新片**上跑；而**已锁的片子**写不了
+（数据区锁了 ✗、配置区也锁了 ⇒ 连 `WriteConfig` 都改不了 ✗）。
+
+**做法（用户 2026-10-11 选定 B）= `se_provision.py hmac-readonly`（★ 只读，一个字节也不写 ✓）**：
+① 挑一个**可读**的槽（默认 slot 8：出厂 `SlotConfig = 0x0000` ⇒ `IsSecret=0`、`ReadKey=0` ✓）
+⇒ 把它的 32 B **读出来**当"已知钥"；② 在**器件里**算 HMAC（钥不出芯片 ✓）；
+③ PC 侧用**同一把钥**算 HMAC（标准库 `hmac` ✓）⇒ **逐字节比对** ✓；④ 两条消息各跑一遍。
+
+**实测（2026-10-11 当夜，`PASS：step=hmac-readonly`）**：
+
+| 消息 | 走的路径 | 结果 |
+|---|---|---|
+| `SELFTEST_MSG`（23 B） | `HMAC_START` → `HMAC_END`（无 UPDATE） | 器件内 HMAC = 软件 HMAC ✓（`07 F3 EC E5 42 6C 77 D5…`）|
+| `bytes(range(100))`（100 B） | `START` → `UPDATE`（1×64 B）→ `END`（36 B 尾巴） | 器件内 HMAC = 软件 HMAC ✓（`6F 0F B3 74 BD DE 7D 22…`）|
+
+⇒ **HMAC 命令序列（含"多块 UPDATE"那条路）在这一台上可用** ✓ —— 那几条"引原厂源码、未经硬件
+验证"的命令档，现在被硬件钉住了 ✓。（slot 8 那把钥的指纹 `af961376…`；**钥本身不记录** ✗。）
+
+★★ **它当场抓出一个真 bug**（这正是"没上机过的路径必须先验"的理由 ✓）：
+第一次跑时 `HMAC_START` **明明成功**，工具却报
+`FAIL … 4 字节错误包：状态 0x00（ok）` ✗。根因在 `Se.cmd()`：
+**它把 `count == 4` 的响应一律当"4 字节错误包"** ✗ —— 而 `count=4` 也可能是
+**"命令成功、无数据"的合法状态包** ✓（`Write` / `Lock` / `SHA HMAC_START` / `HMAC_UPDATE` /
+`Nonce` 成功时**就只回这 4 字节** ✓）。
+
+- **判据本来就是现成的**：`firmware/Periph/atecc.c:502`
+  `atecc_msg_err_pkt_status(…) == 0 && st == ATECC_STATUS_OK` = **成功的状态包** ✓
+  —— **固件侧口径一直是对的** ✓，是**Python 侧漏了** ✗ ⇒ 已按**同一份口径**改成
+  `count==4 且 状态 0x00 ⇒ rc=0` ✓（`calib_command.h` 的 `CMD_STATUS_OK 0x00` ✓）。
+- ⚠ **这个 bug 的形状很危险** ✗：它会让 `config-hmac` / `write-hmac` 在**成功**时报 FAIL ✗
+  ⇒ 人会以为"没写进去"而**重写**（`Write` 重发无害 ✓）或**停下不知所以** ✗；
+  而这两个步骤恰好是**还没上过机**的那两条 ⇒ 早一步抓出来 ✓。
+
+**未做（如实）**：slot 4 的"写入 + 复验"整条（`config-hmac` / `write-hmac` / `hmac-verify`）仍要
+**一颗新片**才能跑 ✗（7 颗新片还没配 ✓）。
+
 ## 9. 未做 / 边界（本轮，如实）
 
 - **§6 那张"上机判据"表**：2026-10-10/11 已填 **1/2/2b/3/4 五条** ✓（第 5 条 `idsend` 那轮没跑 ⇒ 仍空）；
