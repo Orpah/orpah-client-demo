@@ -136,14 +136,27 @@ ATECC_STATUS_WAKEUP = 0x11
 #   ⇒ 器件只回了一个状态包 ⇒ 它**没有执行**本命令 ⇒ **重发本命令是安全的** ✓，
 #     且安全性由判据自证：结果必须与软件 HMAC 逐字节相同 ✓（若被重复喂过一段，摘要必不同 ✗）。
 ATECC_STATUS_PARSE = 0x03
-# ★★ SHA/HMAC 序列里**每两条命令之间**的间隔（毫秒）—— **出处 = 2026-10-11 实测** ✓：
-#   · 不加间隔：长度扫描 19 个里 **9 个失败** ✗（且与上一次成功/失败**严格交替** ✓）；
-#   · 命令之间插 50 ms：长度 64/100/**167** B 三种 × 9 条命令 ⇒ **全部 OK** ✓；
-#   · 失败时的**请求/响应原始字节完全规范** ✓ ⇒ 不是包写错，而是“器件还在收尾” ✗。
-#   ⚠ 50 ms 只在**轻负载**下够用 ✗：实测（2026-10-11）“只读半证”里前面刚跑完一轮 23 B 的 END、
-#     紧接着的 **100 B 第一块 UPDATE 连续被拒 3 次** ✗ ⇒ 已提到 **150 ms** ✓（与 `WAIT_MS_CRYPTO` 同量级 ✓）。
-#   ★ 而且它只是第一道缓冲 ⇒ 真正兜底的是 `ATECC_STATUS_PARSE` 分支里的“重发前先等待” ✓。
-HMAC_STEP_GAP_MS = 150
+# ★★★ SHA/HMAC 序列里**每两条命令之间**的额外间隔 —— **必须是 0** ✗（不要人为加）
+#   ★★ 真因（2026-10-11 深夜**量出来的** ✓）：**器件一旦在 SHA 序列中途睡下去，SHA 上下文就丢了** ✗
+#   ⇒ 后面每条命令都回 `0x03`，而且**重发那一条永远救不回来** ✗（上下文已经没了 ⇒ 得从
+#   `START` 重来 ✓）。所以“多等一会儿”在这里是**反向操作** ✗：
+#     | 命令间等待 | 结果 |
+#     |---|---|
+#     | **800 ms** | ✗✗ 连 23 B（只两条命令）也挂 —— 5 个块更不用说 |
+#     | 150 ms（旧值）| ✗ 时好时坏：250 B 有时挂第 1 条、有时挂第 2 条、有时挂 END |
+#     | **0 ms** | ✓ 364 B（5 条 UPDATE）2/3、加“整条重来”后 **6/6** ✓ |
+#   ★ 历史误判（**作废** ✗）：旧注释说“无间隔会 9/19 失败（严格交替）⇒ 加 50/150 ms” —— 那次是
+#     在 `HMAC_UPDATE` 的 `param2` 还写错（0）的前提下量的 ✗（见 §8.27）；交替现象其实是
+#     “上一条还在算 ⇒ 本杀回 0x03；上一条已经错完 ⇒ 本杀反而通” ✓。
+#   ⚠ 但**也不能完全不睡**：实测把 `cmd()` 的唤醒令牌去掉后**连 100 B 都挂** ✗ ⇒ 唤醒令牌
+#     必须每轮发 ✓（器件在命令间隙会睡 ⇒ 不唤醒就收不到响应 ✓）。
+HMAC_STEP_GAP_MS = 0
+# ★★ `SHA/HMAC` 三条命令的**就绪等待**（毫秒）—— 与 `WAIT_MS_CRYPTO` 不同 ✗：
+#   SHA 一条只算 64 B，实测 ~10 ms 就完 ✓；而 `Sign` 要跑 ~1 s（见 `SIGN_SETTLE_MS` ✓）。
+#   为什么不能沿用 150 ms ✗：等待本身就是**给器件睡下去的窗口**（见上一条）✓。
+WAIT_MS_SHA = 30
+# ★★ HMAC **整条重来**的次数上限（失败就从 `START` 重算，見 `Se.sha_hmac()` 的说明 ✓）。
+HMAC_RETRIES = 4
 # ★ 收到 `ATECC_STATUS_PARSE`（器件还在收尾）后，**重发本命令之前**要等的毫秒数（第 k 次重发
 #   等 `WAIT_MS_PARSE_RETRY × (k+1)` ⇒ 递增退避 ✓）。
 #   实测教训：不等就重发 ⇒ 150 ms 也救不回来，**连拒 3 次** ✗（它本质是“等”而不是“重”✓）；
@@ -477,17 +490,41 @@ class Se:
             return None, note
         return resp[1:33], note
 
-    def sha_hmac(self, slot, msg):
+    def sha_hmac(self, slot, msg, tries=None):
         """在器件里算 HMAC-SHA256（密钥在 `slot` 里、**不出芯片** ✓）。
+
+        ★★ 外面这层是“**整条重来**” ✗（2026-10-11 深夜实测 ✓）：
+          器件一旦在 SHA 序列**中途睡下去**，SHA 上下文就没了 ⇒ 后面每条命令都回 `0x03` ✗，
+          而且**重发那一条永远救不回来**（上下文已经没了 ⇒ 必须从 `START` 重来 ✓）。
+          实测：364 B（5 条 UPDATE）连跑 3 次 ⇒ **2/3** 过 ✗；加“整条重来 ≤ `HMAC_RETRIES`” ⇒ **6/6** ✓
+          （364×3 + 250 + 100 + 23 B ✓）。
+        ★ 重来**语义安全** ✓：HMAC 除“输出寄存器”外**不改器件任何东西**（不写槽、不改配置 ✓）
+          ⇒ 重算一遍不会留下副作用 ✓（不像 `GenKey(创建)` / `Write` 那种有状态命令 ✗）。
+        ★ 判据仍在**调用方**：必须与软件 HMAC **逐字节相同** ✓（不是“它这次没报错”✓）。
+        """
+        n = HMAC_RETRIES if tries is None else tries
+        note = ""
+        for k in range(n):
+            got, note = self._sha_hmac_once(slot, msg)
+            if got is not None:
+                if k and self.verbose:
+                    print("      · HMAC 第 %d 次“整条重来”成功 ✓（上次失败：%s）" % (k + 1, note))
+                return got, note
+            if self.verbose and k + 1 < n:
+                print("      · HMAC 第 %d 次失败（%s）⇒ **从 START 整条重来** ✓" % (k + 1, note))
+        return None, note
+
+    def _sha_hmac_once(self, slot, msg):
+        """跑**一遍** HMAC 序列（不重试）—— 见 `sha_hmac()` 的说明 ✓。
 
         三条命令（顺序/模式照原厂 `calib_sha_hmac_{init,update,finish}()` ✓）：
           `SHA(HMAC_START, param2=slot)` → 若干个 `SHA(HMAC_UPDATE, 64 B)` →
           `SHA(608_HMAC_END | TEMPKEY, 余下<64 B)` ⇒ 响应 32 B 摘要 ✓。
-        ★ 这个函数的**判据在调用方**：算出来的必须与软件 HMAC 逐字节相同 ✓（不靠“长得对”✓）。"""
-        # ★ 每条命令之间留间隔（HMAC_STEP_GAP_MS，出处见该常量处）= “器件还在收尾”那个窗口 ✗
+        """
+        # ★ 间隔 = 0（见 HMAC_STEP_GAP_MS 处：多等 ⇒ 器件睡 ⇒ 上下文丢 ✗）
         self._settle(HMAC_STEP_GAP_MS)
         pkt = ci.atecc_pkt(OP_SHA, SHA_MODE_HMAC_START, slot, self.crc)
-        rc, resp, note = self.cmd(pkt, 4, wait_ms=WAIT_MS_CRYPTO)
+        rc, resp, note = self.cmd(pkt, 4, wait_ms=WAIT_MS_SHA)
         if rc != 0:
             return None, "HMAC_START：" + note
         # ★★ 尾块的取法（2026-10-11 实测 ✗）：**尾块不能是空的**
@@ -509,7 +546,7 @@ class Se:
             pkt = ci.atecc_pkt(OP_SHA, SHA_MODE_HMAC_UPDATE, SHA_BLOCK, self.crc,
                                extra=bytes(msg[off:off + SHA_BLOCK]))
             # ★ UPDATE **不自动重发** ✗：重发会把同一段数据再喂一遍 ⇒ 摘要就错了 ✗✗
-            rc, resp, note = self.cmd(pkt, 4, wait_ms=WAIT_MS_CRYPTO, retry_write=False)
+            rc, resp, note = self.cmd(pkt, 4, wait_ms=WAIT_MS_SHA, retry_write=False)
             if rc != 0:
                 return None, "HMAC_UPDATE@%d：%s" % (off, note)
             off += SHA_BLOCK
@@ -518,7 +555,7 @@ class Se:
                            self.crc, extra=tail)
         # ★ END 同样**不自动重发** ✗（它会消耗/结束那段上下文 ⇒ 重发语义不明）
         rc, resp, note = self.cmd(pkt, 1 + 32 + (2 if self.crc else 0),
-                                  wait_ms=WAIT_MS_CRYPTO, retry_write=False)
+                                  wait_ms=WAIT_MS_SHA, retry_write=False)
         if rc != 0:
             return None, "HMAC_END：" + note
         return resp[1:33], note
