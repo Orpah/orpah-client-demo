@@ -137,16 +137,48 @@ int idc_tick(uint32_t now_ms)
 /* ------------------------------------------------------------------ */
 /* 初始化                                                              */
 /* ------------------------------------------------------------------ */
+/* ★ d 步（2026-10-11 上机）：SE 可用吗 —— 记住它。
+ *   为什么要记：nonce/签名两个 provider 都是**注入**进 `idb_t` 的 ⇒
+ *   “换 SN 重建流水线”会把它们丢掉 ✗ ⇒ 重建后必须按这个标志**重新装上** ✓。*/
+static int s_se_ok;
+
+/* 按当前 SE 状态把两个 provider 装回去（单一源：初始化与“换 SN”都调它 ✓）*/
+static void _install_providers(void)
+{
+    if (!s_se_ok) {
+        return;
+    }
+    idb_set_nonce_fn(&s_b, atecc_nonce_hex, 0);
+    /* ★★ 按算法分流：ES256 ⇒ SE 的 `Sign(0x41)`（slot 0）/ HS256 ⇒ SE 内 `SHA` HMAC（slot 4）
+     * ⇒ `idb_t.ec` / `idb_t.hmac` 那两份**演示材料都不再参与**（两把真钥都在芯片里 ✓）*/
+    idb_set_sign_fn(&s_b, atecc_sign_any, 0);
+}
+
+/* 用 `sn` 重建流水线（并把 provider 装回去 ✓）。返回 `idb_init` 的 rc。
+ * ★ 为什么需要它：固件缺省用的 SN 得是**桌上那颗真片**的，否则帧里的 SN 与
+ *   “库里登记的钥”对不上 ⇒ 上游必然 `signature_invalid` ✗（尺子对不上号 ✓）。
+ *   `idsn <SN>` 就是把这个缺口补上（**不用为每颗芯片重烧固件** ✓）。*/
+static int _reinit_with_sn(const char *sn)
+{
+    int rc = idb_init(&s_b, &s_jc, s_rep, sizeof(s_rep), s_env, sizeof(s_env),
+                      s_frame, sizeof(s_frame), sn, IDC_GEN_DEFAULT,
+                      IDC_FW_VERSION, 0, s_boot_entropy);
+
+    if (rc != 0) {
+        uart_printf(CONSOLE_UART, "[id] init FAILED rc=%d\r\n", rc);
+        return rc;
+    }
+    _install_providers();
+    return 0;
+}
+
 int idc_init(uint32_t boot_entropy)
 {
     int rc;
 
     s_boot_entropy = boot_entropy;
-    rc = idb_init(&s_b, &s_jc, s_rep, sizeof(s_rep), s_env, sizeof(s_env),
-                  s_frame, sizeof(s_frame), IDC_SN_DEFAULT, IDC_GEN_DEFAULT,
-                  IDC_FW_VERSION, 0, boot_entropy);
+    rc = _reinit_with_sn(IDC_SN_DEFAULT);
     if (rc != 0) {
-        uart_printf(CONSOLE_UART, "[id] init FAILED rc=%d\r\n", rc);
         return rc;
     }
     /* 默认 auto（= §8.2 全正常 → L0）；故障注入靠控制台 `idlevel` */
@@ -175,12 +207,8 @@ int idc_init(uint32_t boot_entropy)
         if (se == 0) {
             atecc_stats_t st;
 
-            idb_set_nonce_fn(&s_b, atecc_nonce_hex, 0);
-            /* ★★ d 步（2026-10-11 晚）：注入**按算法分流**的签名器 —— 一个注入点管两种 ✓：
-             *   · ES256 ⇒ SE 的 `Sign(0x41)`（私钥在 slot 0 ✓）
-             *   · HS256（降级路）⇒ SE 内的 `SHA` HMAC（降级钥在 slot 4 ✓）
-             * ⇒ `idb_t.ec` / `idb_t.hmac` 那两份**演示材料都不再参与**（¥ 两把真钥都在芯片里 ✓）。*/
-            idb_set_sign_fn(&s_b, atecc_sign_any, 0);
+            s_se_ok = 1;
+            _install_providers();
             atecc_stats(&st);
             uart_printf(CONSOLE_UART,
                         "[id] nonce <- ATECC608B Random(0x1B) 32B (crc_mode=%s)\r\n",
@@ -297,6 +325,27 @@ int idc_console(const char *cmd, uint32_t now_ms)
     }
     if (str_eq(cmd, "idmodes")) {
         cmd_modes();
+        return 1;
+    }
+    /* ★★ d 步（2026-10-11 上机）：`idsn <SN>` —— 把流水线的 SN 换成**桌上那颗真片**的。
+     *   为什么必须能换：入库的每一颗 SE 各有自己的 SN，而帧里的 SN 是上游查钥的**钥匙** ⇒
+     *   SN 不对 ⇒ 库里的真钥用不上 ⇒ 只能拿演示钥去验 ⇒ 必然 `signature_invalid` ✗。
+     *   有了它，换一颗芯片只要敲一行（**不用重烧** ✓）。
+     *   ⚠ 重建会把计数器（built/sent）与 last_* 一起清零 —— 这是重建的正常代价 ✓。*/
+    if (str_prefix(cmd, "idsn")) {
+        const char *arg = cmd + 4;
+
+        while (*arg == ' ') { arg++; }
+        if (*arg == '\0') {
+            uart_printf(CONSOLE_UART, "\r\n[id] sn=%s（用法：idsn <SN>）\r\n", s_b.sn);
+            return 1;
+        }
+        if (_reinit_with_sn(arg) != 0) {
+            uart_printf(CONSOLE_UART, "[id] idsn 失败（SN 非法？参看上游 sn.h 的规则）\r\n");
+            return 1;
+        }
+        uart_printf(CONSOLE_UART, "\r\n[id] sn <- %s（流水线已按新 SN 重建；两个 provider 已重装 ✓）\r\n",
+                    s_b.sn);
         return 1;
     }
     if (str_eq(cmd, "se")) {

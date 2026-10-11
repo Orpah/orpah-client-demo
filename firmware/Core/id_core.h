@@ -25,7 +25,13 @@
 
 #include "id_build.h"      /* 缓冲推荐值 IDB_REC_* 的单一源 */
 
-#define IDC_SN_DEFAULT   "CN-WH01-9AF3C1D2"    /* 与上游 demo/向量同一个 SN（CC 只用 CN）*/
+/* ★★ 2026-10-11 上机改成**桌上那颗真片**（§8.23 第 4 颗，公钥已入库 ✓）：
+ *   固件原来用演示 SN ⇒ 帧里的 SN 与"库里登记的钥"对不上 ⇒ 上游 `verify_report`
+ *   必然 `signature_invalid` ✗（那不是签错了，是**尺子对不上号** ✓）。
+ *   `CN-T1AN1V-X3HANM2E20-H` = `tools/se_provision.py all` 跑过、公钥已登记进
+ *   `orpah-over-halow/orpah.db` 的那一颗（用库里的公钥逐把验 `se` 的签名认出来的 ✓）。
+ *   ★ 换一颗时：控制台敲 `idsn <SN>`（**不用重烧** ✓）。*/
+#define IDC_SN_DEFAULT   "CN-T1AN1V-X3HANM2E20-H"
 #define IDC_GEN_DEFAULT  1                     /* 演示"代次"；真机一代终身（§6.3.1）*/
 #define IDC_FW_VERSION   "0.1.0-c4g1"          /* 写进已签 payload.firmware */
 
