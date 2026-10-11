@@ -880,6 +880,13 @@ int atecc_selftest(void)
                 (s_st.crc_mode == 1u) ? "crc(响应 35 B)" : "unknown",
                 (s_st.resp_waddr == 1u) ? "0x00" :
                 (s_st.resp_waddr == 2u) ? "0x03" : "unknown");
+    /* ★★ d 步：两种签名各自的计数**分开报** —— 合成一个数就看不出“HS256 到底有没有真走 SE” ✗
+     *  （现象区分：HS256 ok=0 且 fail>0 ⇒ 器件没算成，先看上面的 0x03/降级日志 ✓；
+     *     两数都 0 ⇒ 本次开机还没签过（`idhex`/`idsend` 跑一次就有 ✓）。*/
+    uart_printf(CONSOLE_UART, "[se] ES256 Sign slot %u: ok=%u fail=%u\r\n",
+                (unsigned)ATECC_SIGN_SLOT, (unsigned)s_st.sign_ok, (unsigned)s_st.sign_fail);
+    uart_printf(CONSOLE_UART, "[se] HS256 SHA HMAC slot %u: ok=%u fail=%u\r\n",
+                (unsigned)ATECC_HMAC_SLOT, (unsigned)s_st.hmac_ok, (unsigned)s_st.hmac_fail);
     if (rc != 0) {
         uart_printf(CONSOLE_UART, "[se] Random FAILED rc=%d last_resp_len=%u raw=",
                     rc, (unsigned)s_st.last_resp_len);

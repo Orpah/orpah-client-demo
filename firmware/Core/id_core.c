@@ -231,6 +231,18 @@ static void cmd_status(void)
                               " fell_back=%u\r\n",
                 (unsigned)s_b.built, (unsigned)s_sent, (unsigned)s_held,
                 (unsigned)s_build_fail, (unsigned)s_tx_fail, (unsigned)s_b.fell_back);
+    /* ★★ d 步：两种签名各自进了 SE 几次 —— **分开报** ✗（合成一个数就分不出
+     *   “ES256 在芯片里签的”和“HS256 在芯片里算的” ✓）。
+     *   上机时一眼就能确认 `idlevel l1` 后 HS256 是否真走 SE（ok 应 +1 ✓）。*/
+    {
+        atecc_stats_t st;
+
+        atecc_stats(&st);
+        uart_printf(CONSOLE_UART,
+                    "[id] se_hits: ES256 slot %u ok=%u fail=%u / HS256 slot %u ok=%u fail=%u\r\n",
+                    (unsigned)ATECC_SIGN_SLOT, (unsigned)st.sign_ok, (unsigned)st.sign_fail,
+                    (unsigned)ATECC_HMAC_SLOT, (unsigned)st.hmac_ok, (unsigned)st.hmac_fail);
+    }
     /* ⚠ 如实：软熵后端只保证"同一 boot 内不重复"。**跨 boot 若上电熵撞了，整段 nonce 会重**
      *   ⇒ 服务端按重放丢弃（= 漏报）。把这个值打出来，好让人一眼看出撞了没。*/
     uart_printf(CONSOLE_UART, "[id] boot_entropy=0x%08x (soft; 跨 boot 撞了整段 nonce 会重)\r\n",
