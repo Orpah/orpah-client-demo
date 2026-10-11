@@ -279,10 +279,13 @@ def sn_cases(o):
     """SN 样本集：合法/非法/带两种校验位/篡改校验位/大小写/超长 …（期望值全由 Python 现算）。"""
     golden = "WH01-9AF3C1D2"
     luhn = o.compute_check(golden, "luhn32")
+    damm = o.compute_check(golden, "damm32")     # 协议 v1.21：1 位校验的唯一算法
     mod = o.compute_check(golden, "mod97")
     cases = [
         f"CN-{golden}",                 # 无校验位
-        f"CN-{golden}-{luhn}",          # 1 位 → Luhn32
+        f"CN-{golden}-{damm}",          # 1 位 → **Damm32**（协议 v1.21）
+        f"CN-{golden}-{luhn}",          # 1 位但值是 Luhn32 的 → **必须不通过**（反向锁：
+                                        #   防止 1 位分支又回到 Luhn32）
         f"CN-{golden}-{mod}",           # 2 位 → Mod97
         f"CN-{golden}-Z",               # 篡改校验位
         f"cn-{golden.lower()}",         # 小写 → bad-format（正则只收大写）
@@ -296,7 +299,7 @@ def sn_cases(o):
         "CN-WH01-9AF3C1O2",             # 含 O
         "C1-WH01-9AF3C1D2",             # CC 含数字
         "WH01-9AF3C1D2",                # 缺 CC
-        f"CN-{golden}-I",               # 1 位校验段含 I（Crockford 排除）→ Luhn32 判不通过
+        f"CN-{golden}-I",               # 1 位校验段含 I（Crockford 排除）→ 判不通过
         "CN-WH01-9AF3C1D2-" + "Z" * 33, # 超长
         "CN-ABCDEFG-9AF3C1D2",          # ORG 7 位（超 6）
         "",                             # 空串 → "empty"

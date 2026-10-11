@@ -4,6 +4,7 @@
  * 任何"看起来更顺手"的改写都会破坏与 Python 的零偏差 —— 别改，先跑 run_cross_test.py。
  */
 #include "sn.h"
+#include <stdint.h>   /* Damm32 的 GF(2^5) 域运算用 uint8_t；freestanding 编译器自带，不引入库 */
 
 static size_t sn_len(const char *s)
 {
@@ -241,6 +242,69 @@ int sn_compute_check_luhn32(const char *org_unique, char out[2])
     return 0;
 }
 
+/* ---- Damm32（协议 §3.2；v1.21 起 **1 位校验的唯一算法**）----
+ *
+ * 拟群 T[x][y] = 2·(x⊕y)，GF(2^5)，不可约多项式 p(t)=t^5+t+1（系数 0x23）。
+ * 与 Python `damm32.py`（`damm32_check` / `damm32_verify`）同口径（跳 '-'、非法字符⇒不通过）
+ * ⇒ 跨语言一致由 `run_cross_test.py` 保证（快照 `test_vectors_snparse.txt`）。
+ *
+ * ★ 为什么不是 Luhn32：协议 v1.21 定稿 —— CHECK **长度区分不了**两种 1 位算法
+ *   （实现只能猜或“都试”，后者把强度从 1/32 降到 2/32）；且 Luhn 只检单字错、
+ *   不检相邻换位，而 Damm 两者都检。本文件的 Luhn32 代码**保留但不再用于 SN 校验位**
+ *   ——它仍是对照/历史算法（`test_vectors_sn.txt` 还在用它做双算法对照）。
+ */
+static uint8_t sn_gf_mul(uint8_t a, uint8_t b)
+{
+    uint8_t r = 0;
+    int i;
+
+    for (i = 0; i < 5; i++) {
+        if (b & 1) r ^= a;
+        b >>= 1;
+        a <<= 1;
+        if (a & 0x20) a ^= 0x23;          /* p(t) = t^5 + t + 1 */
+    }
+    return r & 0x1F;
+}
+
+/* 拟群运算：x ⊙ y = 2 · (x ⊕ y)；2 = 域元素 t */
+static uint8_t sn_quasigroup(uint8_t x, uint8_t y)
+{
+    return sn_gf_mul(2, x ^ y);
+}
+
+int sn_compute_check_damm32(const char *org_unique, char out[2])
+{
+    int digits[SN_MAX_LEN + 2];
+    int nd, i;
+    uint8_t st = 0;
+
+    if (out == NULL) return -1;
+    nd = sn_collect_digits(org_unique, digits,
+                           (int)(sizeof(digits) / sizeof(digits[0])));
+    if (nd < 0) return -1;                /* Python: sn_digits 抛 ValueError */
+    for (i = 0; i < nd; i++)
+        st = sn_quasigroup(st, (uint8_t)digits[i]);
+    /* 本构造下 2·(st⊕c)=0 ⇔ st⊕c=0（2 可逆）⇔ c = st ⇒ 终态就是校验字符 */
+    out[0] = sn_crockford_char((int)st);  /* Python: CROCKFORD[check_digit(...)] */
+    out[1] = '\0';
+    return 0;
+}
+
+int sn_verify_check_damm32(const char *org_unique_check)
+{
+    int digits[SN_MAX_LEN + 2];
+    int nd, i;
+    uint8_t st = 0;
+
+    nd = sn_collect_digits(org_unique_check, digits,
+                           (int)(sizeof(digits) / sizeof(digits[0])));
+    if (nd < 0) return 0;                 /* Python: 非法字符 → False */
+    for (i = 0; i < nd; i++)
+        st = sn_quasigroup(st, (uint8_t)digits[i]);
+    return (st == 0) ? 1 : 0;             /* Python validate(): 终态为 0 才通过 */
+}
+
 int sn_compute_check_mod97(const char *org_unique, char out[3])
 {
     char buf[SN_ORG_MAX + SN_UNIQ_MAX + 4];
@@ -301,6 +365,6 @@ int sn_verify_check(const char *sn)
     for (size_t i = 0; p.check[i] != '\0'; i++) body[n++] = p.check[i];
     body[n] = '\0';
 
-    if (clen == 1) return sn_verify_check_luhn32(body);
+    if (clen == 1) return sn_verify_check_damm32(body);   /* 协议 v1.21：1 位 = Damm32 */
     return sn_verify_check_mod97(body);
 }

@@ -125,6 +125,11 @@ static int cmd_selfcheck(void)
         fails++;
     }
     total++;
+    if (sn_compute_check_damm32(golden, out) != 0 || strcmp(out, "B") != 0) {
+        printf("FAIL golden damm32: expect B got %s\n", out);
+        fails++;
+    }
+    total++;
     if (sn_compute_check_mod97(golden, out) != 0 || strcmp(out, "21") != 0) {
         printf("FAIL golden mod97: expect 21 got %s\n", out);
         fails++;
@@ -140,18 +145,18 @@ static int cmd_selfcheck(void)
         fails++;
     }
     total++;
-    if (sn_verify_check("CN-WH01-9AF3C1D2-E") != 1) {
-        printf("FAIL verify_check(CN-WH01-9AF3C1D2-E) 应为 1（1 位 → Luhn32）\n");
+    if (sn_verify_check("CN-WH01-9AF3C1D2-B") != 1) {
+        printf("FAIL verify_check(CN-WH01-9AF3C1D2-B) 应为 1（黄金样本，1 位 → Damm32）\n");
+        fails++;
+    }
+    total++;
+    if (sn_verify_check("CN-WH01-9AF3C1D2-E") != 0) {
+        printf("FAIL verify_check(CN-WH01-9AF3C1D2-E) 应为 0（E 是 Luhn32 的值，协议 v1.21 起不再用于 SN）\n");
         fails++;
     }
     total++;
     if (sn_verify_check("CN-WH01-9AF3C1D2-21") != 1) {
         printf("FAIL verify_check(CN-WH01-9AF3C1D2-21) 应为 1（2 位 → Mod97）\n");
-        fails++;
-    }
-    total++;
-    if (sn_verify_check("CN-WH01-9AF3C1D2-B") != 0) {
-        printf("FAIL 校验位改成 B（Damm32 的值，不是 Luhn32）后应为 0\n");
         fails++;
     }
     total++;

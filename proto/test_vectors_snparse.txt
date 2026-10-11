@@ -2,7 +2,8 @@
 # 来源（单一源）：Python 参考实现 orpah-over-halow/orpah_id.py 的 sn_ok/sn_err/verify_check
 # 列：SN<TAB>ok<TAB>err<TAB>verify   （err 的 None 记作 "-"）
 CN-WH01-9AF3C1D2	1	-	1
-CN-WH01-9AF3C1D2-E	1	-	1
+CN-WH01-9AF3C1D2-B	1	-	1
+CN-WH01-9AF3C1D2-E	1	-	0
 CN-WH01-9AF3C1D2-21	1	-	1
 CN-WH01-9AF3C1D2-Z	1	-	0
 cn-wh01-9af3c1d2	0	bad-format	0

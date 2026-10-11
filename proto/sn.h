@@ -2,8 +2,10 @@
  *
  * 单一源：逐字移植自上游参考实现 `orpah-over-halow/orpah_id.py`
  *   · Crockford 字母表 / SN_MAX_LEN / SN 正则 / parse_sn / sn_ok / sn_err
- *   · compute_check_luhn32 / verify_check_luhn32 / compute_check_mod97 / verify_check_mod97
- *   · verify_check（整串 SN 按**校验位长度**分流：0 位=通过、1 位=Luhn32、2 位=Mod97）
+ *   · compute_check_damm32 / verify_check_damm32   （协议 §3.2：**1 位校验的唯一算法**）
+ *   · compute_check_luhn32 / verify_check_luhn32   （**不再用于 SN 校验位**，仅历史/对照）
+ *   · compute_check_mod97 / verify_check_mod97     （2 位校验）
+ *   · verify_check（整串 SN 按**校验位长度**分流：0 位=通过、1 位=**Damm32**、2 位=Mod97）
  *
  * ⚠ 本仓**不定义**协议/校验算法：与 Python 有任何出入都以 Python 为准（跑 run_cross_test.py）。
  * ⚠ 校验位只算 ORG-UNIQUE（**不含 CC**）—— 这是规范 §2 的硬规则。
@@ -40,10 +42,12 @@ const char  *sn_err(const char *sn);    /* "empty" / "too-long" / "bad-format" /
 int  sn_parse(const char *sn, sn_parts_t *out);
 
 /* 校验位：成功返回 0；输入含非法 Crockford 字符返回 -1 */
+int  sn_compute_check_damm32(const char *org_unique, char out[2]);
 int  sn_compute_check_luhn32(const char *org_unique, char out[2]);
 int  sn_compute_check_mod97(const char *org_unique, char out[3]);
 
 /* 校验：1 = 通过，0 = 不通过（非法字符也算不通过，对应 Python 的 False） */
+int  sn_verify_check_damm32(const char *org_unique_check);
 int  sn_verify_check_luhn32(const char *org_unique_check);
 int  sn_verify_check_mod97(const char *org_unique_check);
 
