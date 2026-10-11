@@ -160,17 +160,17 @@ static void print_stats(void)
     hgic_uart_stats_t st;
 
     hgic_uart_stats(&st);
-    uart_printf(CONSOLE_UART, "\r\n[mod] rx_bytes=%u frames=%u (frm2=%u ctrl=%u)\r\n",
+    uart_printf(CONSOLE_UART, "\r\n[stat] rx_bytes=%u frames=%u (frm2=%u ctrl=%u)\r\n",
                 (unsigned)st.rx_bytes, (unsigned)st.rx_frames,
                 (unsigned)st.rx_frm2, (unsigned)st.rx_ctrl);
-    uart_printf(CONSOLE_UART, "[mod] tx_frames=%u ring_drop=%u garbage=%u bad_len=%u overrun=%u\r\n",
+    uart_printf(CONSOLE_UART, "[stat] tx_frames=%u ring_drop=%u garbage=%u bad_len=%u overrun=%u\r\n",
                 (unsigned)st.tx_frames, (unsigned)st.ring_drop,
                 (unsigned)st.garbage, (unsigned)st.bad_length, (unsigned)st.overrun);
-    uart_printf(CONSOLE_UART, "[mod] probe: tx=%u reply=%u\r\n",
+    uart_printf(CONSOLE_UART, "[stat] probe: tx=%u reply=%u\r\n",
                 (unsigned)g_ping_seq, (unsigned)g_ping_ok);
     /* 上机判据（c3-2b 用过，留着很便宜）：`tick` 不动 = 1 ms 时基中断没跑；
      * `loops` 不动 = 主循环卡住；两条都不动 ⇒ 优先怀疑「中断根本没进来」。*/
-    uart_printf(CONSOLE_UART, "[mod] tick=%u loops=%u\r\n",
+    uart_printf(CONSOLE_UART, "[stat] tick=%u loops=%u\r\n",
                 (unsigned)g_tick_ms, (unsigned)g_loops);
 }
 
