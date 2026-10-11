@@ -854,6 +854,27 @@ ATECC_CMD_LEN_NONCE_CRC = ATECC_CMD_LEN_CRC + 32              # 39 = 0x27 ✓
 ATECC_RESP_LEN_SIG_NOCRC = ATECC_RESP_DATA_IDX + ATECC_SIGN_BYTES        # 65
 ATECC_RESP_LEN_SIG_CRC = ATECC_RESP_DATA_IDX + ATECC_SIGN_BYTES + 2      # 67 = 0x43 ✓
 
+# ★★ d 步（2026-10-11 **上机**）：`SHA(0x47)` 三连（HMAC）—— 钥在器件里，**不出芯片** ✓
+#   形状/出处 = `tools/se_provision.py` 那份**已上机验证**的实现（docs/atecc608b-se.md §8.24 ✓）。
+#   ① `SHA(HMAC_START, param2=key slot)` ② `SHA(HMAC_UPDATE, param2=本块字节数) + 64 B`
+#   ③ `SHA(608_HMAC_END|TEMPKEY, param2=尾块字节数) + 尾块` ⇒ 33/35 B（32 B 摘要）
+ATECC_OP_SHA = 0x47
+ATECC_SHA_MODE_HMAC_START = 0x04
+ATECC_SHA_MODE_HMAC_UPDATE = 0x01
+ATECC_SHA_MODE_608_HMAC_END = 0x02
+ATECC_SHA_TARGET_TEMPKEY = 0x00
+ATECC_SHA_BLOCK = 64                    # `SHA_DATA_MAX` ✓
+ATECC_HMAC_SLOT = 4                     # 降级 HMAC 钥的槽（原厂测试夹具同）
+ATECC_SHA_DIGEST_BYTES = 32
+ATECC_CMD_LEN_SHA_DATA_NOCRC = ATECC_CMD_LEN_NOCRC + ATECC_SHA_BLOCK    # 69
+ATECC_CMD_LEN_SHA_DATA_CRC = ATECC_CMD_LEN_CRC + ATECC_SHA_BLOCK        # 71 = 0x47 ✓（用户手册实测）
+ATECC_RESP_LEN_SHA_NOCRC = ATECC_RESP_DATA_IDX + ATECC_SHA_DIGEST_BYTES      # 33
+ATECC_RESP_LEN_SHA_CRC = ATECC_RESP_DATA_IDX + ATECC_SHA_DIGEST_BYTES + 2    # 35
+# ★★ **外部锚点**（2026-10-11 真机**实发**的字节，见 §8.24）：SHA(HMAC_START, slot 4) 带 CRC
+#   = `count=07 | op=47 | p1=04 | param2=0400（小端 = 4） | CRC=ae47` ✓ —— 当前仓里所有
+#     SHA 包都是我们自己算的，所以必须拿这串**实发字节**当外部真值（不自证 ✓）。
+D_SHASTART4_HEX = "0747040400ae47"
+
 
 def _rev8(b):
     """字节按位倒序（把“低位先喂”换成“先倒位、再按高位移出”）"""
@@ -977,6 +998,42 @@ def py_atecc_resp_sign(resp):
     return resp[ATECC_RESP_DATA_IDX:ATECC_RESP_DATA_IDX + ATECC_SIGN_BYTES]
 
 
+def py_atecc_pkt(op, p1=0x00, p2=0x0000, with_crc=False, extra=b""):
+    """通用命令包构造（★ 与 C 侧 `cmd_data()` **同一套规则**，见 `proto/atecc_msg.c`）：
+    `count(1) + op(1) + p1(1) + p2(2, **小端**) + extra + [CRC(2, 小端)]`，count = 包总长 ✓。
+    ★ 2026-10-11：前四个 d 步函数（random/nonce/sign）没改（已验证 ✓ 最小改动 ✓），
+      SHA 三连走这条通用路 ✓ —— 两边都有向量行守着，不会静静漂移 ✓。"""
+    body = bytearray([op & 0xFF, p1 & 0xFF, p2 & 0xFF, (p2 >> 8) & 0xFF]) + bytearray(extra)
+    pkt = bytearray([len(body) + 1 + (2 if with_crc else 0)]) + body
+    if with_crc:
+        c = py_crc16(bytes(pkt))
+        pkt += bytes([c & 0xFF, (c >> 8) & 0xFF])
+    return bytes(pkt)
+
+
+def py_atecc_cmd_sha_start(slot, with_crc):
+    """`SHA(HMAC_START, param2=**key slot**)`（原厂 `calib_sha_hmac_init()` ✓）"""
+    return py_atecc_pkt(ATECC_OP_SHA, ATECC_SHA_MODE_HMAC_START, slot, with_crc)
+
+
+def py_atecc_cmd_sha_update(blk, with_crc):
+    """`SHA(HMAC_UPDATE, param2=**本块字节数**) + 该块`（≤ 64 B ✓）"""
+    return py_atecc_pkt(ATECC_OP_SHA, ATECC_SHA_MODE_HMAC_UPDATE, len(blk), with_crc, blk)
+
+
+def py_atecc_cmd_sha_end(tail, with_crc):
+    """`SHA(608_HMAC_END | TEMPKEY, param2=**尾块字节数**) + 尾块`"""
+    return py_atecc_pkt(ATECC_OP_SHA,
+                        ATECC_SHA_MODE_608_HMAC_END | ATECC_SHA_TARGET_TEMPKEY,
+                        len(tail), with_crc, tail)
+
+
+def py_atecc_resp_sha(resp):
+    """★ d 步：HMAC 摘要响应 → 32 B（bytes）或错误码（int）。
+    ★ 形状与 `resp_random` **完全一样**（33/35 B、count 1 字节、CRC 规则同）⇒ 直接转发。"""
+    return py_atecc_resp_random(resp)
+
+
 def gen_crc16_rows(o):
     rows = []
     cases = [b"", b"\x00", b"\xff", bytes(range(16)), b"123456789",
@@ -1041,6 +1098,34 @@ def gen_atecc_rows(o):
         r = py_atecc_resp_sign(resp)
         out = ("OK:" + r.hex()) if isinstance(r, (bytes, bytearray)) else ("ERR:%d" % r)
         rows.append(("respsig", resp.hex(), "-", "-", out))
+    # ★★ d 步（2026-10-11 上机）：SHA/HMAC 三连。第一条的期望值就是**真机实发字节** ✓
+    #   `D_SHASTART4_HEX` 对不上就在这里当场炸 ✗（生成向量时即拦住，不用等到上机）。
+    st4 = py_atecc_cmd_sha_start(ATECC_HMAC_SLOT, 1)
+    if st4.hex() != D_SHASTART4_HEX:
+        raise AssertionError("SHA(HMAC_START, slot 4) 包与真机实发字节不符：%s ≠ %s"
+                             % (st4.hex(), D_SHASTART4_HEX))
+    rows.append(("shastart", "4", "1", "-", st4.hex()))
+    rows.append(("shastart", "4", "0", "-", py_atecc_cmd_sha_start(4, 0).hex()))
+    blk64 = bytes(range(64))
+    rows.append(("shaupdate", blk64.hex(), "1", "-", py_atecc_cmd_sha_update(blk64, 1).hex()))
+    rows.append(("shaupdate", blk64.hex(), "0", "-", py_atecc_cmd_sha_update(blk64, 0).hex()))
+    for tail in (b"", bytes(range(23)), bytes(range(63))):
+        rows.append(("shaend", tail.hex() if tail else "-", "1", "-",
+                     py_atecc_cmd_sha_end(tail, 1).hex()))
+    dg32 = bytes(range(32))
+    ok33s = bytes([ATECC_RESP_LEN_SHA_NOCRC]) + dg32
+    ok35s = bytearray([ATECC_RESP_LEN_SHA_CRC]) + bytearray(dg32)
+    cs = py_crc16(bytes(ok35s))
+    ok35s += bytes([cs & 0xFF, (cs >> 8) & 0xFF])
+    ok35s = bytes(ok35s)
+    bads = bytearray(ok35s)
+    bads[ATECC_RESP_LEN_SHA_NOCRC] ^= 0x01
+    badcs = bytearray(ok33s)
+    badcs[0] = ATECC_RESP_LEN_SHA_NOCRC + 1
+    for resp in (ok33s, ok35s, bytes(bads), ok33s[:-1], bytes(badcs)):
+        r = py_atecc_resp_sha(resp)
+        out = ("OK:" + r.hex()) if isinstance(r, (bytes, bytearray)) else ("ERR:%d" % r)
+        rows.append(("respsha", resp.hex(), "-", "-", out))
     return rows
 
 

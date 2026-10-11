@@ -1423,6 +1423,55 @@ SN 必须能解析且**默认拒绝库里没有的 SN** ✓（`--allow-new` 才�
 ② **每次跑生成带时间戳的新日志 + LATEST 指针** ✓（“跑没跑成”要能自证 ✗）；
 ③ **先小步量一次、再一次性验证** ✓（别轰炸器件 ✗）。
 
+## 8.25 固件侧：HS256 也接到 SE（2026-10-11 晚，**未上机** ✗）
+
+**目标**：把 PC 侧已经跑通的那条路（§8.24：器件的 HMAC 出 level=1 报文、钥不出芯片 ✓）
+搬进固件 —— `level=1` 时不再用 MCU 里的演示 HMAC 钥，而是**让器件自己算**。
+
+**做了什么（三处）**：
+1. `proto/atecc_msg.{c,h}`：新增 `SHA(0x47)` 三连的**纯函数**包构造
+   （`atecc_msg_sha_start/update/hmac_end` + `atecc_msg_resp_sha`），并把**带数据的包**抽成
+   唯一一份 `cmd_data()`（`Nonce` 也改走它 —— 字节与改前**逐行一致** ✓，由向量行守 ✓）。
+   ★ `ATECC_CMD_LEN_MAX` 随之从 **39 → 71**（UPDATE 满块 = 1+1+1+2+64+2）——
+     这正是 §8.10 那个坑的同源提醒：**“最长包”是个会变的数**，别写在别处 ✗。
+2. `firmware/Periph/atecc.{c,h}`：新增
+   · `atecc_sha_hmac(slot, msg, len, out32)`：按 64 B 分块喂器件，尾块走 `608_HMAC_END`；
+     每条命令之间等 `ATECC_HMAC_STEP_GAP_MS = 150`（**与 PC 侧同源** ✓ 出处见该常量处）；
+     收到 `0x03` ⇒ **等 (k+1)×600 ms 再重发本命令**（安全性依据同 PC 侧：器件没执行 ✓）。
+   · `atecc_sign_any(alg, …)`：**按算法分流**（ES256 ⇒ `atecc_sign_pre()` / HS256 ⇒ `atecc_sha_hmac(slot 4)`）。
+3. `firmware/Core/id_core.c`：注入点换成 `atecc_sign_any` ✓ ⇒ **一个注入点管两种算法** ✓；
+   横幅与控制台分别报 ES256/HS256 的槽号与来源（`sign_src=se` 对两种都成立 ✓）。
+
+**★ 外部锚点（这一轮唯一能“不自证”的东西 ✓）**：`SHA(HMAC_START, slot 4)` 带 CRC 的完整包
+= **`0747040400ae47`** —— 取自 §8.24 那次**真机实发**的字节 ✓（`count=07 | op=47 | p1=04 |
+param2=0400（小端 = 4）| CRC=ae47`）。它现在同时钉在两处：C 侧 `atecc_cli selfcheck` 的第 ⑪ 组 ✓
+与 Python 侧 `gen_atecc_rows()` 的生成期断言 ✓（对不上就当场炸 ✗）。
+
+**验证（PC 侧，全过 ✓）**：
+- `proto/run_cross_test.py`：`test_vectors_atecc.txt` **29 → 41 行**、**逐行一致** ✓
+  （新增 `shastart/shaupdate/shaend/respsha` 四类）；C 侧 `selfcheck` 由 10 类 → **11 类** ✓。
+- `tools/run_checks.py`：**5/5 PASS** ✓（固件编译零 warning ✓，text 44672 → 46012 = +1.3 KB ✓）。
+
+**⚠ 未上机（如实）**：`atecc_sha_hmac()` 本身**一次真机都没跑过** ✗ —— 没烧过板、没从固件出过
+level=1 的帧。它已被确认的只是“包形状与真机实发字节一致 ✓”与“命令序列与 PC 侧那份已上机的实现同源 ✓”。
+
+**★ 上机判据（烧完板子跑一遍，一句话）**：控制台 `idlevel l1`（或 `idlevel auto` 且 SE 在位）⇒
+`idhex` 打印的**整帧 hex** 拿去喂上游：
+
+    python tools/check_report_hex.py <帧hex> --se-pubkey <X||Y>       # 或直接喂 verify_report
+
+⇒ 必须 **accepted=True / alg=HS256 / trust=medium** ✓（同 §8.24 表里那条 ✓）。
+★ 判据为什么必须是**上游**：固件的“包形状对”和“摘要对”**都是我自己实现的** ✗ ⇒
+  只有**另一把尺子**（服务端拿库里那把 HMAC 钥重算）才能说“真对” ✓ —— 这就是 §8.24 定的
+  那条“结果必须与软件逐字节相同”在固件里的落点 ✓。
+
+**两条取舍（写下来，免得下一个人再想一遍）**：
+- **`Sign` 之后不照搬 PC 侧的 1200 ms** ✗：那个等待的理由是“**紧接着的下一条命令**别被拒” ✓，
+  而固件一条报文只签一次、签完就发帧 ⇒ 中间不再发命令 ⇒ 等了也没用 ✓（白等 1.2 s 会白白
+  抬 `build_ms` ✗）。**PC 侧则必须等** ✓（`HMAC → Sign → HMAC` 的第三次实测连拒 3 次 ✗）。
+- **`gap_ms()` 用主循环的 `g_tick_ms` 忙等** ✓（`wait_ready()` 探地址只能保证“读之前”器件肯答 ✓，
+  保证不了“读完响应之后它已经收尾” ✗ ⇒ 两处都要 ✓）。
+
 ## 9. 未做 / 边界（本轮，如实）
 
 - **§6 那张"上机判据"表**：2026-10-10/11 已填 **1/2/2b/3/4 五条** ✓（第 5 条 `idsend` 那轮没跑 ⇒ 仍空）；

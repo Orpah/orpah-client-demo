@@ -22,6 +22,7 @@
 #include "gpio.h"
 #include "i2c.h"
 #include "id_nonce.h"          /* idn_hex_upper()（别在业务代码里另写一份 hex）*/
+#include "id_report.h"         /* ★ d 步：`IDR_ALG_ES256/HS256` —— 算法名的**单一源** ✓ */
 #include "sha256.h"            /* ★ d 步：签名器要先把预像哈希掉（哈希在 MCU、私钥在 SE ✓）*/
 #include "uart.h"              /* 控制台（自检打印）*/
 
@@ -564,6 +565,180 @@ int atecc_sign_pre(uint8_t out64[ATECC_SIGN_BYTES], const void *pre, size_t prel
 }
 
 /* ------------------------------------------------------------------ */
+/* ★★ d 步（2026-10-11 晚）：HS256 —— 钥在 SE 的 slot 4 里、**不出芯片** ✓     */
+/* ------------------------------------------------------------------ */
+/* 三条命令（`SHA HMAC_START` → `HMAC_UPDATE` → `608 HMAC_END`）的形状/外部锚点在
+ * `proto/atecc_msg.h`；本文件只管**收发 + 时序 + 重发口径**。
+ *
+ * ★★ 为什么两条命令之间要等一段（`ATECC_HMAC_STEP_GAP_MS`）：那不是 CH347 的毛病 ✗，
+ *   而是**器件自己的收尾时间** —— 命令之间不留间隔时，PC 侧实测（2026-10-11，§8.24）
+ *   19 个长度里 **9 个失败** ✗，且失败与"上一次成功/失败"**严格交替** ⇒ 器件还在给上一条收尾时，
+ *   新命令被判 `0x03 parse error` ✗。我们这套主机比 CH347 快 ⇒ **更容易撞上** ✗ ⇒ 必须等 ✓。
+ *   （`transact()` 里的 `wait_ready()` 等的是"器件肯答地址 ⇒ 可以读响应"，那是**读之前**；
+ *     这里是**读完响应之后**、发下一条**之前** ⇒ 两处都要 ✓。）
+ *
+ * ★ 收到 `0x03` 就**等一段再重发本命令**（递增退避 ✓）。重发安全的依据（同 PC 侧）：
+ *   器件只回了一个状态包 ⇒ 它**没有执行**本命令 ⇒ 不存在"喂两遍" ✓；
+ *   而且最终正确性由**另一把尺子**判（上机 = 上游 `verify_report` 收不收 ✓）—— 不靠自证 ✓。
+ *
+ * ⚠ `UPDATE`/`END` **自己就是数据** ⇒ 只有确认"没执行"（`0x03`）才允许重发 ✗；
+ *   其它失败（CRC 不符 / 形状不对）一律**如实报错退出**，不再猜 ✗。
+ *
+ * ⚠ `Sign(0x41)` 之后**不需要** PC 侧那个 `SIGN_SETTLE_MS = 1200`：它存在的理由是让
+ *   **紧接着的下一条命令**不被拒 ✓；而本固件一条报文只签一次（ES256 或 HS256 二选一 ✓），
+ *   签完就发帧 ⇒ 中间不再发命令 ⇒ 那个等待**没有意义** ✓（省下的 1.2 s 直接体现在 build_ms ✓）。
+ */
+#define ATECC_HMAC_STEP_GAP_MS  150u   /* = PC 侧 `HMAC_STEP_GAP_MS`（同源，出处 §8.24）*/
+#define ATECC_PARSE_RETRY_MS    600u   /* 0x03 后：第 k 次重发前等 (k+1)× 它 */
+#define ATECC_SHA_ATTEMPTS      3u
+
+/* 用主循环的 1 ms 时基等一段（只给"给器件收尾"用；调用方在主循环上下文 ✓）*/
+static void gap_ms(uint32_t ms)
+{
+    uint32_t deadline = g_tick_ms + ms;
+
+    while ((int32_t)(g_tick_ms - deadline) < 0) { }
+}
+
+/* 发一条 SHA 系列命令并处理响应：
+ *   `want_status` = 1 ⇒ 期望 4 B 状态包（状态 0）；= 0 ⇒ 期望 33/35 B 摘要（写进 `out32`）。
+ * 返回 0 = OK；<0 = 错误码。*/
+static int sha_txn(const uint8_t *pkt, uint32_t pklen, int want_status,
+                   uint8_t out32[ATECC_SHA_DIGEST_BYTES])
+{
+    uint8_t resp[ATECC_RESP_LEN_SHA_CRC];
+    uint32_t attempt;
+
+    for (attempt = 0u; attempt < ATECC_SHA_ATTEMPTS; attempt++) {
+        uint8_t st = 0u;
+        uint32_t replen = 0u;
+        int rc;
+
+        (void)atecc_wake();             /* 器件若已醒，它对令牌回 NACK —— 不早退 ✓ */
+        rc = transact(pkt, pklen, resp, sizeof(resp), &replen);
+        if (rc != 0) {
+            uart_printf(CONSOLE_UART, "[se] SHA 第%u次：事务失败 rc=%d（%u B 包）\r\n",
+                        (unsigned)(attempt + 1u), rc, (unsigned)pklen);
+            continue;                   /* 可能是"它刚睡了/刚醒" ⇒ 重试 ✓ */
+        }
+        if (want_status) {
+            if (atecc_msg_err_pkt_status(resp, (size_t)replen, &st) == 0 &&
+                st == ATECC_STATUS_OK) {
+                gap_ms(ATECC_HMAC_STEP_GAP_MS);   /* 发下一条之前给它收尾的时间 ✓ */
+                return 0;
+            }
+        } else if (atecc_msg_resp_sha(resp, (size_t)replen, out32) == 0) {
+            return 0;
+        }
+        /* ★ 只有 `0x03`（还在收尾、**没执行**）才重发 ✓ —— 别的都别猜 ✗ */
+        if (atecc_msg_err_pkt_status(resp, (size_t)replen, &st) == 0 &&
+            st == ATECC_STATUS_PARSE) {
+            uart_printf(CONSOLE_UART,
+                        "[se] SHA 第%u次：器件回 0x03（还在收尾、本条未执行）⇒ 等 %u ms 重发\r\n",
+                        (unsigned)(attempt + 1u),
+                        (unsigned)(ATECC_PARSE_RETRY_MS * (attempt + 1u)));
+            gap_ms(ATECC_PARSE_RETRY_MS * (attempt + 1u));
+            continue;
+        }
+        if (st != 0u) {
+            uart_printf(CONSOLE_UART, "[se] SHA 第%u次：器件回状态 0x%02x（%s）\r\n",
+                        (unsigned)(attempt + 1u), (unsigned)st, atecc_msg_status_name(st));
+        } else {
+            uart_printf(CONSOLE_UART, "[se] SHA 第%u次：响应形状不对（%u B，首字节 0x%02x）\r\n",
+                        (unsigned)(attempt + 1u), (unsigned)replen, (unsigned)resp[0]);
+        }
+        break;
+    }
+    return ATECC_E_RESP;
+}
+
+int atecc_sha_hmac(uint16_t slot, const uint8_t *msg, size_t len,
+                   uint8_t out32[ATECC_SHA_DIGEST_BYTES])
+{
+    uint8_t pkt[ATECC_CMD_LEN_SHA_DATA_CRC];   /* ★ 71 = **最长包**（UPDATE 满块）——
+                                                *   引单一源常量，别自己写数 ✗ */
+    const int with_crc = (s_crc_mode == 0) ? 0 : 1;   /* 同 `atecc_sign_digest()` 的口径 ✓ */
+    size_t off = 0u;
+    uint32_t pklen;
+    int rc;
+
+    if (msg == 0 || out32 == 0) {
+        return ATECC_E_ARG;
+    }
+    /* ① HMAC_START：param2 = **key slot**（钥在器件里，我们只报槽号 ✓）*/
+    pklen = (uint32_t)atecc_msg_sha_start(pkt, sizeof(pkt), slot, with_crc);
+    if (pklen == 0u) { return ATECC_E_ARG; }
+    rc = sha_txn(pkt, pklen, 1, out32);
+    if (rc != 0) {
+        s_st.hmac_fail++;
+        uart_printf(CONSOLE_UART, "[se] HMAC_START 失败（slot %u）\r\n", (unsigned)slot);
+        return rc;
+    }
+    /* ② HMAC_UPDATE：整块 64 B，0 次或多次（`param2` = 本块字节数 ✓）*/
+    while ((len - off) >= ATECC_SHA_BLOCK) {
+        pklen = (uint32_t)atecc_msg_sha_update(pkt, sizeof(pkt), msg + off,
+                                              ATECC_SHA_BLOCK, with_crc);
+        if (pklen == 0u) { return ATECC_E_ARG; }
+        rc = sha_txn(pkt, pklen, 1, out32);
+        if (rc != 0) {
+            s_st.hmac_fail++;
+            uart_printf(CONSOLE_UART, "[se] HMAC_UPDATE@%u 失败\r\n", (unsigned)off);
+            return rc;
+        }
+        off += ATECC_SHA_BLOCK;
+    }
+    /* ③ 608_HMAC_END：尾块（可能 0 B）⇒ 响应就是 32 B 摘要 ✓ */
+    pklen = (uint32_t)atecc_msg_sha_hmac_end(pkt, sizeof(pkt), msg + off,
+                                             len - off, with_crc);
+    if (pklen == 0u) { return ATECC_E_ARG; }
+    rc = sha_txn(pkt, pklen, 0, out32);
+    if (rc != 0) {
+        s_st.hmac_fail++;
+        uart_printf(CONSOLE_UART, "[se] HMAC_END 失败\r\n");
+        return rc;
+    }
+    s_st.hmac_ok++;
+    s_st.hmac_slot = (uint32_t)slot;
+    return 0;
+}
+
+/* 固件里没有 strcmp（-nostdlib）—— 就地比一下那两个短名字（口径 = `proto/id_report.h` ✓）*/
+static int alg_is(const char *a, const char *b)
+{
+    while (*a != '\0' && *a == *b) { a++; b++; }
+    return (*a == '\0' && *b == '\0');
+}
+
+int atecc_sign_any(const char *alg, unsigned char *out, size_t outcap, size_t *outlen,
+                   const void *pre, size_t prelen, void *ctx)
+{
+    (void)ctx;
+    if (alg == 0 || out == 0 || outlen == 0 || pre == 0) {
+        return ATECC_E_ARG;
+    }
+    if (alg_is(alg, IDR_ALG_ES256)) {
+        if (outcap < ATECC_SIGN_BYTES) { return ATECC_E_ARG; }
+        if (atecc_sign_pre((uint8_t *)out, pre, prelen, 0) != 0) { return ATECC_E_RESP; }
+        *outlen = ATECC_SIGN_BYTES;
+        return 0;
+    }
+    if (alg_is(alg, IDR_ALG_HS256)) {
+        if (outcap < ATECC_SHA_DIGEST_BYTES) { return ATECC_E_ARG; }
+        /* ★ 预像"**不**先哈希"就往器件里喂 ✓（HMAC 自己会做两次哈希 ✓）；
+         *   长度上限：一条报文的预像远小于 65535 ✓，超了如实报错（不做静默分块 ✗）*/
+        if (prelen > 0xFFFFu) { return ATECC_E_ARG; }
+        if (atecc_sha_hmac(ATECC_HMAC_SLOT, (const uint8_t *)pre, prelen,
+                           (uint8_t *)out) != 0) {
+            return ATECC_E_RESP;
+        }
+        *outlen = ATECC_SHA_DIGEST_BYTES;
+        return 0;
+    }
+    /* 别的算法（如 none）不该走到注入器里来 —— 如实报错，别静默造一个 ✗ */
+    return ATECC_E_ARG;
+}
+
+/* ------------------------------------------------------------------ */
 /* 初始化 / 自检                                                       */
 /* ------------------------------------------------------------------ */
 int atecc_init(void)
@@ -603,6 +778,9 @@ void atecc_stats(atecc_stats_t *out)
     out->sign_ok       = s_st.sign_ok;
     out->sign_fail     = s_st.sign_fail;
     out->sign_slot     = s_st.sign_slot;
+    out->hmac_ok       = s_st.hmac_ok;
+    out->hmac_fail     = s_st.hmac_fail;
+    out->hmac_slot     = s_st.hmac_slot;
     out->crc_mode      = s_st.crc_mode;
     out->resp_waddr    = s_st.resp_waddr;
     out->last_err      = s_st.last_err;

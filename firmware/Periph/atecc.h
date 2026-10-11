@@ -48,6 +48,9 @@ typedef struct {
     uint32_t sign_ok;        /* ★ d 步：`Sign(0x41)` 成功次数（**单独计**，不混进 Random 的 ok）*/
     uint32_t sign_fail;      /* ★ d 步：签名失败次数 */
     uint32_t sign_slot;      /* ★ d 步：最近一次签名用的槽号 */
+    uint32_t hmac_ok;        /* ★ d 步（HS256）：器件内 HMAC 成功次数（同样**单独计** ✓）*/
+    uint32_t hmac_fail;      /* ★ d 步：HMAC 失败次数 */
+    uint32_t hmac_slot;      /* ★ d 步：最近一次 HMAC 用的槽号（应为 4 ✓）*/
     uint32_t crc_mode;       /* 实测：0 = 线上不带 CRC、1 = 带 CRC（见 .c 的自动判定）*/
     uint32_t resp_waddr;     /* ★ 实测：**响应是哪个字地址读通的**：
                               *   1 = 从 `0x00` 读通（公开实现里的正确值，见 .c 的长注释）、
@@ -81,6 +84,25 @@ int atecc_sign_digest(const uint8_t digest32[ATECC_NONCE_DIGEST_BYTES],
  * （`idb_t.ec` 只当“降级用”的演示材料留着，不进签名）。
  * 失败返回非 0 ⇒ 流水线按 §8.2 Step2 降到 L1（HMAC）。*/
 int atecc_sign_pre(uint8_t out64[ATECC_SIGN_BYTES], const void *pre, size_t prelen, void *ctx);
+
+/* ★★ d 步（2026-10-11 晚）：把 **HS256（降级路）也交给 SE** —— 那 32 B 的 HMAC 钥
+ *   在 slot 4 里锁着、**读不出来** ✓ ⇒ 只能在器件内算（`SHA(HMAC_START/UPDATE/END)` ✓）。
+ *   包形状/外部锚点 = `proto/atecc_msg.h` 的 `atecc_msg_sha_*`（已与真机实发字节对过 ✓）；
+ *   时序与依据写在 `atecc.c` 的实现处。
+ *   `msg` = **整条消息**（本函数内部按 64 B 分块喂器件，调用方不用管 ✓）；
+ *   返回 0 = OK，并把 **32 B 摘要**写进 `out32`（= HMAC-SHA256 原始输出，与软件 HMAC 逐字节同 ✓）。
+ *   ⚠ 已上机验证的是**同一套命令序列**（PC 侧 `tools/se_provision.py`，§8.24）——
+ *     本函数本身**未上机**（等烧录后用上游 `verify_report` 当判据 ✓）。*/
+int atecc_sha_hmac(uint16_t slot, const uint8_t *msg, size_t len,
+                   uint8_t out32[ATECC_SHA_DIGEST_BYTES]);
+
+/* ★★ d 步：**按算法分流**的签名器（形状 = `idr_sign_fn`）—— 固件只注入这一个 ✓：
+ *   · `IDR_ALG_ES256` ⇒ `atecc_sign_pre()`（Nonce + Sign(0x41)，私钥在 slot 0 ✓）
+ *   · `IDR_ALG_HS256` ⇒ `atecc_sha_hmac(ATECC_HMAC_SLOT, …)`（降级钥在 slot 4 ✓）
+ * 两把钥都不进 MCU 的 RAM ✓；任一失败都返回非 0 ⇒ 流水线按 §8.2 Step2 降级/如实报错 ✓。
+ * （不写成两个 provider 是因为“一个注入点管两种算法”更不容易漏：换钥/换实现只改一处 ✓。）*/
+int atecc_sign_any(const char *alg, unsigned char *out, size_t outcap, size_t *outlen,
+                   const void *pre, size_t prelen, void *ctx);
 
 /* 唤醒（SDA 低 ≥60 µs → 高 ≥1500 µs → 写唤醒令牌地址 0x00 等 ACK）。0 = OK。*/
 int atecc_wake(void);

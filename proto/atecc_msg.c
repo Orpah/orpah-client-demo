@@ -3,28 +3,42 @@
 
 #include "crc16.h"
 
-/* 一条"无数据命令"的包：count + opcode + param1 + param2(2 B) + [CRC]。
- * Random / Info / Read / Sign / GenKey / Lock 全是一个形状（区别只在 opcode 与参数）⇒ 只写一份。
+/* 一条命令包的**唯一一份**构造（★ 2026-10-11 抽出来）：
+ *   count(1) + opcode(1) + param1(1) + param2(2, **小端**) + [数据 dn B] + [CRC(2, 小端)]
+ * count = **包总长**（含 count 自身与 CRC）；CRC 覆盖 count..最后一个数据字节、**不含 CRC 自身**。
+ * `dn == 0` 时就是原来的 `cmd5()`（Random / Info / Read / Sign / GenKey / Lock ✓）。
  * ★★ 2026-10-11 **实测纠正**：param2 是**小端**（低字节在前）✗ —— 原厂栈读配置区第 1 块
  *   实发 `07 02 80 08 00 0A 4D`（`Read` 的字地址 8 ⇒ `08 00`）✓；此前验过的包里 param2
  *   恰好全是 0，所以大端/小端看不出区别 ⇒ 一直没暴露 ✗（一上机读非零地址就报 `0x03` parse）。*/
-static size_t cmd5(uint8_t *out, size_t cap, uint8_t op, uint8_t p1, uint16_t p2, int with_crc)
+static size_t cmd_data(uint8_t *out, size_t cap, uint8_t op, uint8_t p1,
+                       uint16_t p2, const uint8_t *data, size_t dn, int with_crc)
 {
-    size_t n = with_crc ? ATECC_CMD_LEN_CRC : ATECC_CMD_LEN_NOCRC;
+    size_t n = 1u + 4u + dn + (with_crc ? 2u : 0u);
+    size_t i;
 
-    if (out == 0 || cap < n) {
+    if (out == 0 || cap < n || n > 255u) {
+        return 0u;                       /* count 只占 1 字节 ⇒ 包不能超过 255 */
+    }
+    if (data == 0 && dn != 0u) {
         return 0u;
     }
-    out[0] = (uint8_t)n;                 /* count：含 count 自身与 CRC */
+    out[0] = (uint8_t)n;
     out[1] = op;
     out[2] = p1;                         /* param1 */
     out[3] = (uint8_t)(p2 & 0xFFu);      /* param2 低字节（**小端**）*/
     out[4] = (uint8_t)(p2 >> 8);         /* param2 高字节 */
+    for (i = 0u; i < dn; i++) {
+        out[5u + i] = data[i];
+    }
     if (with_crc) {
-        /* CRC 覆盖 count..param2（即前 5 字节），不含 CRC 自身 */
-        crc16_atca_le(out, ATECC_CMD_LEN_NOCRC, &out[5]);
+        crc16_atca_le(out, n - 2u, &out[n - 2u]);
     }
     return n;
+}
+
+static size_t cmd5(uint8_t *out, size_t cap, uint8_t op, uint8_t p1, uint16_t p2, int with_crc)
+{
+    return cmd_data(out, cap, op, p1, p2, 0, 0u, with_crc);
 }
 
 size_t atecc_msg_random(uint8_t *out, size_t cap, uint8_t mode, int with_crc)
@@ -48,28 +62,51 @@ size_t atecc_msg_sign(uint8_t *out, size_t cap, uint16_t slot, int with_crc)
 }
 
 /* ★ d 步：Nonce 比"无数据命令"多 **32 B 数据**（实测包 `27 16 43 00 00 <32 B 摘要> 30 1A`）。
- * count = 包总长（37 不带 CRC / 39 带 CRC）、CRC 覆盖 count..最后一个数据字节（**含数据**）✓。*/
+ * count = 包总长（37 不带 CRC / 39 带 CRC）、CRC 覆盖 count..最后一个数据字节（**含数据**）✓。
+ * ★ 2026-10-11：改成调 `cmd_data()`（同一条规则只有一份实现 ✓）——字节应与改前**完全相同**，
+ *   由交叉测试的 29 行向量行守（✓ 实测：改后逐行一致）。*/
 size_t atecc_msg_nonce_load(uint8_t *out, size_t cap,
                             const uint8_t digest32[ATECC_NONCE_DIGEST_BYTES], int with_crc)
 {
-    size_t n = with_crc ? ATECC_CMD_LEN_NONCE_CRC : ATECC_CMD_LEN_NONCE_NOCRC;
-    size_t i;
+    return cmd_data(out, cap, ATECC_OP_NONCE, ATECC_NONCE_MODE_MSGDIGBUF, 0x0000u,
+                    digest32, ATECC_NONCE_DIGEST_BYTES, with_crc);
+}
 
-    if (out == 0 || digest32 == 0 || cap < n) {
+/* ★★ d 步：`SHA(0x47)` 三连（HMAC）—— 见 `atecc_msg.h` 那一段的锚点与出处。
+ * ⚠ 三条都走 `cmd_data()` ⇒ 包形状只有一份实现 ✓。*/
+size_t atecc_msg_sha_start(uint8_t *out, size_t cap, uint16_t key_slot, int with_crc)
+{
+    return cmd_data(out, cap, ATECC_OP_SHA, ATECC_SHA_MODE_HMAC_START, key_slot, 0, 0u, with_crc);
+}
+
+size_t atecc_msg_sha_update(uint8_t *out, size_t cap,
+                            const uint8_t *blk, size_t n, int with_crc)
+{
+    if (n > ATECC_SHA_BLOCK) {
+        return 0u;                       /* 器件一次只吃 64 B ⇒ 超过就是调用方该分块 ✗ */
+    }
+    /* param2 = **本块字节数**（实测：块长 `0x40` = 64 ✓ 就在 param2 里）*/
+    return cmd_data(out, cap, ATECC_OP_SHA, ATECC_SHA_MODE_HMAC_UPDATE,
+                    (uint16_t)n, blk, n, with_crc);
+}
+
+size_t atecc_msg_sha_hmac_end(uint8_t *out, size_t cap,
+                              const uint8_t *tail, size_t n, int with_crc)
+{
+    if (n > ATECC_SHA_BLOCK) {
         return 0u;
     }
-    out[0] = (uint8_t)n;
-    out[1] = ATECC_OP_NONCE;
-    out[2] = ATECC_NONCE_MODE_MSGDIGBUF;
-    out[3] = 0x00u;                      /* param2 低（小端；这里恒 0）*/
-    out[4] = 0x00u;                      /* param2 高 */
-    for (i = 0u; i < ATECC_NONCE_DIGEST_BYTES; i++) {
-        out[5u + i] = digest32[i];
-    }
-    if (with_crc) {
-        crc16_atca_le(out, ATECC_CMD_LEN_NONCE_NOCRC, &out[ATECC_CMD_LEN_NONCE_NOCRC]);
-    }
-    return n;
+    /* param1 = END | 落点（TempKey ✓）；param2 = 尾块字节数 ✓ */
+    return cmd_data(out, cap, ATECC_OP_SHA,
+                    (uint8_t)(ATECC_SHA_MODE_608_HMAC_END | ATECC_SHA_TARGET_TEMPKEY),
+                    (uint16_t)n, tail, n, with_crc);
+}
+
+/* ★ d 步：HMAC 摘要响应的形状与 `Random` **完全一样**（33/35 B、count 1 字节、CRC 规则同）
+ *   ⇒ 直接转发给那一份实现 ✓（别再拄一份长度/CRC 校验 ✗ —— 抄一份就多一个错处）。*/
+int atecc_msg_resp_sha(const uint8_t *resp, size_t n, uint8_t out32[ATECC_SHA_DIGEST_BYTES])
+{
+    return atecc_msg_resp_random(resp, n, out32);
 }
 
 /* ★ 2026-10-10 改正：I²C 上 count **就是 1 字节**（出处见 atecc_msg.h 的文件头）。

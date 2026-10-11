@@ -1,6 +1,6 @@
 # checks_report.md —— `tools/run_checks.py` 的输出（**入库**，同隔壁仓惯例）
 
-跑的时间：2026-10-11 21:14:10
+跑的时间：2026-10-11 21:21:31
 
 判定口径：**退出码 0 且输出里没有 `FAIL` / `Traceback`**（只看退出码会漏 —— 有些脚本自己吞异常）。
 
@@ -33,9 +33,9 @@ PASS C level-selftest（选级向量）  ->  PASS level-selftest 13/13 行（f:\
 PASS C nonce-selftest（nonce 向量）  ->  PASS nonce-selftest 5/5 行（f:\git\orpah-client-demo\proto\test_vectors_id_nonce.txt）
 PASS C frame-selftest（整帧向量）  ->  PASS frame-selftest 5/5 行（f:\git\orpah-client-demo\proto\test_vectors_id_frame.txt）
 C 侧已编译：ATECC608B 报文层（cl (vcvars64, /std:c11)）
-PASS C selfcheck（CRC 外部锚点 + Random 包 + 响应解析）  ->  PASS ATECC608B 报文层自检（★ 原厂 atCRC 口径的 CRC + Random/Info/Read + Nonce/Sign 包 + 响应解析（含签名 r||s），共 10 类）
+PASS C selfcheck（CRC 外部锚点 + Random 包 + 响应解析）  ->  PASS ATECC608B 报文层自检（★ 原厂 atCRC 口径的 CRC + Random/Info/Read + Nonce/Sign 包 + **SHA/HMAC 三连** + 响应解析（含签名 r||s），共 11 类）
 PASS C crc-selftest（CRC16 向量）  ->  PASS f:\git\orpah-client-demo\proto\test_vectors_crc16.txt：7 行全部一致
-PASS C msg-selftest（Random 包/响应向量）  ->  PASS f:\git\orpah-client-demo\proto\test_vectors_atecc.txt：29 行全部一致
+PASS C msg-selftest（Random 包/响应向量）  ->  PASS f:\git\orpah-client-demo\proto\test_vectors_atecc.txt：41 行全部一致
    [info] L3(alg=none) 服务端判定：accepted=True trust=none coverage_only=True
 PASS 服务端验签 C 产出的报文（verify_report 接受 6 条 level=0/1/2）
 PASS OpenSSL 验签通过 C 产出的 r||s（2 条 RFC 官方向量）
@@ -111,11 +111,13 @@ cstep-nanoch32-atecc608b.fzz -> f:\git\orpah-client-demo\hardware\wiring\cstep-n
 
 ```
 make: Entering directory 'f:/git/orpah-client-demo/firmware'
-F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/id_report.c -o build/proto/id_report.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c Core/id_core.c -o build/Core/id_core.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c Periph/atecc.c -o build/Periph/atecc.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/atecc_msg.c -o build/proto/atecc_msg.o
 F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -nostartfiles -nostdlib -T ld/link.ld -Wl,--gc-sections -Wl,-Map=build/orpah-client.map -o build/orpah-client.elf build/Core/main.o build/Core/id_core.o build/Periph/gpio.o build/Periph/uart.o build/Periph/i2c.o build/Periph/atecc.o build/Periph/hgic_uart.o build/proto/sn.o build/proto/jcs.o build/proto/b64url.o build/proto/msg.o build/proto/downlink.o build/proto/sha256.o build/proto/hmac.o build/proto/id_report.o build/proto/hgic.o build/proto/id_build.o build/proto/id_level.o build/proto/id_keys.o build/proto/id_nonce.o build/proto/p256.o build/proto/rfc6979.o build/proto/ecdsa.o build/proto/atecc_msg.o build/proto/crc16.o build/startup.o -lgcc
 F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-size build/orpah-client.elf
    text	   data	    bss	    dec	    hex	filename
-  44672	     26	  20192	  64890	   fd7a	build/orpah-client.elf
+  46012	     26	  20192	  66230	  102b6	build/orpah-client.elf
 F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-objcopy -O binary build/orpah-client.elf build/orpah-client.bin
   built: build/orpah-client.bin  (raw binary; bytes = size text + data above)
 F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-objcopy -O ihex build/orpah-client.elf build/orpah-client.hex

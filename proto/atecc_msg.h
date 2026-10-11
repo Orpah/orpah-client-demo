@@ -99,11 +99,40 @@
  *   签名响应 `43 …` = 67 = 1 count + 64 签名 + 2 CRC ✓）*/
 #define ATECC_CMD_LEN_NONCE_NOCRC  (ATECC_CMD_LEN_NOCRC + ATECC_NONCE_DIGEST_BYTES)
 #define ATECC_CMD_LEN_NONCE_CRC    (ATECC_CMD_LEN_CRC + ATECC_NONCE_DIGEST_BYTES)
-/* ★ **命令包的最长长度**（= Nonce 带 CRC 的 39 B）—— 传输层（`Periph/atecc.c`）的
- *   发包缓冲与长度上限都引它，**别各自写数** ✗：2026-10-11 踩过 —— 那里还按 7 B 写，
- *   Nonce（39 B）一发包就被守卫拦下（还差一点写出栈溢出 ✗），而现场日志只看到
- *   “装摘要失败”、看不到原因 ✗。*/
-#define ATECC_CMD_LEN_MAX          ATECC_CMD_LEN_NONCE_CRC
+/* ------------------------------------------------------------------ */
+/* ★★ d 步（2026-10-11 上机）：`SHA(0x47)` —— **HMAC 也走这一条**               */
+/* ------------------------------------------------------------------ */
+/* 608 上 HMAC 的“开始/结束”就是 `SHA` 的两种模式 ✓（原厂 `calib_sha_hmac_init/update/finish()`）。
+ * 形状照我们 PC 侧那份**已上机验证**的实现（`tools/se_provision.py` 的 `sha_hmac()`，
+ * 出处 `docs/atecc608b-se.md` §8.24 ✓）：
+ *   ① `SHA(HMAC_START=0x04, param2=**key slot**)`                    ⇒ 4 B 状态包（状态 0x00 = 成功）
+ *   ② `SHA(HMAC_UPDATE=0x01, param2=**本块字节数**, + 该块)`          ⇒ 同丠（0 次或多次）
+ *   ③ `SHA(608_HMAC_END=0x02 | TARGET_TEMPKEY=0x00, param2=**尾块字节数**, + 尾块)`
+ *                                                          ⇒ 33/35 B（32 B 摘要）
+ * ★★ **外部锚点**（§8.24 那次实测的**实发字节**）：`0747040400ae47` = 恰好 **7 B**
+ *   ⇒ `count=07 | op=47 | p1=04 | param2=0400`（**小端** = 4 ✓ 就是 HMAC 槽）`| CRC=ae47` ✓
+ *   同一处还记了“**UPDATE 长度 `0x47`** = 71 = 1+1+1+2+64+2 ✓、块长 `0x40` = 64 ✓”
+ *   ⇒ 本文件的包长/块长与那次真机包**逐字节对得上** ✓（不是我自己推的 ✗）。
+ * ★ 用 START 的 slot = 4：原厂自己的测试夹具就是“HMAC 用 slot 4” ✓（见 §8.5 注 ✓）。*/
+#define ATECC_OP_SHA               0x47u
+#define ATECC_SHA_MODE_HMAC_START  0x04u
+#define ATECC_SHA_MODE_HMAC_UPDATE 0x01u
+#define ATECC_SHA_MODE_608_HMAC_END 0x02u   /* 608 的结束码（库里按器件型号选 ✓）*/
+#define ATECC_SHA_TARGET_TEMPKEY   0x00u    /* 结果落点 = TempKey；响应里总回 32 B 摘要 ✓ */
+#define ATECC_SHA_BLOCK            64u      /* 一次喂一块（原厂 `SHA_DATA_MAX` ✓）*/
+#define ATECC_HMAC_SLOT            4u       /* 降级 HMAC 钥的槽 */
+#define ATECC_SHA_DIGEST_BYTES     32u
+/* UPDATE/END 带数据 ⇒ **最长包就在这里**（= 1 count + 1 op + 1 p1 + 2 p2 + 64 块 + 2 CRC = 71）*/
+#define ATECC_CMD_LEN_SHA_DATA_NOCRC (ATECC_CMD_LEN_NOCRC + ATECC_SHA_BLOCK)      /* 69 */
+#define ATECC_CMD_LEN_SHA_DATA_CRC   (ATECC_CMD_LEN_CRC + ATECC_SHA_BLOCK)        /* 71 */
+#define ATECC_RESP_LEN_SHA_NOCRC   (ATECC_RESP_DATA_IDX + ATECC_SHA_DIGEST_BYTES)      /* 33 */
+#define ATECC_RESP_LEN_SHA_CRC     (ATECC_RESP_DATA_IDX + ATECC_SHA_DIGEST_BYTES + 2u) /* 35 */
+/* ★ **命令包的最长长度**（★ 2026-10-11 更新）：现在最长的是 **SHA UPDATE**（71 B）✗
+ *   —— 不再是 Nonce 的 39 ✗。传输层（`Periph/atecc.c`）的发包缓冲与长度上限都引它，
+ *   **别各自写数** ✗：那里曾按 7 B 写，Nonce（39 B）一发包就被守卫拦下（还差一点写出栈溢出 ✗），
+ *   而现场日志只看到“装摘要失败”、看不到原因 ✗。
+ *   ⚠ 若新增更长的包，**必须同步改这里**（一处定义，多处引用 ✓）。*/
+#define ATECC_CMD_LEN_MAX          ATECC_CMD_LEN_SHA_DATA_CRC
 #define ATECC_RESP_LEN_SIG_NOCRC   (ATECC_RESP_DATA_IDX + ATECC_SIGN_BYTES)
 #define ATECC_RESP_LEN_SIG_CRC     (ATECC_RESP_DATA_IDX + ATECC_SIGN_BYTES + 2u)
 /* 状态码：出处 `lib/calib/calib_command.h` 的 `CMD_STATUS_*` 与
@@ -143,6 +172,22 @@ size_t atecc_msg_sign(uint8_t *out, size_t cap, uint16_t slot, int with_crc);
 /* ★ d 步：校验并取出**签名**（`r||s` 64 B）。`n` 必须 ∈ {65, 67}（67 时**真验** CRC）。
  * 返回 0 = OK；<0 同下（`ATECC_MSG_E_*`）。*/
 int atecc_msg_resp_sign(const uint8_t *resp, size_t n, uint8_t out64[ATECC_SIGN_BYTES]);
+
+/* ★★ d 步：`SHA(0x47)` 三连（HMAC）—— 钥在 `key_slot` 里，**不出芯片** ✓。
+ * 形状/锚点见上面那一段。三者都回**包长**（0 = 容量不够）：
+ *   · `atecc_msg_sha_start(slot)`            = 5/7（无数据命令）
+ *   · `atecc_msg_sha_update(blk, n)`         = 69/71（`n` 应为 `ATECC_SHA_BLOCK` = 64）
+ *   · `atecc_msg_sha_hmac_end(tail, n)`      = `n + 5`/`n + 7`（`n` < 64）
+ * ⚠ `n` 必须 ≤ `ATECC_SHA_BLOCK`（超过就该分块 ✗ —— 器件一次只吃 64 B）。*/
+size_t atecc_msg_sha_start(uint8_t *out, size_t cap, uint16_t key_slot, int with_crc);
+size_t atecc_msg_sha_update(uint8_t *out, size_t cap,
+                            const uint8_t *blk, size_t n, int with_crc);
+size_t atecc_msg_sha_hmac_end(uint8_t *out, size_t cap,
+                              const uint8_t *tail, size_t n, int with_crc);
+
+/* ★ d 步：取出 **32 B HMAC 摘要**（`n` 必须 ∈ {33, 35}；35 时**真验** CRC）。
+ * 返回 0 = OK；<0 同 `ATECC_MSG_E_*`。*/
+int atecc_msg_resp_sha(const uint8_t *resp, size_t n, uint8_t out32[ATECC_SHA_DIGEST_BYTES]);
 
 /* 取出"4 字节数据"类响应（Info/Read）：`resp` = 完整响应（含 1 B count）。
  * `n` 必须 ∈ {5, 7}（7 时**真验** CRC）。返回 0 = OK。*/

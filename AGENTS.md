@@ -272,6 +272,19 @@ orpah-client-demo/
   误诊成“硬件卡死” ✗（白拔插/换口/拔线 ✗）；② **每次跑生成带时间戳日志 + LATEST 指针**，
   否则会把**没执行**的结果当成新结果 ✗；③ **先小步量一次、再一次性验证** ✓（别轰炸器件 ✗）。
   详见 **§8.24**。
+- **2026-10-11（夜继：**固件侧**的 HS256 也接到 SE，未上机 ✗）**：
+  ① `proto/atecc_msg.{c,h}` 新增 `SHA(0x47)` 三连（`sha_start/update/hmac_end` + `resp_sha`），
+     并把**带数据的包**抽成唯一一份 `cmd_data()`（`Nonce` 也改走它 —— 字节与改前逐行一致 ✓）；
+     `ATECC_CMD_LEN_MAX` 随 **39 → 71**（UPDATE 满块）—— “最长包”是会变的数，别写死在别处 ✗。
+  ② `firmware/Periph/atecc.{c,h}`：`atecc_sha_hmac()`（分块喂器件 + `0x03` 递增退避重发 ✓，
+     安全性依据同 PC 侧：**器件没执行** ✓）+ `atecc_sign_any()`（**按算法分流**）。
+  ③ `firmware/Core/id_core.c`：注入点换成 `atecc_sign_any` ⇒ **一个注入点管两种算法** ✓。
+  ★★ **外部锚点**：`SHA(HMAC_START, slot 4)` 带 CRC 包 = **`0747040400ae47`**（§8.24 那次真机**实发**字节）——
+     同时钉在 C 侧 `selfcheck` ⑪ 与 Python 侧生成期断言（两处，不自证 ✓）。
+  验证（PC）：交叉测试 **41 行**逐行一致 ✓（`selfcheck` 10 → **11 类**）；`tools/run_checks.py` **5/5** ✓
+  （固件零 warning，text 44672 → 46012）。⚠ **未上机**：`atecc_sha_hmac()` 一次真机都没跑过 ✗
+  —— 上机判据 = `idlevel l1` 后把 `idhex` 的帧喂上游，必须 **accepted / alg=HS256 / trust=medium** ✓。
+  详见 **§8.25**。
 - **未做**：b 步的物理传输（USB→SPI 走 MACBUS 或 RJ45 桥，**通路未定**）、固件主循环/状态机、
   ~~SE（ATECC608B）驱动~~（**2026-10-11 已做 ✓**，见上）、~~产线烧录流程~~（工具已入库 ✓、
   4 颗已配且公钥已上传 ✓，余 3 颗按用户决定**保留不写** ✗）、低功耗与取能标定、与 `orpah-over-halow`（服务端/仿真器）

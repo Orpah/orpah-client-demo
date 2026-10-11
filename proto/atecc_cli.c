@@ -20,6 +20,10 @@
  *   nonce <32B摘要hex>    <with_crc 0/1> <->            <包hex>          （★ d 步，2026-10-11）
  *   sign  <槽号>          <with_crc 0/1> <->            <包hex>          （★ d 步，2026-10-11）
  *   respsig <完整响应hex> <->            <->            OK:<r||s 64B hex> | ERR:<码>  （★ d 步）
+ *   shastart <槽号> <with_crc 0/1> <->   <->            <包hex>          （★ d 步，2026-10-11）
+ *   shaupdate <64B块hex> <with_crc> <->  <->            <包hex>          （★ d 步）
+ *   shaend <尾块hex> <with_crc 0/1> <->  <->            <包hex>          （★ d 步；尾块可 `-`）
+ *   respsha <完整响应hex> <->            <->            OK:<32B 摘要hex> | ERR:<码>  （★ d 步）
  *   errpkt <4字节包hex>   <->            <->            0x<状态>:<名字> | not-errpkt
  *     （`errpkt` 用 `atecc_msg_err_pkt_status()` + `atecc_msg_status_name()`；
  *       措辞照 CryptoAuthLib 原话，例：0x11 唤醒应答、0xFF CRC/通讯错）
@@ -50,6 +54,10 @@ static void usage(void)
             "  nonce <32B摘要-hex> <with_crc 0|1>  -> Nonce 包-hex（★ d 步）\n"
             "  sign <槽号> <with_crc 0|1>          -> Sign 包-hex（★ d 步）\n"
             "  respsig <响应-hex>                  -> OK:<r||s 64B> | ERR:<码>（★ d 步）\n"
+            "  shastart <槽号> <with_crc 0|1>      -> SHA(HMAC_START) 包-hex（★ d 步）\n"
+            "  shaupdate <64B块-hex> <with_crc>    -> SHA(HMAC_UPDATE) 包-hex（★ d 步）\n"
+            "  shaend <尾块-hex|-> <with_crc>      -> SHA(608_HMAC_END) 包-hex（★ d 步）\n"
+            "  respsha <响应-hex>                  -> OK:<32B 摘要> | ERR:<码>（★ d 步）\n"
             "  selfcheck\n"
             "  crc-selftest <vector-file>\n"
             "  msg-selftest <vector-file>\n");
@@ -200,7 +208,7 @@ static int cmd_sign(int slot, int with_crc)
     return 0;
 }
 
-/* 一行 `respsig`：完整响应 → OK:<r||s 64B hex> | ERR:<码> */
+/* inline 一行 `respsig`：完整响应 → OK:<r||s 64B hex> | ERR:<码> */
 static void respsig_line(const uint8_t *resp, size_t n, char *out, size_t cap)
 {
     uint8_t sig[ATECC_SIGN_BYTES];
@@ -210,6 +218,74 @@ static void respsig_line(const uint8_t *resp, size_t n, char *out, size_t cap)
         char hex[ATECC_SIGN_BYTES * 2 + 1];
 
         bin_to_hex(sig, ATECC_SIGN_BYTES, hex);
+        snprintf(out, cap, "OK:%s", hex);
+    } else {
+        snprintf(out, cap, "ERR:%d", rc);
+    }
+}
+
+/* ★★ d 步（2026-10-11 上机）：`SHA(0x47)` 三连（HMAC）—— 钥在器件里，**不出芯片** ✓。
+ * 三条都只负责**组包打一行 hex**（真正的收发与判据在 `Periph/atecc.c`，向量行只在两侧对拍形状 ✓）。*/
+static int cmd_sha_start(int slot, int with_crc)
+{
+    uint8_t pkt[ATECC_CMD_LEN_CRC];
+    size_t n = atecc_msg_sha_start(pkt, sizeof(pkt), (uint16_t)slot, with_crc);
+    char hex[ATECC_CMD_LEN_CRC * 2 + 1];
+
+    if (n == 0u) { return 1; }
+    bin_to_hex(pkt, n, hex);
+    printf("%s\n", hex);
+    return 0;
+}
+
+static int cmd_sha_update(const char *blk_hex, int with_crc)
+{
+    uint8_t pkt[ATECC_CMD_LEN_SHA_DATA_CRC];
+    uint8_t blk[ATECC_SHA_BLOCK];
+    char hex[ATECC_CMD_LEN_SHA_DATA_CRC * 2 + 1];
+    int bn = hex_to_bin(blk_hex, blk, sizeof(blk));
+    size_t n;
+
+    if (bn < 0) {
+        fprintf(stderr, "blk 不是合法 hex（或超过 %u B）\n", (unsigned)ATECC_SHA_BLOCK);
+        return 1;
+    }
+    n = atecc_msg_sha_update(pkt, sizeof(pkt), blk, (size_t)bn, with_crc);
+    if (n == 0u) { return 1; }
+    bin_to_hex(pkt, n, hex);
+    printf("%s\n", hex);
+    return 0;
+}
+
+static int cmd_sha_end(const char *tail_hex, int with_crc)
+{
+    uint8_t pkt[ATECC_CMD_LEN_SHA_DATA_CRC];
+    uint8_t tail[ATECC_SHA_BLOCK];
+    char hex[ATECC_CMD_LEN_SHA_DATA_CRC * 2 + 1];
+    int bn = hex_to_bin(tail_hex, tail, sizeof(tail));
+    size_t n;
+
+    if (bn < 0) {
+        fprintf(stderr, "tail 不是合法 hex（或超过 %u B）\n", (unsigned)ATECC_SHA_BLOCK);
+        return 1;
+    }
+    n = atecc_msg_sha_hmac_end(pkt, sizeof(pkt), tail, (size_t)bn, with_crc);
+    if (n == 0u) { return 1; }
+    bin_to_hex(pkt, n, hex);
+    printf("%s\n", hex);
+    return 0;
+}
+
+/* 一行 `respsha`：完整响应 → OK:<32B 摘要 hex> | ERR:<码> */
+static void respsha_line(const uint8_t *resp, size_t n, char *out, size_t cap)
+{
+    uint8_t dg[ATECC_SHA_DIGEST_BYTES];
+    int rc = atecc_msg_resp_sha(resp, n, dg);
+
+    if (rc == 0) {
+        char hex[ATECC_SHA_DIGEST_BYTES * 2 + 1];
+
+        bin_to_hex(dg, ATECC_SHA_DIGEST_BYTES, hex);
         snprintf(out, cap, "OK:%s", hex);
     } else {
         snprintf(out, cap, "ERR:%d", rc);
@@ -285,6 +361,42 @@ static int selftest(const char *path)
 
             if (n < 0) { snprintf(g_got, sizeof(g_got), "(非法 hex)"); }
             else { respsig_line(g_bin, (size_t)n, g_got, sizeof(g_got)); }
+        } else if (strcmp(cols[0], "shastart") == 0) {
+            uint8_t pkt[ATECC_CMD_LEN_CRC];
+            size_t n = atecc_msg_sha_start(pkt, sizeof(pkt), (uint16_t)atoi(cols[1]),
+                                           atoi(cols[2]) != 0);
+
+            if (n == 0u) { snprintf(g_got, sizeof(g_got), "(组包失败)"); }
+            else { bin_to_hex(pkt, n, g_got); }
+        } else if (strcmp(cols[0], "shaupdate") == 0) {
+            uint8_t pkt[ATECC_CMD_LEN_SHA_DATA_CRC];
+            uint8_t blk[ATECC_SHA_BLOCK];
+            int bn = hex_to_bin(cols[1], blk, sizeof(blk));
+            size_t n;
+
+            if (bn < 0) { snprintf(g_got, sizeof(g_got), "(非法 hex)"); }
+            else {
+                n = atecc_msg_sha_update(pkt, sizeof(pkt), blk, (size_t)bn, atoi(cols[2]) != 0);
+                if (n == 0u) { snprintf(g_got, sizeof(g_got), "(组包失败)"); }
+                else { bin_to_hex(pkt, n, g_got); }
+            }
+        } else if (strcmp(cols[0], "shaend") == 0) {
+            uint8_t pkt[ATECC_CMD_LEN_SHA_DATA_CRC];
+            uint8_t tail[ATECC_SHA_BLOCK];
+            int bn = hex_to_bin(cols[1], tail, sizeof(tail));
+            size_t n;
+
+            if (bn < 0) { snprintf(g_got, sizeof(g_got), "(非法 hex)"); }
+            else {
+                n = atecc_msg_sha_hmac_end(pkt, sizeof(pkt), tail, (size_t)bn, atoi(cols[2]) != 0);
+                if (n == 0u) { snprintf(g_got, sizeof(g_got), "(组包失败)"); }
+                else { bin_to_hex(pkt, n, g_got); }
+            }
+        } else if (strcmp(cols[0], "respsha") == 0) {
+            int n = hex_to_bin(cols[1], g_bin, sizeof(g_bin));
+
+            if (n < 0) { snprintf(g_got, sizeof(g_got), "(非法 hex)"); }
+            else { respsha_line(g_bin, (size_t)n, g_got, sizeof(g_got)); }
         } else if (strcmp(cols[0], "errpkt") == 0) {
             int n = hex_to_bin(cols[1], g_bin, sizeof(g_bin));
             uint8_t st = 0u;
@@ -552,12 +664,51 @@ static int selfcheck(void)
            atecc_msg_resp_sign(resp67, ATECC_RESP_LEN_SIG_CRC, sig) == ATECC_MSG_E_CRC);
     }
 
+    /* ⑪ ★★ d 步（2026-10-11 上机）：`SHA` 三连（HMAC）的**外部锚点**。
+     *   真机实发的 `SHA(HMAC_START, slot 4)` 带 CRC 包 = `0747040400ae47` ✓
+     *   （`count=07 | op=47 | p1=04 | param2=0400（小端 = 4）| CRC=ae47`，出处 §8.24 ✓）。
+     *   同一处还记了“**UPDATE 长度 `0x47` = 71**、块长 `0x40` = 64” ⇒ 下面是那两条的逐字节核对 ✓。
+     *  ★ 为什么必须拿它当锚：当前仓里其它 SHA 包都是我们自己算的 ⇒ 不引这串**实发字节**就是自证 ✗。*/
+    {
+        static const char start4want[] = "0747040400ae47";
+        uint8_t pkt5[ATECC_CMD_LEN_CRC];
+        uint8_t pkt71[ATECC_CMD_LEN_SHA_DATA_CRC];
+        uint8_t blk64[ATECC_SHA_BLOCK];
+        char hex[ATECC_CMD_LEN_SHA_DATA_CRC * 2 + 1];
+        size_t n;
+        size_t i;
+
+        for (i = 0u; i < ATECC_SHA_BLOCK; i++) { blk64[i] = (uint8_t)i; }
+        n = atecc_msg_sha_start(pkt5, sizeof(pkt5), ATECC_HMAC_SLOT, 1);
+        bin_to_hex(pkt5, n, hex);
+        ck("外部锚点：SHA(HMAC_START, slot 4) 包 = 真机实发的 0747040400ae47",
+           n == ATECC_CMD_LEN_CRC && strcmp(hex, start4want) == 0);
+        n = atecc_msg_sha_update(pkt71, sizeof(pkt71), blk64, ATECC_SHA_BLOCK, 1);
+        ck("外部锚点：SHA(HMAC_UPDATE, 64 B) 包长 = 0x47(71) 且 param2 = 0x40(64)（小端）",
+           n == ATECC_CMD_LEN_SHA_DATA_CRC && pkt71[0] == 0x47u && pkt71[1] == ATECC_OP_SHA &&
+           pkt71[2] == ATECC_SHA_MODE_HMAC_UPDATE &&
+           pkt71[3] == (uint8_t)ATECC_SHA_BLOCK && pkt71[4] == 0x00u);
+        {
+            uint8_t crc[2];
+            int cok;
+
+            crc16_atca_le(pkt71, n - 2u, crc);
+            cok = (crc[0] == pkt71[n - 2u]) && (crc[1] == pkt71[n - 1u]);
+            ck("SHA(HMAC_UPDATE) 带 CRC 时可被外方验：自己算出末尾 CRC 与包内一致", cok);
+        }
+        n = atecc_msg_sha_hmac_end(pkt71, sizeof(pkt71), blk64, 23u, 1);
+        ck("SHA(HMAC_END) 包长 = 1+4+23+2 = 30 且 p1 = 0x02（608 的结束码）",
+           n == 30u && pkt71[0] == 30u && pkt71[2] == ATECC_SHA_MODE_608_HMAC_END);
+        ck("SHA 包超过 64 B 块 -> 拒绝（返回 0，不做静默截断）",
+           atecc_msg_sha_update(pkt71, sizeof(pkt71), blk64, ATECC_SHA_BLOCK + 1u, 1) == 0u);
+    }
+
     if (sc_bad != 0) {
         printf("FAIL ATECC608B 报文层自检（%d 项不符）\n", sc_bad);
         return 2;
     }
     printf("PASS ATECC608B 报文层自检（★ 原厂 atCRC 口径的 CRC + Random/Info/Read + Nonce/Sign"
-           " 包 + 响应解析（含签名 r||s），共 10 类）\n");
+           " 包 + **SHA/HMAC 三连** + 响应解析（含签名 r||s），共 11 类）\n");
     return 0;
 }
 
@@ -608,6 +759,15 @@ int main(int argc, char **argv)
     }
     if (strcmp(argv[1], "sign") == 0 && argc >= 4) {
         return cmd_sign(atoi(argv[2]), atoi(argv[3]) != 0);
+    }
+    if (strcmp(argv[1], "shastart") == 0 && argc >= 4) {
+        return cmd_sha_start(atoi(argv[2]), atoi(argv[3]) != 0);
+    }
+    if (strcmp(argv[1], "shaupdate") == 0 && argc >= 4) {
+        return cmd_sha_update(argv[2], atoi(argv[3]) != 0);
+    }
+    if (strcmp(argv[1], "shaend") == 0 && argc >= 4) {
+        return cmd_sha_end(argv[2], atoi(argv[3]) != 0);
     }
     if (strcmp(argv[1], "respsig") == 0 && argc >= 3) {
         int n = hex_to_bin(argv[2], g_bin, sizeof(g_bin));
