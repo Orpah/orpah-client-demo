@@ -106,20 +106,29 @@ openocd -f interface/wch-link.cfg -f target/ch32v20x.cfg \
 
 ## 自检（本仓口径）
 
+**一键回归 = `python tools\run_checks.py`**（2026-10-11 加）—— 把**不需要台架**的闸门全跑一遍：
+协议内核交叉测试（`proto/run_cross_test.py`，**16 组**）/ 接线图网表（`tools/fzz_nets.py`，9 张）/
+标注扫描 / Python 语法 / **固件编译零 warning**；报告写到 `checks_report.md`（入库）。
+接上板子再加 `--bench`（跑 `tools/check_c4g2_bench.py`：SE 唤醒·真随机数·**Slot 0 签名 + 上位机
+独立验签**·`nonce_src`/`sign_src`·上游 `verify_report` 收帧）。
+
 - **协议内核跨语言零偏差**：同一批黄金样本/向量，Python 参考实现（`orpah-over-halow`）vs
-  本仓 C 实现 —— 一键跑 **`python proto\run_cross_test.py`**（14 组快照 + 协议内核，实测 **exit 0**）。
+  本仓 C 实现 —— 直接跑 **`python proto\run_cross_test.py`**（实测 **exit 0**；含 ATECC608B 报文层
+  与**外部锚点**：器件/原厂实回的字节对）。
 - 判定口径：退出码 0 **且** 输出无 `FAIL`/`Traceback`（有些脚本自己吞异常还会往下跑）。
 
 ## 还没做（如实）
 
-- **c4 上机**：选级 / 无 RTC / 自限频 / 已签上报（协议内核与模组通路都已验，但这四项还没上机）；
-- **ATECC608B（SE）**：接线与驱动未做 —— 目前还没有让 SE 参与；
-- 与 `orpah-over-halow`（服务端/仿真器）、`orpah-openwrt-demo`（路由器侧）的**真机联调**；
-- 功耗实测（免电池取能曲线）、产线烧录流程落地。
+- **b 步的物理通路**（数据面走哪一条：USB→SPI MACBUS / RJ45 桥）——**尚未定** ✗（控制面 + 回程已通，见 `ROADMAP.md` §二）；
+- 与 `orpah-over-halow`（服务端/仿真器）、`orpah-openwrt-demo`（路由器侧）的**真机联调**（e 步）；
+- 功耗实测（免电池取能曲线）、产线烧录流程落地（手上剩 **7 颗** SE 要按同一套流程配+登记公钥）、
+**HMAC 降级密钥**目前在固件里是**演示派生**（规范 §6 的真机该把它也放进 SE）。
 
 （**已完成、别再说「未做」**：`proto/` 协议内核（与 Python 参考零偏差）、
 固件平台层 + 控制台 + 1 ms 时基 + 心跳灯 + 模组数据口（c3-2b 上机）、
-b 步台架与 L2 全链路（含已签 `ORPAH-ID-REPORT` 验签通过）。）
+b 步台架与 L2 全链路（含已签 `ORPAH-ID-REPORT` 验签通过）、
+**ATECC608B 全线通**（双锁 + Slot 0 私钥不可导出 + 真随机数；`nonce_src=se sign_src=se`；
+整帧被**上游 `verify_report` 接受**，见 `docs/atecc608b-se.md` §8.7–§8.11）。）
 
 ## 许可
 
