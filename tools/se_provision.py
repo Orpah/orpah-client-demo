@@ -123,6 +123,34 @@ ATECC_STATUS_OK = 0x00
 # ★ “刚被唤醒”的状态（出处同上：`CMD_STATUS_WAKEUP 0x11` ✓；唤醒应答 `04 11 33 43` 里就是它 ✓）
 #   2026-10-11 实测：命令响应里读到它 = 读到了**旧的唤醒应答**（不是这条命令的响应 ✗）⇒ 重同步 ✓
 ATECC_STATUS_WAKEUP = 0x11
+# ★ “器件还在收尾”的状态（出处同上：`CMD_STATUS_PARSE 0x03` = bad length/opcode/param ✓）：
+#   ★★ 2026-10-11 实测 —— 它**不是“命令失败”** ✗，而是“上一条命令还在收尾，本条被拒” ✓：
+#     · 命令之间不留间隔 ⇒ 长度扫描 19 个里 **9 个失败** ✗，且与上一次成功/失败**严格交替** ✓
+#       （上一条成功 ⇒ 下一条首块就被拒；上一条报错 ⇒ 下一条通畅）；
+#     · 失败时的**请求/响应原始字节完全规范** ✓（START 0747040400ae47 / UPDATE 长度 0x47+块 40 /
+#       END 长度 0x2B+尾长 ✓）⇒ 不是包写错 ✗；
+#     · 命令间隔 0.5 s 后降到 **2/19** ✓；交错重跑 n=100/65/65/100 ⇒ **0/4 全 OK** ✓。
+#   ⇒ 器件只回了一个状态包 ⇒ 它**没有执行**本命令 ⇒ **重发本命令是安全的** ✓，
+#     且安全性由判据自证：结果必须与软件 HMAC 逐字节相同 ✓（若被重复喂过一段，摘要必不同 ✗）。
+ATECC_STATUS_PARSE = 0x03
+# ★★ SHA/HMAC 序列里**每两条命令之间**的间隔（毫秒）—— **出处 = 2026-10-11 实测** ✓：
+#   · 不加间隔：长度扫描 19 个里 **9 个失败** ✗（且与上一次成功/失败**严格交替** ✓）；
+#   · 命令之间插 50 ms：长度 64/100/**167** B 三种 × 9 条命令 ⇒ **全部 OK** ✓；
+#   · 失败时的**请求/响应原始字节完全规范** ✓ ⇒ 不是包写错，而是“器件还在收尾” ✗。
+#   ⚠ 50 ms 只在**轻负载**下够用 ✗：实测（2026-10-11）“只读半证”里前面刚跑完一轮 23 B 的 END、
+#     紧接着的 **100 B 第一块 UPDATE 连续被拒 3 次** ✗ ⇒ 已提到 **150 ms** ✓（与 `WAIT_MS_CRYPTO` 同量级 ✓）。
+#   ★ 而且它只是第一道缓冲 ⇒ 真正兜底的是 `ATECC_STATUS_PARSE` 分支里的“重发前先等待” ✓。
+HMAC_STEP_GAP_MS = 150
+# ★ 收到 `ATECC_STATUS_PARSE`（器件还在收尾）后，**重发本命令之前**要等的毫秒数（第 k 次重发
+#   等 `WAIT_MS_PARSE_RETRY × (k+1)` ⇒ 递增退避 ✓）。
+#   实测教训：不等就重发 ⇒ 150 ms 也救不回来，**连拒 3 次** ✗（它本质是“等”而不是“重”✓）；
+#   固定 200 ms 也不够（HS256 用例 3 在 `Sign` 之后失败 ✗，因 Sign 要跑 ~1 s ✓）⇒ 递增。
+WAIT_MS_PARSE_RETRY = 600
+# ★★ `Sign` 之后**必须等**的毫秒数（出处 = 实测 `build_ms ≈ 1031 ms`，见台账/§8.10 ✓）：
+#   Sign 是器件里最慢的一条（椭圆曲线 ✓），它跑着的时候下一条命令必被拒（`0x03`）✗ ——
+#   实测 2026-10-11：`HMAC → Sign → HMAC` 序列里，第三次调用连续 3 次被拒 ✗；
+#   而 `HMAC → HMAC`（无 Sign）在 150 ms 步间隔下就全 OK ✓ ⇒ 差异就是 Sign 的收尾 ✓。
+SIGN_SETTLE_MS = 1200
 # ★ 原厂状态表里**认识**的那些（出处 `calib_command.h` 的 `CMD_STATUS_*`，与 `proto/atecc_msg.h` 同一份 ✓）：
 #   0x00 ok / 0x01 checkmac / 0x03 parse / 0x05 ecc / 0x07 selftest / 0x08 rng / 0x0F exec /
 #   0x11 wakeup / 0xFF comm。★ **不在这张表里的值 ⇒ 输出缓冲里的不干净字节**（不是器件说的状态 ✗），
@@ -300,6 +328,27 @@ class Se:
                 nm = rct.py_atecc_status_name(st) if HAVE_RCT else "?"
                 if st == ATECC_STATUS_OK:
                     return 0, raw[:4], "状态包：状态 0x00（ok，无数据）"
+                if st == ATECC_STATUS_PARSE:
+                    # ★★ 0x03 = parse error（bad length/opcode/param）—— 它**不是“命令失败”** ✗，
+                    #   实测（2026-10-11）它是“**器件还在给上一条命令收尾，此刻又收到新命令**” ✓：
+                    #     · 命令之间不留间隔 ⇒ 长度扫描 19 个里 **9 个失败** ✗，且与上一次成功/失败
+                    #       **严格交替** ✓（上一条成功 ⇒ 下一条首块就被拒；上一条报错 ⇒ 下一条通畅）；
+                    #     · 失败时的**请求/响应原始字节完全规范** ✓（`START 0747040400ae47`、
+                    #       UPDATE 长度 `0x47`+`40` 块、END `0x2B`+尾长 ✓）⇒ 不是包写错 ✗；
+                    #     · 间隔 0.5 s 后降到 **2/19** ✓；交错重跑 n=100/65/65/100 ⇒ **0/4 全 OK** ✓。
+                    #   ⇒ 器件只回了一个状态包 ✓ ⇒ 它**没有执行**本命令 ⇒ **重发本命令是安全的** ✓。
+                    #   ★ 前提由**判据**保证（不靠“我觉得”✓）：结果必须与软件逐字节相同 ✓
+                    #     —— 若真被重复喂过一段，摘要必不同 ⇒ 当场看得见 ✗。
+                    if self.verbose:
+                        print("      · 4 字节包状态 0x03（器件还在收尾，命令未执行）"
+                              " ⇒ 先等 %d ms 再重发本命令 ✓"
+                              % (WAIT_MS_PARSE_RETRY * (k + 1)))
+                    # ★★ 重发之前**必须真的等一段** ✗：不等就重发 ⇒ 连拒 3 次也救不回来
+                    #   （实测 2026-10-11：只读半证 100 B 那条就是这么连拒 3 次的 ✗）。
+                    #   递增退避：第 k 次等 (k+1)×600 ms ⇒ 600/1200/1800 ✓ —— 盖住“器件正在算
+                    #   Sign（~1 s）”那种长收尾 ✓。
+                    self._settle(WAIT_MS_PARSE_RETRY * (k + 1))
+                    continue
                 if st in ATECC_RETRY_STATUS or st not in ATECC_KNOWN_STATUS:
                     # ★ 这类不是“命令失败” ✗，而是**没读到这条命令的响应**（旧内容/脏字节/CRC 没收对 ✓）：
                     #   ⇒ **不当错误**，重新同步（下一轮会重发唤醒令牌 + 重发本命令 ✓）。
@@ -425,6 +474,8 @@ class Se:
           `SHA(HMAC_START, param2=slot)` → 若干个 `SHA(HMAC_UPDATE, 64 B)` →
           `SHA(608_HMAC_END | TEMPKEY, 余下<64 B)` ⇒ 响应 32 B 摘要 ✓。
         ★ 这个函数的**判据在调用方**：算出来的必须与软件 HMAC 逐字节相同 ✓（不靠“长得对”✓）。"""
+        # ★ 每条命令之间留间隔（HMAC_STEP_GAP_MS，出处见该常量处）= “器件还在收尾”那个窗口 ✗
+        self._settle(HMAC_STEP_GAP_MS)
         pkt = ci.atecc_pkt(OP_SHA, SHA_MODE_HMAC_START, slot, self.crc)
         rc, resp, note = self.cmd(pkt, 4, wait_ms=WAIT_MS_CRYPTO)
         if rc != 0:
@@ -432,6 +483,7 @@ class Se:
         rest = len(msg) % SHA_BLOCK if len(msg) else 0
         off = 0
         while len(msg) - off >= SHA_BLOCK:
+            self._settle(HMAC_STEP_GAP_MS)
             pkt = ci.atecc_pkt(OP_SHA, SHA_MODE_HMAC_UPDATE, SHA_BLOCK, self.crc,
                                extra=bytes(msg[off:off + SHA_BLOCK]))
             # ★ UPDATE **不自动重发** ✗：重发会把同一段数据再喂一遍 ⇒ 摘要就错了 ✗✗
@@ -440,6 +492,7 @@ class Se:
                 return None, "HMAC_UPDATE@%d：%s" % (off, note)
             off += SHA_BLOCK
         tail = bytes(msg[off:off + rest])
+        self._settle(HMAC_STEP_GAP_MS)
         pkt = ci.atecc_pkt(OP_SHA, SHA_MODE_608_HMAC_END | SHA_TARGET_TEMPKEY, len(tail),
                            self.crc, extra=tail)
         # ★ END 同样**不自动重发** ✗（它会消耗/结束那段上下文 ⇒ 重发语义不明）
@@ -458,6 +511,9 @@ class Se:
         rc, resp, note = self.cmd(pkt, 1 + 64 + (2 if self.crc else 0), wait_ms=WAIT_MS_CRYPTO)
         if rc != 0:
             return None, "Sign：" + note
+        # ★★ Sign 是器件里最慢的一条（~1 s，见 SIGN_SETTLE_MS 的出处注释）⇒ 等它收尾，
+        #   否则**紧接着的下一条命令必被拒**（`0x03`）✗（实测踩到：HS256 用例 3 ✓）。
+        self._settle(SIGN_SETTLE_MS)
         return resp[1:65], note
 
 

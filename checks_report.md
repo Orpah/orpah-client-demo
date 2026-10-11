@@ -1,6 +1,6 @@
 # checks_report.md —— `tools/run_checks.py` 的输出（**入库**，同隔壁仓惯例）
 
-跑的时间：2026-10-11 20:28:17
+跑的时间：2026-10-11 21:03:45
 
 判定口径：**退出码 0 且输出里没有 `FAIL` / `Traceback`**（只看退出码会漏 —— 有些脚本自己吞异常）。
 
@@ -64,7 +64,7 @@ cstep-nanoch32-atecc608b.fzz -> f:\git\orpah-client-demo\hardware\wiring\cstep-n
   --- 逐网核对（模块侧不限实例编号）---
     ✓ MCU.PB7/USB2DM  <->  电阻.connector1  <->  安全元件.SDA  （图上 = R1.connector1  U5.SDA  U6.PB7/USB2DM）
     ✓ MCU.PB6/USB2DP  <->  电阻.connector1  <->  安全元件.SCL  （图上 = R2.connector1  U5.SCL  U6.PB6/USB2DP）
-    ✓ MCU.VDDA  <->  电阻.connector0  <->  安全元件.VCC  （图上 = R2.connector0  U5.VCC  U6.VDDA）
+    ✓ MCU.VDDA  <->  电阻.connector0  <->  安全元件.VCC  （图上 = R1.connector0  U5.VCC  U6.VDDA）
     ✓ MCU.GND  <->  安全元件.GND                      （图上 = U5.GND  U6.GND）
     · 非连线（部件内部同网 / 空孔）：U5.NC  @E7
     · 非连线（部件内部同网 / 空孔）：U5.NC  @E6
