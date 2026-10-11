@@ -16,18 +16,20 @@ SE 与上拉的 3V3 从 CH347F 出 ✓（接线见 `hardware/wiring/README.md` �
 
     read          只读：读配置 128 B + 判 Config/Data 锁没锁 + 与**参照配置**逐字节比对
     config-hmac   ⚙ 把 HMAC 槽(slot 4)的 WriteConfig 由出厂 8 改成 0：**只能在锁配置之前** ✓
-    write-hmac    ✎ 把 32 B 降级 HMAC 钥**明文**写进 slot 4（数据区未锁时只允许 32 B 写 ✓）
+    lock-config   ✗ 锁配置区（之后 SE 的槽位/地址/I²C 参数就定死了）
+    write-hmac    ✎ 把 32 B 降级 HMAC 钥**明文**写进 slot 4（★ 必须在 `lock-config` **之后** ✗）
     hmac-verify   ★ 在器件里用 slot 4 算一次 HMAC，与软件 HMAC **逐字节对拍**
                     （slot 4 是 `IsSecret` ⇒ 读不出来 ✗ ⇒ 这是“钥真写进去了”的唯一证据 ✓）
-    lock-config   ✗ 锁配置区（之后 SE 的槽位/地址/I²C 参数就定死了）
     genkey        ✗ 生成 Slot 0 的 P-256 私钥并**只**导出公钥（私钥物理不出芯片 ✓）
     lock-data     ✗ 锁数据区（之后私钥再也改不了 —— 这正是规范 §6 要的“一代终身”✓）
     verify        复验：真随机数 + `Nonce`+`Sign` 签一条固定摘要 + **公钥重算 = 登记** + 独立验签
     all           一条龙：按上面这个顺序逐步走（每步都先核对再动，哪步不过就**停在那儿** ✗）
 
 ⚠ **顺序有硬约束**（都不是审美问题 ✗）：`config-hmac` 必须在 `lock-config` **之前**（配置一锁就改不了 ✗）；
-`write-hmac` 必须在 `lock-data` **之前**（数据区一锁，明文写就写不进去了 ✗）；
-`genkey` 必须在 `lock-config` **之后**（未锁配置时器件拒绝密钥类操作 ✓ 实测 §8.5/§8.7）。
+**一切数据区写**（`write-hmac` / `genkey`）必须在 `lock-config` **之后** ✗ ——
+未锁配置时器件直接回 `0x0F cannot execute` ✓（实测 §8.18：`write-hmac` 放在 `lock-config` 之前时，
+写 slot 4 与 slot 8 **都**被拒 ⇒ 与“哪个槽”无关 ✗，是**器件状态**不允许 ✓）；
+`write-hmac` 又必须在 `lock-data` **之前**（数据区一锁，明文写就写不进去了 ✗）。
 
 用法（一次只跑一步最稳；`all` 用于新片、也要带 `--yes`）：
 
@@ -430,6 +432,32 @@ def lock_state(cfg):
     return cfg[86], cfg[87]
 
 
+def cfg_ident_diff(cfg):
+    """**身份字节**（`cfg[0..15]`）与参照的差异 —— **只作 info，不是判据** ✗。
+
+    ★★ 2026-10-11 **实测**（两颗同型号、都没被动过的片子）：参照那颗与这颗的差异
+      **恰好全落在 0..15** ✓（`cfg[2] ED→F2`、`cfg[3] D5→12`、`cfg[8..11]`、`cfg[14] 59→55`）——
+      那是**每颗都不一样**的序列号/出厂字节 ✓（`SN03(4) + RevNum(4) + SN48(5) + AES/I2C…`，
+      字段顺序见 §8.4 与 `HMAC_SLOT_BYTE` 那段注释）。
+    ⇒ 把它当“这颗被动过”的判据是**错的** ✗ —— 会把**每一颗新片都拒掉** ✗✗
+      （本轮就真拦了一次 ✓：`read` 在**没锁的新片**上报 FAIL，而那颗完全正常 ✓）。
+    """
+    ref = bytes.fromhex(REF_CONFIG_HEX)
+    return [i for i in range(16) if cfg[i] != ref[i]]
+
+
+def cfg_func_diff(cfg):
+    """**功能位段**（`cfg[16..127]`，跳过 86/87 两个锁字节）与参照的差异 —— **这才是判据** ✓。
+
+    为什么到 16 开始 ✓：`SlotConfig`(20..51) + 计数器 + `KeyConfig`(96..127) 全在里面 ——
+    产线流程**只依赖这些**（槽能不能读/写、钥类型、地址…）✓；
+    而 `0..15` 是每颗都不同的身份字节 ⇒ 排除 ✗（理由见 `cfg_ident_diff()`）。
+    锁字节 86/87 排除 ✗ —— 它们本来就会因**锁/未锁**而变（`55`↔`00` ✓）。
+    """
+    ref = bytes.fromhex(REF_CONFIG_HEX)
+    return [i for i in range(16, 128) if i not in (86, 87) and cfg[i] != ref[i]]
+
+
 def slotcfg_decode(cfg, slot):
     """解 `SlotConfig[slot]` 的位段；越界返回 None。
 
@@ -482,18 +510,24 @@ def step_read(se, args):
     if len(ref) != 128:
         print("warn 参照配置常量长度不对（%d）—— 这是本工具的 bug" % len(ref))
         return 1, cfg
-    # ★ 逐字节比时**排除 86/87**：那两个字节**就是**锁状态（`55`=未锁 / `00`=已锁 ✓）——
-    #   拿它们去比“参照的 55 55”只会把“已经锁好”的片子判成不一致 ✗（今天这颗就是已锁 ✓）。
-    skip = {86, 87}
-    diff = [i for i in range(128) if i not in skip and cfg[i] != ref[i]]
+    # ★ 判据 = **功能位段**（`cfg[16..127]`，跳 86/87 锁字节）✓；
+    #   `cfg[0..15]`（SN + 出厂字节）**每颗都不一样** ⇒ 只作 info ✗（2026-10-11 实测踩过，见 §8.18）。
+    ident = cfg_ident_diff(cfg)
+    if ident:
+        print("  info 身份字节（cfg[0..15]）与参照差 %d 处：%s ✓ **这不是判据**"
+              % (len(ident),
+                 ", ".join("cfg[%d] %02X→%02X" % (i, ref[i], cfg[i]) for i in ident[:6])))
+        print("       （序列号段每颗都不同 ✓ —— 实测两颗同型号的差异**恰好全落在 0..15**，"
+              "功能位段全同 ✓）")
+    diff = cfg_func_diff(cfg)
     if not diff:
-        print("PASS 除锁状态字节(86/87)外，126 B 与**参照配置**逐字节一致 ✓"
-              "（2026-10-11 那颗的出厂配置，§8.4）")
-        print("     ⇒ 这颗跟参照是同一批/同型号、没被动过 ✓（锁状态按上面那两行判）")
+        print("PASS 功能位段（cfg[16..127]，跳 86/87 锁字节）与**参照配置**逐字节一致 ✓"
+              "（2026-10-11 参照片，§8.4）")
+        print("     ⇒ 这颗与参照是**同型号/同批**、位段没被动过 ✓（锁状态按上面那两行判）")
         return 0, cfg
-    print("FAIL 与参照配置有 %d 处不同（前几处：%s）"
+    print("FAIL 功能位段与参照有 %d 处不同（前几处：%s）"
           % (len(diff), ", ".join("cfg[%d] %02X→%02X" % (i, ref[i], cfg[i]) for i in diff[:6])))
-    print("     ⇒ **先停下** ✗：这颗芯片被动过 / 不是同批 / 不是同型号。\n"
+    print("     ⇒ **先停下** ✗：这颗芯片的**位段**被动过 / 不是同型号。\n"
           "       要么人工核过再说，要么别锁（锁是不可逆的 ✗）。")
     return 2, cfg
 
@@ -674,9 +708,9 @@ def step_config_hmac(se, args, cfg=None):
         print("     （这一步必须赶在 `lock-config` **之前** ✓；已锁的片子只能重换一颗 ✗）")
         return 2, cfg
     ref = bytes.fromhex(REF_CONFIG_HEX)
-    diff = [i for i in range(128) if i not in (86, 87) and cfg[i] != ref[i]]
+    diff = cfg_func_diff(cfg)
     if diff:
-        print("FAIL 出厂配置与参照不一致（%d 处，如 %s）⇒ 先停下 ✗（不改来历不明的片子）"
+        print("FAIL 功能位段与参照不一致（%d 处，如 %s）⇒ 先停下 ✗（不改来历不明的片子）"
               % (len(diff), ", ".join("cfg[%d] %02X→%02X" % (i, ref[i], cfg[i]) for i in diff[:4])))
         return 2, cfg
     off = HMAC_SLOT_BYTE
@@ -717,7 +751,21 @@ def step_write_hmac(se, args, cfg=None):
     """把 32 B 降级 HMAC 钥**明文写**进 slot 4（数据区未锁 + WriteConfig 已放开 ✓）。
 
     ⚠ 数据区未锁时**只允许 32 B 写** ✓（原厂 `calib_write_bytes_zone()` 的 docstring 原话），
-      所以这里必须整块写、不能按字写 ✗。"""
+      所以这里必须整块写、不能按字写 ✗。
+    ⚠★ **必须在 `lock-config` 之后** ✗：未锁配置时器件直接回 `0x0F cannot execute` ✓
+      （2026-10-11 实测：slot 4 与 slot 8 **都**被拒 ⇒ 与槽无关 ✓，见 §8.18）⇒ 先在这里拦下 ✓。"""
+    if cfg is None:
+        cfg, note = se.read_config()
+        if cfg is None:
+            print("FAIL 读配置失败：%s" % note)
+            return 2, None
+    lv, lc = lock_state(cfg)
+    if lc != 0x00:
+        print("FAIL 配置区**还没锁**（LockConfig = 0x%02X）⇒ 现在写数据槽器件会拒 ✗" % lc)
+        print("     实测（2026-10-11）：`Write` 到数据槽回 `0x0F cannot execute` ✓（§8.18）")
+        print("     ⇒ 顺序应是 `config-hmac` → **`lock-config`** → `write-hmac` ✓"
+              "（未锁配置时器件拒一切数据区写 ✓）")
+        return 2, cfg
     print("  ✎ 把 32 B HMAC 钥写进 slot %d（param1 = 0x%02X、param2 = 0x%02X ✓）"
           % (HMAC_SLOT, ZONE32_DATA, HMAC_SLOT << 3))
     key = load_hmac_key(args)
@@ -821,8 +869,14 @@ def step_hmac_readonly(se, args, cfg=None):
     return 0, cfg
 
 
-STEPS = ("read", "config-hmac", "write-hmac", "hmac-verify",
-         "lock-config", "genkey", "lock-data", "verify")
+# ★★ 步骤顺序 = **硬约束**（2026-10-11 实测把错误顺序撞出来 ✗，见 §8.18）：
+#   ① `config-hmac` 必须**在 `lock-config` 之前**（配置区一锁 ⇒ `WriteConfig` 永远改不了 ✗）；
+#   ② 而**一切数据区写**（`write-hmac` / `genkey`）必须**在 `lock-config` 之后** ✗ ——
+#      未锁配置时器件回 `0x0F cannot execute` ✓（实测：写 slot 4 与 slot 8 **都**被拒 ⇒
+#      与“哪个槽/IsSecret”无关 ✗，是器件状态不允许 ✓）；
+#   ③ `write-hmac` 再必须**在 `lock-data` 之前**（数据区一锁 ⇒ 明文写不进去 ✗）。
+STEPS = ("read", "config-hmac", "lock-config", "write-hmac", "hmac-verify",
+         "genkey", "lock-data", "verify")
 
 
 # ★ `hmac-readonly` **故意不放进 `STEPS`** ✗ —— 它是“已锁的片子也能跑”的**只读**验证，
