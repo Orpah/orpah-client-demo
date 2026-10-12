@@ -131,6 +131,12 @@
   ⇒ 口径：CI 证明「**可移植配置**换环境仍编得过」✓；**“烧录那份”只能由本机 MounRiver 那条闸门证** ✓ —— 两个声音别混 ✗。
   `run_checks.py` 只做**透传**（环境里有 `ISA`/`INTFAST` 就带给 make ✓），并把非默认值**打进闸门标签** ✓
   （免把“可移植配置编过了”误读成“烧录固件编过了” ✗）。
+  ★★ **第二次运行（2026-10-12）又量出一条同源的** ✗：**链接行也必须带 `$(ARCH)`** ✓ ——
+  `riscv64-unknown-elf-gcc` 是**64 位默认**驱动 ⇒ 不带 `-march/-mabi` 时按 `elf64-littleriscv` 链 ✗
+  （实测 `target emulation 'elf32-littleriscv' does not match 'elf64-littleriscv'` /
+  `ELFCLASS32 incompatible with ELFCLASS64` / `final link failed: file in wrong format`），
+  而 MounRiver（`riscv-none-embed-*`，默认就是 rv32imac/ilp32）**不带也碰巧对** ✓。
+  ⇒ 已把 `$(ARCH)` 加进 `LDFLAGS` ✓（本机复验：产物 SHA256 **未变** ✓，烧录那条路不受影响 ✓）。
 - **常量/阈值不许拍脑袋**：照上游做法先量（零假设分布/实测），并在注释里写"怎么量出来的"。
   常态周期这类基准要有**单一源**（一处定义，多处引用）。
 - 真机结论只认**实测**（哪块板、哪版固件、什么命令、什么现象）；没做过就写"未做"。

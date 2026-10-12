@@ -115,6 +115,14 @@ make rebuild
 通用工具链上 ISR 会退化成普通函数）；`all` 目标会在这种配置下打一行 `NOTE:` 提醒 ✓。
 ⇒ 口径：CI 证明的是「**可移植配置**换环境仍编得过（零 warning）」✓，**不是**「烧录固件编得过」✗。
 
+★ 还有一条**同源**的（2026-10-12 **第二次 CI 实测**）：**链接也必须带 `$(ARCH)`** ✓。
+`riscv64-unknown-elf-gcc` 是**64 位默认**的驱动 ⇒ 链接行不带 `-march/-mabi` 时它按
+`elf64-littleriscv` 去链 ✗（实测：`target emulation 'elf32-littleriscv' does not match
+'elf64-littleriscv'`、`file class ELFCLASS32 incompatible with ELFCLASS64`、`final link failed:
+file in wrong format`）。MounRiver 那份叫 `riscv-none-embed-*`、默认就已经是 rv32imac/ilp32 ⇒
+**不带也碰巧对** ✓ —— 又一次“在一套工具链上碰巧能过”被当成通例 ✗。现已在 `LDFLAGS` 里带上 ✓
+（本机实测：链接行带上后产物 `SHA256` **一个字节没变** ✓）。
+
 产物（实测尺寸）：
 
 ```

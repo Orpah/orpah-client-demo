@@ -75,7 +75,17 @@ CFLAGS = $(ARCH) -Os -ffunction-sections -fdata-sections \
 
 ASFLAGS = $(ARCH) -ICore -IPeriph
 
-LDFLAGS = -nostartfiles -nostdlib -T $(LINK) \
+# ★★ 链接也要带 `$(ARCH)`（2026-10-12 **第二次 CI 实测**）：`riscv64-unknown-elf-gcc` 是
+#   **64 位默认**的驱动 ⇒ 不带 `-march/-mabi` 时它按 `elf64-littleriscv` 去链，
+#   和我们编出来的 32 位对象冲突 ✗（实测报错原文，一字未改）：
+#     `target emulation 'elf32-littleriscv' does not match 'elf64-littleriscv'`
+#     `.../build/Core/main.o: file class ELFCLASS32 incompatible with ELFCLASS64`
+#     `final link failed: file in wrong format`
+#     `collect2: error: ld returned 1 exit status`
+#   （MounRiver 那份叫 `riscv-none-embed-*`、默认就已经是 rv32imac/ilp32 ⇒ 不带也**碰巧**对 ✓；
+#    这就是"在一套工具链上碰巧能过"被当成通例的又一例 ✗ —— 与上面 §ISA 那条同源 ✓。）
+#   ⇒ 链接显式带上：它同时决定 `-lgcc` 取哪一份 multilib ✓（少了它取到的是 64 位那份 ✗）。
+LDFLAGS = $(ARCH) -nostartfiles -nostdlib -T $(LINK) \
           -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map
 
 # libgcc：**必须排在目标文件之后**（见下面 .elf 规则：放在 $(OBJS) 后面）。
