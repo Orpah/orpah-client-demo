@@ -28,12 +28,36 @@
 import argparse
 import datetime
 import os
+import re
 import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 PY = sys.executable or "python"
+
+# ★★ 2026-10-12（CI 三系统矩阵第一次跑出来的教训 ✓）：判“红”的同时**必须把“为什么红”留在日志里** ✗
+#   起因：Windows / macOS 那两栏只报「FAIL 1 项未过：['编译 ID 流水线…']」✗ —— 真正的编译报错行
+#   被原来的“尾部 8 行”裁掉了 ✗ ⇒ 手上有完整日志也**说不清为什么红** ✗（只能再跑一次去猜 ✗）。
+#   所以：失败时额外把**报错行**（关键词命中）也打出来 ✓ —— 判据会喊“红了”，也得会说“因为什么”。
+ERR_PAT = re.compile(r"(error|Error|ERROR|FAIL|Traceback|not found|undefined reference|"
+                     r"cannot find|unrecognized|无法|找不到)")
+
+
+def show_slices(out, n_err=20, n_tail=25):
+    """把闸门输出切成“值得留存/打印的那些行”：报错行 + 尾部。
+
+    返回 list[str]。**打红的时候用它**；绿的时候只需要短短一眼（尾部 8 行）。
+    """
+    lines = out.splitlines()
+    errs = [l for l in lines if ERR_PAT.search(l)]
+    sel = []
+    if errs:
+        sel.append("(报错行，最多 %d 条)" % n_err)
+        sel += errs[:n_err]
+    sel.append("(尾部 %d 行)" % n_tail)
+    sel += lines[-n_tail:]
+    return sel
 
 # 缺 sh 时的候选（隔壁仓的教训：`shutil.which("sh")` 会找到 WSL 的 bash.exe，它看不到 F:\ ✗）
 SH_CANDS = [r"D:\Program Files\Git\bin\sh.exe",
@@ -75,7 +99,8 @@ def run(label, argv, cwd=None, timeout=1800):
     bad = ("FAIL" in out) or ("Traceback" in out)
     ok = (rc == 0) and not bad
     print("   -> rc=%d%s" % (rc, "" if ok else "   ✗（%s）" % ("rc≠0" if rc else "输出里有 FAIL/Traceback")))
-    for ln in out.splitlines()[-8:]:
+    # ★ 绿：几行就够（别把日志灌满 ✗）；红：**把报错行也打出来** ✓（见 ERR_PAT 那段注释）
+    for ln in (out.splitlines()[-8:] if ok else show_slices(out)):
         print("      | " + ln)
     sys.stdout.flush()
     return {"label": label, "argv": argv, "rc": rc, "ok": ok, "out": out}
@@ -194,8 +219,9 @@ def main():
             lines.append("| ⏭ skip | %s | — | — |" % s)
         lines += ["", "## 各闸门输出的尾部（便于「上次为什么红」一眼可查）", ""]
         for r in res:
+            body = (r["out"].splitlines()[-25:] if r["ok"] else show_slices(r["out"]))
             lines += ["### %s（rc=%d，%s）" % (r["label"], r["rc"], "PASS" if r["ok"] else "FAIL"),
-                      "", "```", "\n".join(r["out"].splitlines()[-25:]), "```", ""]
+                      "", "```", "\n".join(body), "```", ""]
         lines += ["## 需要台架的（不在默认里）", "",
                   "`--bench` 会另外跑 `tools/check_c4g2_bench.py`（SE 唤醒/Random 真随机数/"
                   "**Slot 0 签名 + 上位机用 Slot 0 公钥独立验签**/`nonce_src`/`sign_src`/"
