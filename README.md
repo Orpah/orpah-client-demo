@@ -155,6 +155,14 @@ openocd -f interface/wch-link.cfg -f target/ch32v20x.cfg \
 ★★ **同日第三次运行全绿** ✓（`bfb08ef`，2026-10-12，整条含固件编译共 **26 s**）——
 **三次运行的真实价值是把三处“在一套工具链上碰巧能过”变成了显式旋钮** ✓：`zicsr` 写法 ✗、
 WCH 中断属性语义 ✗、链接 emulation ✗（每处都附实测报错原文，见 `firmware/Makefile` 注释 ✓）。
+★★★ **三系统矩阵全绿** ✓（`978f1ee`，2026-10-12：macOS 35 s / Windows 1 m 13 s / Linux 36 s，
+三份 `checks_report-<os>` 产物齐 ✓）—— **而它先抓到一个真缺陷** ✓：
+`proto/id_cli.c` 少 include `ecdsa.h` ✗ ⇒ `ecdsa_sign_p256_msg()` 成了**隐式声明** ——
+在 GCC 13 / MounRiver 8.2 / MSVC 上只是**警告**（本机 + Linux 一路编得过 ✗），
+在 **GCC 14+ / Clang 15+ 上默认就是错误** ✗ ⇒ 两个新工具链的栏位当场红 ✓。
+两处落实：补 include ✓；**把"隐式函数声明"主动当错误**（`run_cross_test.py` 加
+`-Werror=implicit-function-declaration` ✓）—— 口径是 **本仓的闸门要比任何单一编译器都严** ✓。
+（这就是"第三方环境交叉验证"的意义：**"在手上这台编得过"从来不算证据** ✗。）
 **模组侧判据（2026-10-12 入库）= `python tools\check_mod_side.py`** —— 判「`idsend` 的帧真的进了模组」
 （模组口 `[mbus rx] <帧长+8>` ✓）+ 「同一帧被上游接受」✓；**它故意不判 SE**
 （无 SE 的台架上那几条必然失败；要判 SE 用 `tools\check_c4g2_bench.py`）✓。
