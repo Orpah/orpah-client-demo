@@ -20,7 +20,8 @@ ORPAH（用无线技术找人）五仓里的**客户端侧**：**CH32V203 + 安�
 >    `[mbus rx] **415** byte(s)`（= 帧 407 + 8 B HGIC 头 ✓），同一帧仍被上游接受 ✓
 >    （一键 = `py tools\check_mod_side.py`，见 `docs/atecc608b-se.md` §8.31）。
 > ⑥ **联合台架（SE + 模组）一跑到底全绿**（2026-10-12）：`sign_src=se` ✓、`build_ms` **704 ms** ✓、
->    模组口 `[mbus rx] 415` ✓、上游 **`accepted=True level=0 trust=high`** ✓ —— 顺带修掉真 bug：
+>    模组口 `[mbus rx] 415` ✓、上游 **`accepted=True level=0 trust=high`** ✓；**HS256 腿同台也过** ✓
+>    （`level=1 len=364`、`[mbus rx] 372`、`trust=medium`、两把钥都不出芯片）—— 顺带修掉真 bug：
 >    ES256 的 `Nonce`/`Sign` 之间多发的那条唤醒令牌（`Sign` 间歇 `0x0F`，17% ✗ ⇒ **0/15** ✓），
 >    见 §8.32。
 > **未做（如实）**：`0x64` 那颗芯片的地址谜团（§9.0 唯一还开着的一条）；

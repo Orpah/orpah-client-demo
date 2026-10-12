@@ -1841,6 +1841,17 @@ FAIL 上游不接受（error=signature_invalid）
 ⇒ 这张**联合台架**上「**真 SE 签名 → 帧进模组 → 上游用库里的钥接受**」**一跑到底全绿** ✓✓
 （`check_c4g2_bench.py --from-keystore` 自报 **PASS** ✓）。
 
+★★ **同一天稍后：HS256 腿也在这张联合台架跑过了** ✓（`idlevel sign_fail` ⇒ L1；跑完已 `idlevel auto` 复位 ✓）：
+
+| 项 | 实测 |
+|---|---|
+| 帧 | `level=1 alg=HS256 len=**364** build_ms=481` ✓ |
+| 上游（★ 用**库里那把降级 HMAC 钥**验 ✓） | **`accepted=True level=1 trust=medium`** ✓ |
+| 模组侧 | `[mbus rx] **372** byte(s)` = 364 + 8 ✓ |
+| `se_hits` | `ES256 slot 0 ok=26 fail=0 / HS256 slot 4 ok=2 fail=0` ✓ ⇒ **两把钥都没出芯片** ✓ |
+
+⇒ **两条路**（L0 真 SE 签名 / L1 真 SE HMAC）在这张联合台架上**都一跑到底全绿** ✓。
+
 ★★ **两条教训（都值得写进“别再犯”）**：
 
 1. **修好一条路的时序口径之后，要问“还有哪条路用同一套编排”** ✗ —— §8.29 修了 SHA，
