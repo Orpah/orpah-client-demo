@@ -155,7 +155,10 @@ C:\Python313\python.exe tools\check_c4g2_bench.py --from-file log.txt   # 离线
 | 2b | `se` 显示的**响应字地址** | `resp_waddr=0x00` | ★ **2026-10-11：`resp_waddr=0x00`** ✓ ⇒ §3b 那条"响应读 `0x00`"的推断**上机确认** ✓ |
 | 3 | 连按两次 `se` | 两次 32 B **不同**（RNG 真的在动） | ★ **2026-10-11：不同** ✓（`3D3EFA3E…` / `EFB379CD…`）——★ 但**第 2 次那条"唤醒判据"会报 `不是 ✗`**（器件本来就醒着，读到的是上一条响应的 count `23 …`）⇒ **不是故障** ✓，见 §8.8 |
 | 4 | 控制台 `id` | `nonce_src=se`（拔掉 SE 则**如实**回退 `soft`） | ★★ **2026-10-11：`nonce_src=se`** ✓✓ —— **c4-γ-2 的判据达成** ✓（2026-10-06 那条 `soft` 是 **CRC 修好之前**的状态 ✓）|
-| 5 | 控制台 `idsend` + COM24 | 模组侧 `[mbus rx] <帧长+8> byte(s)`、上游 `verify_report` 接受 | ★ **上游那一半 2026-10-11 深夜已过** ✓：`idlevel auto` ⇒ `level=0` `alg=ES256` `frame_len=407` ⇒ 上游 `accepted=True level=0 trust=high` ✓；`idlevel sign_fail` ⇒ `level=1` `alg=HS256` `frame_len=364` ⇒ `accepted=True level=1 trust=medium` ✓（两条都用**真密钥库** `orpah.db` 里登记的那两把钥验 ✓，见 §8.28）。★ **模组侧那一半 2026-10-12 也补上了** ✓：换到带模组的台架（`cstep-ch347f-txah-evb-nanoch32`，**不带 SE**）后 `idsend` ⇒ 模组口 `[mbus rx] **415** byte(s)` = 帧 407 + **8 B HGIC 头** ✓，同一帧再交上游判 ⇒ `accepted=True level=0 trust=high` ✓（★ 本台架无 SE ⇒ 用 **demo 派生钥**判；一键 = `py tools\check_mod_side.py`，见 §8.31）✓。★ 帧长从旧的 **395 → 407** 是**真片 SN 更长**造成的（`CN-T1AN1V-X3HANM2E20-H` = 23 字符 vs 旧演示 SN 17；SN 在帧里出现**两次** ⇒ +12 字节 ⇒ 395+12=407 ✓）—— **不是格式变了** ✓ |
+| 5 | 控制台 `idsend` + COM24 | 模组侧 `[mbus rx] <帧长+8> byte(s)`、上游 `verify_report` 接受 | ★ **上游那一半 2026-10-11 深夜已过** ✓：`idlevel auto` ⇒ `level=0` `alg=ES256` `frame_len=407` ⇒ 上游 `accepted=True level=0 trust=high` ✓；`idlevel sign_fail` ⇒ `level=1` `alg=HS256` `frame_len=364` ⇒ `accepted=True level=1 trust=medium` ✓（两条都用**真密钥库** `orpah.db` 里登记的那两把钥验 ✓，见 §8.28）。★ **模组侧那一半 2026-10-12 也补上了** ✓：换到带模组的台架（`cstep-ch347f-txah-evb-nanoch32`，**不带 SE**）后 `idsend` ⇒ 模组口 `[mbus rx] **415** byte(s)` = 帧 407 + **8 B HGIC 头** ✓，同一帧再交上游判 ⇒ `accepted=True level=0 trust=high` ✓（★ 本台架无 SE ⇒ 用 **demo 派生钥**判；一键 = `py tools\check_mod_side.py`，见 §8.31）✓。
+★★ **2026-10-12 当天稍后：换到 SE + 模组的联合台架**（§8.32）⇒ 这条也**在真 SE 签名下重跑过** ✓：
+`nonce_src=se sign_src=se` ✓、`build_ms=704` ✓、模组侧 `[mbus rx] 415` ✓、上游用**库里那把钥**
+`accepted=True level=0 trust=high` ✓ ⇒ **两半合起来一跑到底全绿** ✓。★ 帧长从旧的 **395 → 407** 是**真片 SN 更长**造成的（`CN-T1AN1V-X3HANM2E20-H` = 23 字符 vs 旧演示 SN 17；SN 在帧里出现**两次** ⇒ +12 字节 ⇒ 395+12=407 ✓）—— **不是格式变了** ✓ |
 
 ★ **2026-10-06 上机记录（最小 SE 台架 + PC 窗口，`cstep-ch347f-nanoch32-atecc608b`）**：
 - **控制台通了** ✓（`AT` → `OK`；横幅 `[id] sn=CN-WH01-9AF3C1D2 gen=1 fw=0.1.0-c4g1`）。
@@ -1798,6 +1801,53 @@ FAIL 上游不接受（error=signature_invalid）
 ⚠ **边界（如实）**：本次只在**这一块** nano + **这一块** TX-AH 上验过；这一跑里
 `se_hits: ES256 ok=0 fail=0 / HS256 ok=0 fail=0` ⇒ **SE 一次都没用过** ✓（本台架没有它 ✓）；
 而且这一跑**只走了 `level=0`（ES256 软件回退）**，HS256 腿没在本台架上跑 ✗。
+
+## 8.32 ★★★ 2026-10-12 —— 联合台架（SE + 模组）**全绿** + 修掉一个真 bug（ES256 的中间唤醒）
+
+**台架**：`hardware/wiring/cstep-ch347f-txah-evb-nanoch32-atecc608b.*`（= §8.31 那张 **再加上**
+面包板上的 ATECC608B + 两只 4.7 kΩ 上拉 ✓）；控制台 COM23 / 模组口 COM24 ✓。
+
+**首跑：撞出一条真 bug** ✗ —— `Sign(slot 0)` 间歇回 **`0x0F`（cannot execute）**：
+
+| 量到的 | 值 |
+|---|---|
+| `se` 连跑 6 次 | `Sign` 挂 **1** 次（≈17% ✗） |
+| 同跑的 `Random` | 5/5 全好 ✓ |
+| 成功那次的签名 | 拿去用**库里登记的公钥验得过** ✓ ⇒ 芯片与槽都对 ✓（§8.5③ 那条“先问跑过 genkey 吗”**不适用** ✗）|
+| `[se] i2c: … timeout=` | **138** ✗ |
+
+**根因（代码级，读源读出）** ✗：`atecc_sign_digest()` 在**每条命令前**都发一条唤醒令牌 ——
+**包括 `Nonce` 与 `Sign` 之间** ✗。这正是 2026-10-11 在 **SHA** 那条路上已经定案的教训
+（§8.29：序列中间的多余唤醒令牌会打断器件的序列上下文 ✗）；当时只修了 SHA/HMAC，
+**ES256 这条路漏了** ✗。
+
+**改法**（照 `sha_hmac_once()`/`sha_hmac_body()` 那条**已上机验证过**的模式 ✓）：
+① `Nonce` = 序列首条 ⇒ **必发唤醒** ✓；② `Sign` 按 `s_sign_wake`（缺省 **0 = 不发** ✓）；
+③ **整条（Nonce→Sign）失败就从头重来** ≤ 4 趟 ✓ —— ⚠ ②③ 是**一件事** ✗：只去掉唤醒、不做重来
+会让失败率**更高**（器件在两步之间睡下去 ⇒ 摘要丢 ⇒ 重发 `Sign` 救不回来 ✓）。
+`setime … wake_each=1` 把两条路**一起**切回旧行为 ⇒ **一次烧录就能做 A/B** ✓。
+
+**修后实测（同一张台架，用户烧录后）** ✓✓：
+
+| 判据 | 修前 | 修后 |
+|---|---|---|
+| `Sign` 失败率 | **1/6 ≈17%** ✗ | **0/15** ✓（`sign_ok=15 sign_fail=0` ✓；另单独连跑 10 轮 0 失败 ✓） |
+| `[se] i2c: … timeout=` | 138 ✗ | **0** ✓ |
+| `nonce_src` / `sign_src` | soft / soft ✗ | **se / se** ✓ |
+| `build_ms` | ~9071（软件 P-256）✗ | **704** ✓ |
+| 上游判定 | `accepted=False signature_invalid` ✗ | **`accepted=True level=0 trust=high`** ✓ |
+| 模组侧 | 415 ✓ | **415** ✓（`[mbus rx]` ✓）|
+
+⇒ 这张**联合台架**上「**真 SE 签名 → 帧进模组 → 上游用库里的钥接受**」**一跑到底全绿** ✓✓
+（`check_c4g2_bench.py --from-keystore` 自报 **PASS** ✓）。
+
+★★ **两条教训（都值得写进“别再犯”）**：
+
+1. **修好一条路的时序口径之后，要问“还有哪条路用同一套编排”** ✗ —— §8.29 修了 SHA，
+   却没回头看 **ES256** 用的是**同一种“每条命令前唤醒”**的写法 ✗ ⇒ 同一个坑踩了两次 ✓。
+   **判据**：动时序类参数时，`grep` 一遍 `atecc_wake()` 的**所有**调用点 ✓。
+2. **单次跑查不出 17%** ✗ —— §8.30 那次“台架总闸门 6/6 全过”是**单跑** ✓，而本次首跑就挂 ✗
+   （概率问题 ✓）。⇒ **概率性故障要用“连跑 N 次”去量** ✓（本轮的 6 次 / 10 次就是这么来的 ✓）。
 
 ## 9. 未做 / 边界（如实）
 
