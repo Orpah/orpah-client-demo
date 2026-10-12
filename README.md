@@ -129,7 +129,11 @@ openocd -f interface/wch-link.cfg -f target/ch32v20x.cfg \
 标注扫描 / Python 语法 / **固件编译零 warning**；报告写到 `checks_report.md`（入库）。
 接上板子再加 `--bench`（跑 `tools/check_c4g2_bench.py`：SE 唤醒·真随机数·**Slot 0 签名 + 上位机
 独立验签**·`nonce_src`/`sign_src`·上游 `verify_report` 收帧）。
-
+**CI（GitHub Actions）= 同一套离线闸门，换一台机器/一套工具链再跑一遍** ✓ ——
+`.github/workflows/checks.yml`：**ubuntu-latest** + **通用 `riscv64-unknown-elf-gcc`** 跑
+`python tools/run_checks.py`（**不加** `--bench` ✓）。价值 = 换环境仍全过 ✓（补上"自己机器上过"这一环 ✗）。
+★ **三条它不证明** ✗：① 那不是**烧录用**固件（烧录必须用 MounRiver ✓）；② 台架那栏跑不了 ✗
+（要板子/SE/模组 ✓）；③ `--from-keystore` 跑不了 ✗（要隔壁仓的真密钥库 ✓）⇒ **CI 绿 ≠ 可以烧** ✗。
 **模组侧判据（2026-10-12 入库）= `python tools\check_mod_side.py`** —— 判「`idsend` 的帧真的进了模组」
 （模组口 `[mbus rx] <帧长+8>` ✓）+ 「同一帧被上游接受」✓；**它故意不判 SE**
 （无 SE 的台架上那几条必然失败；要判 SE 用 `tools\check_c4g2_bench.py`）✓。

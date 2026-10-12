@@ -1,0 +1,68 @@
+# 第三方环境编译 / 离线闸门 —— ★ 先读这段：它**证明什么**、**不证明什么**
+#
+# 证明 ✓：换一台机器、换一套工具链（**Linux + 通用 riscv64-unknown-elf-gcc**）之后，
+#         本仓那批**离线闸门**照样全过 —— 即 `tools/run_checks.py` 那一套：
+#           · 协议内核交叉测试（C ↔ Python，41 行向量逐行一致）
+#           · 接线图网表 vs 规格表（9 张）
+#           · 标注扫描（量尺，不作闸门）
+#           · Python 语法（tools/ + proto/ + firmware/）
+#           · **固件从零编译**（`make rebuild`，要求零 warning）
+#         —— 这正是"自己机器上过"补不上的那一环（第三方环境 = 不是自证 ✓）。
+#
+# 不证明 ✗（三条，都别读成"CI 绿 = 能烧"✗）：
+#   ① **这不是烧录用固件** ✗ —— 烧录必须用 **MounRiver** 那份工具链
+#      （`-DWCH_INTERRUPT_FAST` 的语义属于它 ✓；`firmware/Core/board.h` 里对通用工具链有回退 ✓，
+#       但"通用工具链编过"≠"在 CH32V203 上跑得对" ✗）。
+#   ② **台架那栏跑不了** ✗（`check_c4g2_bench.py`：要有板子 + ATECC608B + TX-AH 模组 ✓）。
+#   ③ **`--from-keystore` 也跑不了** ✗（要隔壁仓的 `orpah.db` 真密钥库 ✓）。
+#      ⇒ 所以这里只跑 `run_checks.py`（**不加** `--bench`）✓。
+#
+# 隔壁仓 `orpah-over-halow`（交叉测试的 Python 参考）**是可选**的 ✓：
+#   能 clone 下来 ⇒ 交叉测试连"与 Python 参考逐行一致"那半也跑 ✓；
+#   clone 不了（私有/不在）⇒ 那半自动跳过、其余闸门照跑 ✓（所以这一步 `continue-on-error` ✓）。
+name: checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux-offline-gates:
+    name: Linux 离线闸门（含固件从零编译）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: 装 Python 依赖（交叉测试里 ES256/公钥那几段要用 cryptography）
+        run: python -m pip install --upgrade pip cryptography pyserial
+
+      - name: 隔壁仓 orpah-over-halow（可选：交叉测试的 Python 参考）
+        continue-on-error: true
+        run: |
+          git clone --depth 1 \
+            "https://github.com/${{ github.repository_owner }}/orpah-over-halow.git" \
+            ../orpah-over-halow || echo "::warning::没拿到 orpah-over-halow ⇒ 交叉测试只跑本仓自带那半"
+
+      - name: 装通用 RISC-V 工具链（★ 不是 MounRiver 那份 ⇒ 只作交叉编译验证）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-riscv64-unknown-elf
+          riscv64-unknown-elf-gcc --version | head -1
+
+      - name: 一键闸门（口径 = 退出码 0 且输出无 FAIL/Traceback）
+        env:
+          RISCV_PREFIX: riscv64-unknown-elf-   # 透给 make ✓（本机不设 ⇒ 用 MounRiver 的默认路径 ✓）
+        run: python tools/run_checks.py
+
+      - name: 把报告捞出来（失败时也留档）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checks_report
+          path: checks_report.md
+          if-no-files-found: warn

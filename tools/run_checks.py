@@ -42,6 +42,15 @@ SH_CANDS = [r"D:\Program Files\Git\bin\sh.exe",
 
 
 def find_sh():
+    # ★★ 2026-10-12：**POSIX（Linux / CI）上直接用 `sh`** ✓ —— 原来只认 Windows 上那几个 Git
+    #   的 `sh.exe` ✗ ⇒ 在 Linux 上会返回 None ⇒ 固件那栏被"明确跳过" ✗（CI 里就少一条闸门 ✗）。
+    #   ⚠ 但**不**在 Windows 上用 `shutil.which("sh")`：隔壁仓的教训 —— 它会找到 WSL 的 bash.exe，
+    #     而那个 sh 看不到 `F:\` ✗（所以 Windows 仍只认下面这几个绝对路径 ✓）。
+    if os.name != "nt":
+        for c in ("/bin/sh", "/usr/bin/sh"):
+            if os.path.isfile(c):
+                return c
+        return None
     for c in SH_CANDS:
         if os.path.isfile(c):
             return c
@@ -121,9 +130,14 @@ def main():
             #   “make 认为该编的那些”零 warning ✗（而“改 .h 不重编”就是这么漏过去的 ✓）；
             #   从零后 “零 warning” = **整棵树都编过** ✓，且不靠增量依赖写得全不全 ✓。
             #   代价约 3 s（本机 / 26 个编译单元 ✓）。
-            res.append(run("固件从零编译（riscv-none-embed-gcc，要求零 warning）",
-                           ["make", "-C", os.path.join(REPO, "firmware"), "rebuild",
-                            "SHELL=" + sh]))
+            # ★ 另外：环境里有 `RISCV_PREFIX` 就透给 make ✓ —— CI（Linux）要用**通用**工具链
+            #   跑这条闸门 ✓（本机（Windows）不设它 ⇒ 用 Makefile 默认的 MounRiver 路径 ✓）。
+            fw = ["make", "-C", os.path.join(REPO, "firmware"), "rebuild", "SHELL=" + sh]
+            pre = os.environ.get("RISCV_PREFIX")
+            if pre:
+                fw.append("RISCV_PREFIX=" + pre)
+            res.append(run("固件从零编译（%s，要求零 warning）"
+                           % (os.path.basename(pre) if pre else "riscv-none-embed-gcc"), fw))
 
     # ⑥ 台架判据（默认不跑）
     if args.bench:
