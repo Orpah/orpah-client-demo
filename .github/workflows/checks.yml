@@ -9,6 +9,17 @@
 #           · **固件从零编译**（`make rebuild`，要求零 warning）
 #         —— 这正是"自己机器上过"补不上的那一环（第三方环境 = 不是自证 ✓）。
 #
+# ★★ **首次运行实测（2026-10-12，这就是它第一次运行的结果 ✓）**：红了，而且红得有价值 ——
+#   量出**两代工具链的三处口径差异**（都已做成显式变量 ✓，不再靠猜）：
+#     · 汇编 `csrw` 需要 `-march=rv32imac**_zicsr**`（GCC 12+ 不再隐含 ✗）⇒ 传 `ISA` ✓；
+#       而 MounRiver 的 GCC 8.2 **反而不认** `_zicsr` ✗ ⇒ 两边**不能**用同一个字符串 ✓。
+#     · WCH 的 `interrupt("WCH-Interrupt-fast")` 通用工具链**认不出** ⇒ 逐处 `-Wattributes` 告警 ✗
+#       （12 处）⇒ 传 `INTFAST=0`（走 `board.h` 的泛型 `interrupt` 回退 ✓）——
+#       ★ 这一条的副产品很重要：**“零 warning”那条规则当场抓住了“语义不同”** ✓
+#       （通用工具链上 ISR 会退化成普通函数 ⇒ 就算编过也**不能烧** ✗）。
+#   ⇒ 结论一句话：CI 这栏**只能**证明“**可移植配置**编得过（零 warning）” ✓，
+#     而“烧录那份编得过”永远是**本机 MounRiver** 那条闸门的事 ✓ —— 两个声音，别混 ✗。
+#
 # 不证明 ✗（三条，都别读成"CI 绿 = 能烧"✗）：
 #   ① **这不是烧录用固件** ✗ —— 烧录必须用 **MounRiver** 那份工具链
 #      （`-DWCH_INTERRUPT_FAST` 的语义属于它 ✓；`firmware/Core/board.h` 里对通用工具链有回退 ✓，
@@ -57,6 +68,17 @@ jobs:
       - name: 一键闸门（口径 = 退出码 0 且输出无 FAIL/Traceback）
         env:
           RISCV_PREFIX: riscv64-unknown-elf-   # 透给 make ✓（本机不设 ⇒ 用 MounRiver 的默认路径 ✓）
+          # ★★ 下面两个是**首次运行（2026-10-12）实测出来的口径差异** ✓ —— 通用工具链与
+          #   MounRiver 那份在这里不同，所以**由 CI 显式传**（Makefile 的默认值留给**烧录**那条路 ✓）：
+          #   · ISA=rv32imac_zicsr：GCC 12+ 不再让 `rv32imac` 隐含 zicsr ⇒ 否则汇编里
+          #     `csrw` 直接报 `requires extension 'zicsr'` ✗（首次 CI 就是这么红的：5 条全中）；
+          #     而 MounRiver 的 GCC 8.2 **不认** `_zicsr` ✗（两代写法不同 ⇒ 做成变量 ✓）。
+          #   · INTFAST=0：WCH 的 `interrupt("WCH-Interrupt-fast")` 通用工具链**认不出** ✗
+          #     ⇒ 12 处 `-Wattributes` 告警会顶掉“零 warning” ✓；关掉这个宏 = 走 `board.h` 的
+          #     泛型 `interrupt` 回退 ✓ ⇒ 这一栏证明的是「**可移植配置**编得过」✓，
+          #     **不是**「烧录固件编得过」✗（WCH 的快速中断语义只在 MounRiver 那份上 ✓）。
+          ISA: rv32imac_zicsr
+          INTFAST: "0"
         run: python tools/run_checks.py
 
       - name: 把报告捞出来（失败时也留档）

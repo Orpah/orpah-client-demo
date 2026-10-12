@@ -104,6 +104,17 @@ make rebuild
 ② 不依赖增量依赖写得全不全 ✓。`tools/run_checks.py` 那条固件闸门**也改成了 `make rebuild`** ✓。
 增量 `make` 仍可用（不删 ✓）。
 
+★★ **换工具链时有两个旋钮**（2026-10-12 **首次 CI 实测**出来的 ✓ —— 默认值都留给**烧录**那条路 ✓）：
+
+| 旋钮 | 默认（MounRiver / 烧录用） | 通用工具链（CI 的 `riscv64-unknown-elf-gcc`） |
+|---|---|---|
+| `ISA`（喂 `-march=`） | `rv32imac`（**隐含** zicsr ✓，且**不认** `_zicsr` ✗） | `make ISA=rv32imac_zicsr`（GCC 12+ **不再隐含** ✗ ⇒ 否则 `csrw` 报 `requires extension 'zicsr'`） |
+| `INTFAST` | `1` = `-DWCH_INTERRUPT_FAST`（快速中断语义 ✓，与启动文件硬件栈配套） | `make INTFAST=0` = 走 `Core/board.h` 的泛型 `interrupt` 回退 ✓ |
+
+⚠ **`INTFAST=0` 编出来的固件不能烧** ✗（WCH 的快速中断语义只在 MounRiver 那份上 ✓ ——
+通用工具链上 ISR 会退化成普通函数）；`all` 目标会在这种配置下打一行 `NOTE:` 提醒 ✓。
+⇒ 口径：CI 证明的是「**可移植配置**换环境仍编得过（零 warning）」✓，**不是**「烧录固件编得过」✗。
+
 产物（实测尺寸）：
 
 ```

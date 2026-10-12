@@ -41,11 +41,36 @@ PROTO_DIR = ../proto
 STARTUP   = startup/startup_ch32v203.S
 LINK      = ld/link.ld
 
-ARCH = -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore
+# ★★ ISA（2026-10-12 **首次 CI 实测**）：`zicsr` 在两代工具链上**必须用两种写法** ✗ ——
+#   ① MounRiver 自带那份（xPack GCC **8.2.0**；本仓**烧录**就用它）：`rv32imac` **隐含**
+#      zicsr/zifencei ✓，而且**不认**显式写法 ✗ —— 实测：
+#        `-march=rv32imac_zicsr` ⇒ `cc1.exe: error: -march=rv32imac_zicsr:
+#         unsupported ISA substring '_zicsr'`（rc=1）。
+#   ② 通用工具链（CI 的 `riscv64-unknown-elf-gcc` = GCC 13+）：**GCC 12 起** `rv32imac`
+#      **不再隐含** zicsr ✗ ⇒ 启动文件里的 `csrw` 报
+#        `Error: unrecognized opcode `csrw mstatus,t0', extension `zicsr' required`
+#      （首次 CI 实测：5 条 csrw 全中 ⇒ `build/startup.o` 编不出来 ✗）。
+#   ⇒ 默认 = ①（**烧录那条路** ✓）；用通用工具链时显式 `make ISA=rv32imac_zicsr` ✓
+#     （`tools/run_checks.py` 会把环境里的 `ISA` 透给 make ✓，CI 就是这么传的）。
+ISA ?= rv32imac
+ARCH = -march=$(ISA) -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore
+
+# ★★ INTFAST（2026-10-12 **首次 CI 实测**）：WCH 的快速中断属性
+#   `interrupt("WCH-Interrupt-fast")` **只在 MounRiver 那份上有语义** ✓；通用工具链认不出这个模式
+#   ⇒ **逐处告警** ✗：`warning: argument to 'interrupt' attribute is not '"user"',
+#   '"supervisor"', or '"machine"' [-Wattributes]`（首次 CI 实测命中 `Core/main.c` 的三处 ISR）。
+#   而 `Core/board.h` 有回退（不定义该宏 ⇒ 泛型 `__attribute__((interrupt))` ✓）。
+#   ⇒ 默认 1（**烧录配置** ✓，与启动文件里的硬件栈配套）；通用工具链的**编译闸门**用 `INTFAST=0`
+#     —— 那句"编过了"的含义是"**可移植配置**编得过" ✓，**不是**等价固件 ✗
+#     （口径写进 `.github/workflows/checks.yml` 头与本仓 `README.md` 的 CI 段 ✓）。
+INTFAST ?= 1
+ifeq ($(INTFAST),1)
+CFLAGS_INTFAST = -DWCH_INTERRUPT_FAST
+endif
 
 CFLAGS = $(ARCH) -Os -ffunction-sections -fdata-sections \
          -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin \
-         -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST \
+         -nostdlib -Wall -Wextra $(CFLAGS_INTFAST) \
          -ICore -IPeriph -I$(PROTO_DIR)
 
 ASFLAGS = $(ARCH) -ICore -IPeriph
@@ -118,6 +143,10 @@ HEADERS = $(wildcard Core/*.h Periph/*.h $(PROTO_DIR)/*.h)
 $(OBJS): $(HEADERS)
 
 all: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex
+ifeq ($(INTFAST),0)
+	@echo "  NOTE: INTFAST=0 => portable config (WCH fast-interrupt semantics OFF)."
+	@echo "        NOT a flashable image -- flash only the default (INTFAST=1) build."
+endif
 
 $(BUILD):
 	@$(MKDIRS) make
@@ -170,7 +199,7 @@ flash: $(BUILD)/$(TARGET).bin
 	@echo "烧录（二选一，由你执行）："
 	@echo "  A) WCH-Link / SWD："
 	@echo "     openocd -f interface/wch-link.cfg -f target/ch32v20x.cfg \\"
-	@echo "            -c \"program $(BUILD)/$(TARGET).bin 0x08000000 verify reset exit\""
+	@echo "            -c \"program $(BUILD)/$(TARGET).bin 0x00000000 verify reset exit\""
 	@echo "  B) WCHISPTool（BOOT+RST 进刷机态，不需要 COM 口）"
 
 .PHONY: all clean rebuild flash

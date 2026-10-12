@@ -134,6 +134,14 @@ openocd -f interface/wch-link.cfg -f target/ch32v20x.cfg \
 `python tools/run_checks.py`（**不加** `--bench` ✓）。价值 = 换环境仍全过 ✓（补上"自己机器上过"这一环 ✗）。
 ★ **三条它不证明** ✗：① 那不是**烧录用**固件（烧录必须用 MounRiver ✓）；② 台架那栏跑不了 ✗
 （要板子/SE/模组 ✓）；③ `--from-keystore` 跑不了 ✗（要隔壁仓的真密钥库 ✓）⇒ **CI 绿 ≠ 可以烧** ✗。
+★★ **首次运行（2026-10-12）红了，而且红得有价值** ✓ —— 量出**两代工具链的两处口径差异**（现已做成显式旋钮 ✓）：
+1. **`zicsr` 要两种写法** ✗：启动文件里的 `csrw` 在通用工具链（GCC 12+）上报 `requires extension 'zicsr'` ✗
+   ⇒ 要 `-march=rv32imac_**zicsr**`；而 MounRiver 那份（GCC 8.2）**反而不认** `_zicsr` ✗
+   （实测 `unsupported ISA substring '_zicsr'`）⇒ 用 `make ISA=rv32imac_zicsr` ✓（默认仍给烧录那条路 ✓）。
+2. **WCH 的快速中断属性通用工具链不认** ✗：`interrupt("WCH-Interrupt-fast")` 逐处 `-Wattributes` 告警（12 处）
+   ⇒ **我们那条“零 warning”规则当场抓住了“语义不同”** ✓ —— 通用工具链上 ISR 会退化成普通函数 ⇒ 就算编过也**不能烧** ✗。
+   CI 传 `INTFAST=0`（走 `Core/board.h` 的泛型 `interrupt` 回退 ✓）⇒ 这一栏证明的是「**可移植配置**编得过」✓。
+⇒ 两个声音分开说 ✗：CI = “换环境还编得过” ✓；**“烧录那份”永远是本机 MounRiver 那条闸门的事** ✓。
 **模组侧判据（2026-10-12 入库）= `python tools\check_mod_side.py`** —— 判「`idsend` 的帧真的进了模组」
 （模组口 `[mbus rx] <帧长+8>` ✓）+ 「同一帧被上游接受」✓；**它故意不判 SE**
 （无 SE 的台架上那几条必然失败；要判 SE 用 `tools\check_c4g2_bench.py`）✓。

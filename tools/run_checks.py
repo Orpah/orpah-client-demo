@@ -136,8 +136,21 @@ def main():
             pre = os.environ.get("RISCV_PREFIX")
             if pre:
                 fw.append("RISCV_PREFIX=" + pre)
-            res.append(run("固件从零编译（%s，要求零 warning）"
-                           % (os.path.basename(pre) if pre else "riscv-none-embed-gcc"), fw))
+            # ★★ 2026-10-12（**首次 CI 实测**）：通用工具链与 MounRiver 有两处口径不同，
+            #   都用环境变量**显式**传进来（**不当默认值** ✗ —— 默认必须留给**烧录那条路** ✓）：
+            #     `ISA=rv32imac_zicsr`：GCC 12+ 不再让 `rv32imac` 隐含 zicsr（汇编 `csrw` 会挂 ✗）；
+            #     `INTFAST=0`：WCH 的 `interrupt("WCH-Interrupt-fast")` 通用工具链不认 ⇒ 逐处 warning ✗
+            #   ⇒ 这里只**透传**（谁调谁负责 ✓），并把非默认值**打进标签** —— 免得把
+            #     “可移植配置编过了” 误读成 “烧录固件编过了” ✗。
+            extra = []
+            for k in ("ISA", "INTFAST"):
+                v = os.environ.get(k)
+                if v:
+                    fw.append("%s=%s" % (k, v))
+                    extra.append("%s=%s" % (k, v))
+            res.append(run("固件从零编译（%s%s，要求零 warning）"
+                           % (os.path.basename(pre) if pre else "riscv-none-embed-gcc",
+                              ("；" + " ".join(extra)) if extra else ""), fw))
 
     # ⑥ 台架判据（默认不跑）
     if args.bench:
