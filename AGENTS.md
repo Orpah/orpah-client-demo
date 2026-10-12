@@ -469,8 +469,11 @@ orpah-client-demo/
      ★ **没碰平台层那 7 个文件** ✓（`I2C2`/`RCC_APB1Periph_I2C2` 在 `ch32v20x.h` 里本来就有 ✓）
      ⇒ **不需要**回灌 `halow-demo` ✓。
   ② 取能方向落定（用户 2026-10-13 ✓）：**取能源 = 室内光/光伏**、前端 **`SPV1050`** ✓ ⇒
-     新增 `docs/carrier-power-spv1050.md`（画板前必定的四处；其中 MPPT/VEOC/VUVP 的**公式与电阻值
-     待核 datasheet** ✗ —— 我这边取不到 ST 数据手册正文，需要 PDF 才能补）；
+     新增 `docs/carrier-power-spv1050.md`（画板前必定的四处 ✓ —— **手册已拿到**（用户 2026-10-13 给的
+     《DS10044 Rev 7》✓）⇒ MPPT 的 **Eq 4～7**、保护分压的 **Eq 1～3**（`V_BG = 1.23 V` ✓）＋ 官方算例
+     都已引出处 ✓；另记一条**必需**的：超容＋电池同时挂 `BATT` 时要在 `STORE↔BATT` 加
+     二极管/p-MOS 做 UVP 重激活滞回 ✓（p12 ✓）；**还剩“随选型走”的 `V_OC(MAX)`/MPPT 比重与
+     `V_EOC`/`V_UVP` 待定** ✗，以及手册没给的 `C_STORE`/电感值 ✗）；
      新增 `docs/carrier-f11-measure-plan.md`（量什么 = `energy_calib` 哪个字段的一一对应表 / 两种量法 /
      判据 / 记录表）✓；PCC110 已补官方出处（Powercast PCCX10 手册 ✓）⇒ §4b 的 8 颗**全部有出处** ✓。
   ③ 模组上板形式：一板两用不变 ✓，但**第一版只走子板** ✓（裸模块焊盘留板上不装 ✗）
