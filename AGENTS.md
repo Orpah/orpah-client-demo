@@ -516,6 +516,18 @@ orpah-client-demo/
    ⑥ 建 **`hardware/carrier/carrier_nets.py`**（= 载板的「项目数据」✓：`NETS` **15 张网** / `POWER` /
       `COLOR` 只取官方 13 色 ⇒ 两张共用 ✗）⇒ 库仓那套工具**直接能用在载板上** ✓；
       ⚠ `EXPECT` 待草图存在后照 `pixel_nets.py` 补 ✗。
+   ⑦ ★★ **原理图流水线查清（2026-10-13 ✓，用户把 `F:\git\AuroraTessellation-NFC` 加进工作区 ✓）**：
+      ① **出脚位几何** = 库仓 `render_sch.py <fzz> <png> --pins-out pins_ref.py` ✓
+         （`PINS[mi][cid]=(dx,dy)` 相对锚点 ✓ / `BOX[mi]` 本体框 ✓ / `LAB` ✓；**对 Fritzing 自己导出
+         验平 Δ≤0.0004 单位** ✓）⇒ ★ **脚位映射不用自己解** ✓（我上一轮正要自己解 ✗）；
+      ② **自动摆位** = 项目侧 `gen_schematic_layout3.py <源> <出> --pins pins_ref.py` ✓
+         （数据驱动 ✓、只碰 `schematicView` ✓）；
+      ③ **自动布线** = 项目侧 `gen_schematic_wires.py` ✓（9378 行 ✓ 但**一堆开关** ✓：`--ratio/--rails/
+         --vlanes/--only/--ground/--relabel/--trim/--mst-merge/--symmerge/--dedup-symbols/--text-gap` ✓；
+         ★ 它**唯一项目专属的东西 = 文件顶部的 `NETS`** ✓ ⇒ 换成载板那 15 张网即可 ✓）；
+      ④ **复核** = 库仓 `render_sch` / `sch_metrics` / `check_netlist` / `sch_straighten` ✓。
+      ★★ **唯一还缺 = 一份「含元件、零导线」的源草图** ✗（②③ 都要求它先存在 ✓）⇒ **我写脚本造** ✓；
+      实测 ①：拿台架草图跑出 rc=0、4 件的 `PINS`/`BOX`/`LAB` ✓（2026-10-13 ✓）。
   ③ ★ **储能改定（用户 2026-10-13 ✓）：锂电 400909 不装** ✗（太占地方 ✗）⇒ **只留超级电容** ✓；
      **超容选「5.5 V 组件」（= 两串 2.7 V ✓）、挂 `BATT` 脚** ✓ —— 依据 = 手册原文
      “battery **or super-cap** connected to **BATT pin**” ＋ 图 3 的 “Battery (Super-Cap)” ✓（p12 ✓）。
