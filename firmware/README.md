@@ -235,7 +235,7 @@ WCHISPTool 流程：按住 `BOOT` → 按/放 `RST` → 松 `BOOT` → 选 `buil
   · 如实：本 demo 的 `se_ok` 是**软件 P-256 替身**（SE 在 d 步）⇒ `level=0` 是演示级；
     `payload.nonce` 用的是**软熵后端**（非生产强度，见 `../proto/id_nonce.h`）。
   · **c4-γ-2（2026-09-22，已写代码；★上机未做）**：nonce 后端换成 **ATECC608B 的 `Random(0x1B)`**。
-    新增 `Periph/i2c.c`（硬件 I2C1 = `PB6/PB7`、100 kHz、**每个等待都有超时**）+
+    新增 `Periph/i2c.c`（硬件 I2C1 = `PB6/PB7`、100 kHz、**每个等待都有超时**；★ 2026-10-13 起**口可切**：`Core/board.h` 的 `SE_I2C_USE_2`，缺省 0 = 台架 I2C1 ✓ 已上机、`make SE_I2C=1` = 载板 I2C2 @`PB10/PB11` ✗ 未上机）+
     `Periph/atecc.c`（唤醒脉冲 + 事务 + 自检 + `atecc_nonce_hex()`）+
     `proto/crc16.c`（**原厂 `atCRC()` 口径**的 CRC）与 `proto/atecc_msg.c`（命令包/响应解析，**纯函数**）；
     `proto/id_build.c` 加了 **nonce provider 注入点**（`idb_set_nonce_fn`）—— 不注入就是软熵

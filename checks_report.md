@@ -1,6 +1,6 @@
 # checks_report.md —— `tools/run_checks.py` 的输出（**入库**，同隔壁仓惯例）
 
-跑的时间：2026-10-12 15:25:36
+跑的时间：2026-10-13 00:59:22
 
 判定口径：**退出码 0 且输出里没有 `FAIL` / `Traceback`**（只看退出码会漏 —— 有些脚本自己吞异常）。
 
@@ -10,8 +10,9 @@
 | ✅ PASS | 接线图网表 vs 规格表（9 张） | `C:\Python313\python.exe fzz_nets.py` | 0 |
 | ✅ PASS | 标注扫描（量尺，不作闸门） | `C:\Python313\python.exe fzz_annot_scan.py --svg` | 0 |
 | ✅ PASS | Python 语法（tools/ + proto/ + firmware/） | `C:\Python313\python.exe -m compileall -q tools proto firmware` | 0 |
+| ✅ PASS | 固件编译-载板档（SE_I2C=1 → I2C2 @PB10/PB11，要求零 warning；✗ 未上机） | `make -C firmware rebuild SHELL=D:\Program Files\Git\bin\sh.exe SE_I2C=1` | 0 |
 | ✅ PASS | 固件从零编译（riscv-none-embed-gcc，要求零 warning） | `make -C firmware rebuild SHELL=D:\Program Files\Git\bin\sh.exe` | 0 |
-| ✅ PASS | 台架判据：SE 唤醒/Random/签名/nonce_src/sign_src/上游收帧 | `C:\Python313\python.exe check_c4g2_bench.py --port COM23 --from-keystore` | 0 |
+| ⏭ skip | 台架判据（check_c4g2_bench.py，要接板子 ⇒ 用 --bench） | — | — |
 
 ## 各闸门输出的尾部（便于「上次为什么红」一眼可查）
 
@@ -20,22 +21,22 @@
 ```
 C 侧已编译：P-256 曲线（cl (vcvars64, /std:c11)）
 PASS C selfcheck（P-256 不变量）  ->  PASS selfcheck（不变量全过）
-PASS C pubkey-selftest（公钥派生向量）  ->  PASS 14/14 行（F:\git\orpah-client-demo\proto\test_vectors_p256.txt）
+PASS C pubkey-selftest（公钥派生向量）  ->  PASS 14/14 行（f:\git\orpah-client-demo\proto\test_vectors_p256.txt）
 C 侧已编译：ECDSA/RFC6979（cl (vcvars64, /std:c11)）
 PASS C selfcheck（ECDSA/RFC6979 不变量）  ->  PASS selfcheck（ECDSA/RFC6979 不变量）
-PASS C k-selftest（RFC 6979 官方 k 向量）  ->  PASS k-selftest 2/2 行（F:\git\orpah-client-demo\proto\test_vectors_ecdsa_rfc6979.txt）
-PASS C sign-selftest（RFC 6979 官方 r||s 向量）  ->  PASS sign-selftest 2/2 行（F:\git\orpah-client-demo\proto\test_vectors_ecdsa_rfc6979.txt）
-PASS C sign-selftest（本仓 ECDSA 向量）  ->  PASS sign-selftest 25/25 行（F:\git\orpah-client-demo\proto\test_vectors_ecdsa.txt）
+PASS C k-selftest（RFC 6979 官方 k 向量）  ->  PASS k-selftest 2/2 行（f:\git\orpah-client-demo\proto\test_vectors_ecdsa_rfc6979.txt）
+PASS C sign-selftest（RFC 6979 官方 r||s 向量）  ->  PASS sign-selftest 2/2 行（f:\git\orpah-client-demo\proto\test_vectors_ecdsa_rfc6979.txt）
+PASS C sign-selftest（本仓 ECDSA 向量）  ->  PASS sign-selftest 25/25 行（f:\git\orpah-client-demo\proto\test_vectors_ecdsa.txt）
 C 侧已编译：ID 流水线（§8.2 选级 / 演示密钥 / nonce / 整帧）（cl (vcvars64, /std:c11)）
 PASS C selfcheck（选级/nonce/流水线不变量）  ->  PASS id-cli selfcheck（选级/nonce/流水线/降级路径/签名器注入/缓冲不够报错）
-PASS C keys-selftest（演示密钥向量）  ->  PASS keys-selftest 4/4 行（F:\git\orpah-client-demo\proto\test_vectors_id_keys.txt）
-PASS C level-selftest（选级向量）  ->  PASS level-selftest 13/13 行（F:\git\orpah-client-demo\proto\test_vectors_id_level.txt）
-PASS C nonce-selftest（nonce 向量）  ->  PASS nonce-selftest 5/5 行（F:\git\orpah-client-demo\proto\test_vectors_id_nonce.txt）
-PASS C frame-selftest（整帧向量）  ->  PASS frame-selftest 5/5 行（F:\git\orpah-client-demo\proto\test_vectors_id_frame.txt）
+PASS C keys-selftest（演示密钥向量）  ->  PASS keys-selftest 4/4 行（f:\git\orpah-client-demo\proto\test_vectors_id_keys.txt）
+PASS C level-selftest（选级向量）  ->  PASS level-selftest 13/13 行（f:\git\orpah-client-demo\proto\test_vectors_id_level.txt）
+PASS C nonce-selftest（nonce 向量）  ->  PASS nonce-selftest 5/5 行（f:\git\orpah-client-demo\proto\test_vectors_id_nonce.txt）
+PASS C frame-selftest（整帧向量）  ->  PASS frame-selftest 5/5 行（f:\git\orpah-client-demo\proto\test_vectors_id_frame.txt）
 C 侧已编译：ATECC608B 报文层（cl (vcvars64, /std:c11)）
 PASS C selfcheck（CRC 外部锚点 + Random 包 + 响应解析）  ->  PASS ATECC608B 报文层自检（★ 原厂 atCRC 口径的 CRC + Random/Info/Read + Nonce/Sign 包 + **SHA/HMAC 三连** + 响应解析（含签名 r||s），共 11 类）
-PASS C crc-selftest（CRC16 向量）  ->  PASS F:\git\orpah-client-demo\proto\test_vectors_crc16.txt：7 行全部一致
-PASS C msg-selftest（Random 包/响应向量）  ->  PASS F:\git\orpah-client-demo\proto\test_vectors_atecc.txt：41 行全部一致
+PASS C crc-selftest（CRC16 向量）  ->  PASS f:\git\orpah-client-demo\proto\test_vectors_crc16.txt：7 行全部一致
+PASS C msg-selftest（Random 包/响应向量）  ->  PASS f:\git\orpah-client-demo\proto\test_vectors_atecc.txt：41 行全部一致
    [info] L3(alg=none) 服务端判定：accepted=True trust=none coverage_only=True
 PASS 服务端验签 C 产出的报文（verify_report 接受 6 条 level=0/1/2）
 PASS OpenSSL 验签通过 C 产出的 r||s（2 条 RFC 官方向量）
@@ -49,7 +50,7 @@ PASS 协议内核：C 实现与 Python 参考零偏差（校验位 / SN 解析 /
 
 ```
 ========================================================================================
-cstep-nanoch32-atecc608b.fzz -> F:\git\orpah-client-demo\hardware\wiring\cstep-nanoch32-atecc608b.fzz
+cstep-nanoch32-atecc608b.fzz -> f:\git\orpah-client-demo\hardware\wiring\cstep-nanoch32-atecc608b.fzz
   实例： PCB1=5783, U5=86334118, Breadboard1=86334129, R1=86334204, R2=86334316, IMG1=86334537, U6=86334794
   实际网表（9 个网）：
     Breadboard1.A4  <->  Breadboard1.E4  <->  U5.GND  <->  U6.GND  <->  U6.VSSA  <->  U6.VSS_1  <->  U6.VSS_2  <->  U6.VSS_3
@@ -64,7 +65,7 @@ cstep-nanoch32-atecc608b.fzz -> F:\git\orpah-client-demo\hardware\wiring\cstep-n
   --- 逐网核对（模块侧不限实例编号）---
     ✓ MCU.PB7/USB2DM  <->  电阻.connector1  <->  安全元件.SDA  （图上 = R1.connector1  U5.SDA  U6.PB7/USB2DM）
     ✓ MCU.PB6/USB2DP  <->  电阻.connector1  <->  安全元件.SCL  （图上 = R2.connector1  U5.SCL  U6.PB6/USB2DP）
-    ✓ MCU.VDDA  <->  电阻.connector0  <->  安全元件.VCC  （图上 = R2.connector0  U5.VCC  U6.VDDA）
+    ✓ MCU.VDDA  <->  电阻.connector0  <->  安全元件.VCC  （图上 = R1.connector0  U5.VCC  U6.VDDA）
     ✓ MCU.GND  <->  安全元件.GND                      （图上 = U5.GND  U6.GND）
     · 非连线（部件内部同网 / 空孔）：U5.NC  @E7
     · 非连线（部件内部同网 / 空孔）：U5.NC  @E6
@@ -107,23 +108,53 @@ cstep-nanoch32-atecc608b.fzz -> F:\git\orpah-client-demo\hardware\wiring\cstep-n
 
 ```
 
+### 固件编译-载板档（SE_I2C=1 → I2C2 @PB10/PB11，要求零 warning；✗ 未上机）（rc=0，PASS）
+
+```
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=1 -ICore -IPeriph -I../proto -c ../proto/hmac.c -o build/proto/hmac.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=1 -ICore -IPeriph -I../proto -c ../proto/id_report.c -o build/proto/id_report.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=1 -ICore -IPeriph -I../proto -c ../proto/hgic.c -o build/proto/hgic.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=1 -ICore -IPeriph -I../proto -c ../proto/id_build.c -o build/proto/id_build.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=1 -ICore -IPeriph -I../proto -c ../proto/id_level.c -o build/proto/id_level.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=1 -ICore -IPeriph -I../proto -c ../proto/id_keys.c -o build/proto/id_keys.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=1 -ICore -IPeriph -I../proto -c ../proto/id_nonce.c -o build/proto/id_nonce.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=1 -ICore -IPeriph -I../proto -c ../proto/p256.c -o build/proto/p256.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=1 -ICore -IPeriph -I../proto -c ../proto/rfc6979.c -o build/proto/rfc6979.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=1 -ICore -IPeriph -I../proto -c ../proto/ecdsa.c -o build/proto/ecdsa.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=1 -ICore -IPeriph -I../proto -c ../proto/atecc_msg.c -o build/proto/atecc_msg.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=1 -ICore -IPeriph -I../proto -c ../proto/crc16.c -o build/proto/crc16.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -ICore -IPeriph -c startup/startup_ch32v203.S -o build/startup.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -nostartfiles -nostdlib -T ld/link.ld -Wl,--gc-sections -Wl,-Map=build/orpah-client.map -o build/orpah-client.elf build/Core/main.o build/Core/id_core.o build/Periph/gpio.o build/Periph/uart.o build/Periph/i2c.o build/Periph/atecc.o build/Periph/hgic_uart.o build/proto/sn.o build/proto/jcs.o build/proto/b64url.o build/proto/msg.o build/proto/downlink.o build/proto/sha256.o build/proto/hmac.o build/proto/id_report.o build/proto/hgic.o build/proto/id_build.o build/proto/id_level.o build/proto/id_keys.o build/proto/id_nonce.o build/proto/p256.o build/proto/rfc6979.o build/proto/ecdsa.o build/proto/atecc_msg.o build/proto/crc16.o build/startup.o -lgcc
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-size build/orpah-client.elf
+   text	   data	    bss	    dec	    hex	filename
+  48352	     46	  20176	  68574	  10bde	build/orpah-client.elf
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-objcopy -O binary build/orpah-client.elf build/orpah-client.bin
+  built: build/orpah-client.bin  (raw binary; bytes = size text + data above)
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-objcopy -O ihex build/orpah-client.elf build/orpah-client.hex
+  built: build/orpah-client.hex  (intel hex; for WCHISPTool / MounRiver download)
+  NOTE: SE_I2C=1 => ATECC608B on I2C2 (PB10/PB11, carrier tier).
+        NOT bench-verified (SE_I2C=0 / I2C1 PB6/PB7 is the verified one).
+make[1]: Leaving directory 'f:/git/orpah-client-demo/firmware'
+make: Leaving directory 'f:/git/orpah-client-demo/firmware'
+```
+
 ### 固件从零编译（riscv-none-embed-gcc，要求零 warning）（rc=0，PASS）
 
 ```
-F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/downlink.c -o build/proto/downlink.o
-F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/sha256.c -o build/proto/sha256.o
-F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/hmac.c -o build/proto/hmac.o
-F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/id_report.c -o build/proto/id_report.o
-F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/hgic.c -o build/proto/hgic.o
-F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/id_build.c -o build/proto/id_build.o
-F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/id_level.c -o build/proto/id_level.o
-F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/id_keys.c -o build/proto/id_keys.o
-F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/id_nonce.c -o build/proto/id_nonce.o
-F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/p256.c -o build/proto/p256.o
-F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/rfc6979.c -o build/proto/rfc6979.o
-F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/ecdsa.c -o build/proto/ecdsa.o
-F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/atecc_msg.c -o build/proto/atecc_msg.o
-F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/crc16.c -o build/proto/crc16.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=0 -ICore -IPeriph -I../proto -c ../proto/downlink.c -o build/proto/downlink.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=0 -ICore -IPeriph -I../proto -c ../proto/sha256.c -o build/proto/sha256.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=0 -ICore -IPeriph -I../proto -c ../proto/hmac.c -o build/proto/hmac.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=0 -ICore -IPeriph -I../proto -c ../proto/id_report.c -o build/proto/id_report.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=0 -ICore -IPeriph -I../proto -c ../proto/hgic.c -o build/proto/hgic.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=0 -ICore -IPeriph -I../proto -c ../proto/id_build.c -o build/proto/id_build.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=0 -ICore -IPeriph -I../proto -c ../proto/id_level.c -o build/proto/id_level.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=0 -ICore -IPeriph -I../proto -c ../proto/id_keys.c -o build/proto/id_keys.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=0 -ICore -IPeriph -I../proto -c ../proto/id_nonce.c -o build/proto/id_nonce.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=0 -ICore -IPeriph -I../proto -c ../proto/p256.c -o build/proto/p256.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=0 -ICore -IPeriph -I../proto -c ../proto/rfc6979.c -o build/proto/rfc6979.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=0 -ICore -IPeriph -I../proto -c ../proto/ecdsa.c -o build/proto/ecdsa.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=0 -ICore -IPeriph -I../proto -c ../proto/atecc_msg.c -o build/proto/atecc_msg.o
+F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -DSE_I2C_USE_2=0 -ICore -IPeriph -I../proto -c ../proto/crc16.c -o build/proto/crc16.o
 F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -ICore -IPeriph -c startup/startup_ch32v203.S -o build/startup.o
 F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -nostartfiles -nostdlib -T ld/link.ld -Wl,--gc-sections -Wl,-Map=build/orpah-client.map -o build/orpah-client.elf build/Core/main.o build/Core/id_core.o build/Periph/gpio.o build/Periph/uart.o build/Periph/i2c.o build/Periph/atecc.o build/Periph/hgic_uart.o build/proto/sn.o build/proto/jcs.o build/proto/b64url.o build/proto/msg.o build/proto/downlink.o build/proto/sha256.o build/proto/hmac.o build/proto/id_report.o build/proto/hgic.o build/proto/id_build.o build/proto/id_level.o build/proto/id_keys.o build/proto/id_nonce.o build/proto/p256.o build/proto/rfc6979.o build/proto/ecdsa.o build/proto/atecc_msg.o build/proto/crc16.o build/startup.o -lgcc
 F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-size build/orpah-client.elf
@@ -133,38 +164,8 @@ F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Tool
   built: build/orpah-client.bin  (raw binary; bytes = size text + data above)
 F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-objcopy -O ihex build/orpah-client.elf build/orpah-client.hex
   built: build/orpah-client.hex  (intel hex; for WCHISPTool / MounRiver download)
-make[1]: Leaving directory 'F:/git/orpah-client-demo/firmware'
-make: Leaving directory 'F:/git/orpah-client-demo/firmware'
-```
-
-### 台架判据：SE 唤醒/Random/签名/nonce_src/sign_src/上游收帧（rc=0，PASS）
-
-```
-
-warn 唤醒判据没过（不是），但随后的 `Random` 成功 ⇒ **器件本来就醒着**（这一条只在「它从睡眠里被叫醒」时才有意义）—— 不算失败
-PASS `se` 统计：cmd=1014 ok=333 fail=0  ★ crc_mode=crc(响应 35 B)
-PASS 响应字地址 resp_waddr=0x00（公开实现里的正确值）
-PASS 取到 32 B 随机数；前 16 B = A983ABBC7BDE85179212D314FD159B9C
-PASS 两次 `se` 的 16 B 不同（RNG 在动）：A983ABBC7BDE8517… / 391503926638809C…
-PASS `id` 显示 nonce_src=se（流水线取的是 SE 的随机数）
-PASS `id` 显示签名来源 = SE（level=0 的 ES256 在 SE 里签）
-info `se` 计数：sign_ok=330 sign_fail=0
-PASS 板上那条签名被 **Slot 0 的公钥独立验过**（Prehashed(SHA256)；公钥来源 = 密钥库里登记的（sn=CN-T1AN1V-X3HANM2E20-H ✓））✓
-固件自报：level=0 alg=ES256 nonce=6A8E27D05304D15551D93EAE070D4FEC len=407 build_ms=404
-拿到帧 407 字节（hex 814 字符）
-帧长 407 B  type=ORPAH-ID-REPORT  sn=CN-T1AN1V-X3HANM2E20-H  ts=0  level=0  alg=ES256  nonce=B3D3485575D1FC4858BCBB352C964E04
-cap={'rtc': False}  battery_mv=None  firmware=0.1.0-c4g1  seen_routers=[]
-密钥库：用**真库**（orpah.db）里登记给该 SN 的钥验（ES256 取公钥 / HS256 取降级 HMAC 钥 ✓）
-服务端判定：accepted=True level=0 trust=high coverage_only=False error=None
-PASS 上游 verify_report 接受这条报文（level=0）
-PASS 模组侧确认：打印口出现 `[mbus rx] 415 byte(s)`
-============================================================
-★ 本轮实测结论（请填回 docs/atecc608b-se.md §6 的「实测」列）：
-   crc_mode = crc(响应 35 B)
-   nonce_src = se
-   sign_src  = se（★ d 步）
-PASS c4-γ-2 上机判据：nonce 来自 ATECC608B 的 Random(0x1B)，且帧仍被上游接受
-     ★ d 步：`sign_src=se` ✓ 且板上那条签名已被 **Slot 0 的公钥独立验过** ✓（ES256 在 SE 里签、私钥不出芯片）
+make[1]: Leaving directory 'f:/git/orpah-client-demo/firmware'
+make: Leaving directory 'f:/git/orpah-client-demo/firmware'
 ```
 
 ## 需要台架的（不在默认里）

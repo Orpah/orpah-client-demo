@@ -11,6 +11,8 @@
   · `tools/fzz_nets.py`            —— 9 张接线图的**网表 vs 规格表**（`EXPECT` 是单一源）
   · `tools/fzz_annot_scan.py --svg`—— 标注扫描（**量尺不是闸门**，退出码恒 0 ⇒ 只记 info）
   · `make -C firmware`             —— 固件编译（要求 **零 warning**；缺 `sh` 就**明确跳过** ✗ 不静默当通过）
+                                      ★ 2026-10-13 起 **两档都编**：缺省档（SE 在 I2C1 台架 ✓）+ 载板档
+                                      （`SE_I2C=1` ⇒ I2C2）—— 后者**有意排在前**，跑完 `build/` 留的是缺省档 ✓
   · `python -m compileall`         —— `tools/`、`proto/` 与 `firmware/`（后者的 `mkdirs.py` 是构建依赖 ✓）的 Python 语法
   · 报告写到仓库根 `checks_report.md`（入库，同隔壁仓惯例 ⇒ "上次是不是全绿"一眼可查）
 
@@ -173,6 +175,15 @@ def main():
                 if v:
                     fw.append("%s=%s" % (k, v))
                     extra.append("%s=%s" % (k, v))
+            # ★★ 2026-10-13：**两档都要编过** ✓ —— SE（ATECC608B）挂哪个 I²C 是**编译期开关**
+            #   （`Core/board.h` 的 `SE_I2C_USE_2` / `make SE_I2C=1`）⇒
+            #   载板档平时没人编 ✗，哪天只有它坏了也无人发现 ✗（与 `ISA`/`INTFAST` 同源：
+            #   **换配置就换口径，别拿一档当通例** ✓）。
+            #   ⚠ 顺序**有意**：载板档在前、缺省档在后 ⇒ 跑完 `firmware/build/` 里留的是
+            #     **缺省档**（= 台架 I2C1 ✓ 已上机）—— 不会让人误烧载板档 ✗。
+            #   ⚠ 两条都只证“**编得过**”✗：真机验收仍须上机 ✓（载板档至今未上机 ✗）。
+            res.append(run("固件编译-载板档（SE_I2C=1 → I2C2 @PB10/PB11，要求零 warning；✗ 未上机）",
+                           fw + ["SE_I2C=1"]))
             res.append(run("固件从零编译（%s%s，要求零 warning）"
                            % (os.path.basename(pre) if pre else "riscv-none-embed-gcc",
                               ("；" + " ".join(extra)) if extra else ""), fw))

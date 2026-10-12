@@ -55,6 +55,13 @@ LINK      = ld/link.ld
 ISA ?= rv32imac
 ARCH = -march=$(ISA) -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore
 
+# ★★ SE_I2C（2026-10-13）：SE（ATECC608B）挂在哪个 I²C 上 —— 透给 `board.h` 的
+#   `SE_I2C_USE_2`（board.h 里是 `#ifndef` 包着的，所以命令行给值不会“重定义”告警 ✓）。
+#   默认 **0 = 台架**：I2C1 @PB6/PB7，**已上机** ✓（烧录就用它）；
+#   载板档 = **1**：I2C2 @PB10/PB11（`make rebuild SE_I2C=1`）—— ✗ **未上机**，
+#   目前只能证明“编得过 + 代码里真的引用 I2C2” ✓（别读成已上机 ✗）。
+SE_I2C ?= 0
+
 # ★★ INTFAST（2026-10-12 **首次 CI 实测**）：WCH 的快速中断属性
 #   `interrupt("WCH-Interrupt-fast")` **只在 MounRiver 那份上有语义** ✓；通用工具链认不出这个模式
 #   ⇒ **逐处告警** ✗：`warning: argument to 'interrupt' attribute is not '"user"',
@@ -71,6 +78,7 @@ endif
 CFLAGS = $(ARCH) -Os -ffunction-sections -fdata-sections \
          -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin \
          -nostdlib -Wall -Wextra $(CFLAGS_INTFAST) \
+         -DSE_I2C_USE_2=$(SE_I2C) \
          -ICore -IPeriph -I$(PROTO_DIR)
 
 ASFLAGS = $(ARCH) -ICore -IPeriph
@@ -156,6 +164,10 @@ all: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex
 ifeq ($(INTFAST),0)
 	@echo "  NOTE: INTFAST=0 => portable config (WCH fast-interrupt semantics OFF)."
 	@echo "        NOT a flashable image -- flash only the default (INTFAST=1) build."
+endif
+ifeq ($(SE_I2C),1)
+	@echo "  NOTE: SE_I2C=1 => ATECC608B on I2C2 (PB10/PB11, carrier tier)."
+	@echo "        NOT bench-verified (SE_I2C=0 / I2C1 PB6/PB7 is the verified one)."
 endif
 
 $(BUILD):

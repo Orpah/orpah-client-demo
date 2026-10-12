@@ -1,4 +1,4 @@
-/* i2c.h — 硬件 I2C1 主机（**只做 ATECC608B 需要的那点事**）
+/* i2c.h — 硬件 I2C 主机（I2C1 **或** I2C2，由 `Core/board.h` 的 `SE_I2C_USE_2` 选；**只做 ATECC608B 需要的那点事**）
  *
  * 为什么用**硬件 I2C** 而不是位带（用户 2026-09-22 选）：
  *   · 时序交给外设，我们只等标志位；位带要自己数循环，8 MHz 下更脆。
@@ -6,8 +6,10 @@
  *   `halow-demo/simulator/firmware` 共享的 7 个平台层文件之一**（AGENTS §1），
  *   所以这份改动要同步到那一侧（已记在 `ch32v20x.h` 的注释里）。
  *
- * 口径（引脚/速率都从 `Core/board.h` 取，本文件不写死）：
- *   I2C1 = **PB6(SCL) / PB7(SDA)**、开漏、外接 4.7 kΩ 上拉到 3V3、100 kHz。
+ * 口径（引脚/外设/速率都从 `Core/board.h` 取，本文件不写死）：
+ *   台架 = **I2C1 @ PB6(SCL)/PB7(SDA)**（已上机 ✓）；
+ *   载板 = **I2C2 @ PB10(SCL)/PB11(SDA)**（`SE_I2C_USE_2=1`，**未上机** ✗）；
+ *   两者都是开漏 + 板上 4.7 kΩ 上拉到 3V3、100 kHz。
  *
  * ★ **所有等待都有上限**（`I2C_TIMEOUT_MS`），超时**返回错误并计数**，绝不死等：
  *   台架上"线没接对"是常态，死等只会让人以为板子挂了；报错 + 计数器才能定位。
@@ -42,7 +44,8 @@ typedef struct {
     uint8_t  last_nack_byte; /* ★ 数据阶段**第几个字节**被 NACK（1 起数；0 = 没被 NACK 过）*/
 } i2c_stats_t;
 
-/* 初始化 I2C1（含 GPIOB/AFIO 与 I2C1 的外设时钟；100 kHz @ APB1=SYS_CLOCK）。
+/* 初始化 SE 所在的 I²C（I2C1 或 I2C2，见 `board.h` 的 `SE_I2C_USE_2`）：
+ * 开 GPIOB/AFIO 与对应外设的时钟；100 kHz @ APB1 = SYS_CLOCK。
  * ★ 假设 APB1 = `SYSTEM_CLOCK_HZ`（8 MHz 无 PLL、无分频）。若将来改主频/分频，
  *   这里要跟着改，否则波特率会不对（现象：地址 NACK / 读出全 0xFF）。*/
 void i2c_init(void);

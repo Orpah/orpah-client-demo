@@ -72,9 +72,37 @@
 /*         （VCC 2.0~5.5 V，IO 1.8~5.5 V ⇒ 3.3 V 直接接，见摘要手册 §2.1）*/
 /*   ⚠ 速率常量 `SE_I2C_HZ` 只被 `Periph/i2c.c` 用来算 CCR；改了要重算。   */
 /* ------------------------------------------------------------------ */
+/* ★ 2026-10-13：SE 的 I²C **可以二选一**（编译期开关，见下面的 `SE_I2C_USE_2`）——
+ *   台架用 **I2C1 @ PB6/PB7**（c4-γ-2 起、已上机 ✓）、载板用 **I2C2 @ PB10/PB11**
+ *   （口径见 `docs/carrier-board-spec.md` §3；**未上机** ✗）。
+ *   ⇒ 下面 PORT/SCL/SDA 与新增的 `SE_I2C`/`SE_I2C_CLK` 全跟着开关走，
+ *     所以 `Periph/i2c.c` 与 `Periph/atecc.c` 的**代码一行都不用改** ✓
+ *     （它们只认这几个宏 ✓）。
+ *   ⚠ 两种口都靠**板上的 4.7 kΩ ×2 上拉到 3V3** —— 载板上别忘 ✓。
+ *   ⚠ I2C2 与 I2C1 同在 **APB1**（时钟位不同）；PB10/PB11 是 I2C2 的**默认** AF
+ *     引脚 ⇒ **不需要** AFIO 重映射（I2C1 的 PB6/PB7 同理 ✓）。
+ *   ★ 自检：`make rebuild CFLAGS=-DSE_I2C_USE_2=1` 必须也能**零 warning** 编过 ✓
+ *     （载板档我这边没有板子，只能做到“编得过 + 代码里真的引用 I2C2”✓，
+ *      真机验收仍需上机 ✗ —— 别把“编得过”读成“已上机”✗）。*/
+#ifndef SE_I2C_USE_2
+#define SE_I2C_USE_2         0
+#endif
+#if (SE_I2C_USE_2 != 0) && (SE_I2C_USE_2 != 1)
+#error "SE_I2C_USE_2 只能是 0（台架 I2C1）或 1（载板 I2C2）"
+#endif
+#if SE_I2C_USE_2
+#define SE_I2C               I2C2
+#define SE_I2C_CLK           RCC_APB1Periph_I2C2
 #define SE_I2C_PORT          GPIOB
-#define SE_SCL_PIN           6
-#define SE_SDA_PIN           7
+#define SE_SCL_PIN           10          /* PB10 = I2C2_SCL */
+#define SE_SDA_PIN           11          /* PB11 = I2C2_SDA */
+#else
+#define SE_I2C               I2C1
+#define SE_I2C_CLK           RCC_APB1Periph_I2C1
+#define SE_I2C_PORT          GPIOB
+#define SE_SCL_PIN           6           /* PB6 = I2C1_SCL */
+#define SE_SDA_PIN           7           /* PB7 = I2C1_SDA */
+#endif
 #define SE_I2C_HZ            100000UL
 
 /* ------------------------------------------------------------------ */
