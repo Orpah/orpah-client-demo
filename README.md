@@ -129,11 +129,21 @@ openocd -f interface/wch-link.cfg -f target/ch32v20x.cfg \
 标注扫描 / Python 语法 / **固件编译零 warning**；报告写到 `checks_report.md`（入库）。
 接上板子再加 `--bench`（跑 `tools/check_c4g2_bench.py`：SE 唤醒·真随机数·**Slot 0 签名 + 上位机
 独立验签**·`nonce_src`/`sign_src`·上游 `verify_report` 收帧）。
-**CI（GitHub Actions）= 同一套离线闸门，换一台机器/一套工具链再跑一遍** ✓ ——
-`.github/workflows/checks.yml`：**ubuntu-latest** + **通用 `riscv64-unknown-elf-gcc`** 跑
-`python tools/run_checks.py`（**不加** `--bench` ✓）。价值 = 换环境仍全过 ✓（补上"自己机器上过"这一环 ✗）。
-★ **三条它不证明** ✗：① 那不是**烧录用**固件（烧录必须用 MounRiver ✓）；② 台架那栏跑不了 ✗
-（要板子/SE/模组 ✓）；③ `--from-keystore` 跑不了 ✗（要隔壁仓的真密钥库 ✓）⇒ **CI 绿 ≠ 可以烧** ✗。
+**CI（GitHub Actions）= 同一套离线闸门，换机器 / 换工具链 / 换系统再跑一遍** ✓ ——
+`.github/workflows/checks.yml` 是**三系统矩阵**（`fail-fast: false` ✓），三栏跑的是**同一份**
+`python tools/run_checks.py`（**不加** `--bench` ✓），差别只在"去哪拿 RISC-V 工具链" ✓：
+
+| 栏 | 工具链 | 额外量到的东西 |
+|---|---|---|
+| **Linux** | apt `riscv64-unknown-elf-gcc` ✓ | 纯 POSIX 环境（`/bin/sh` ✓、`python3` ✓） |
+| **Windows** | **xpack** `riscv-none-elf-gcc` + Git 的 `sh.exe` + choco 的 `make` ✓ | 本仓那套 **Windows 假设**（`find_sh()` 三个绝对路径 ✓、`mkdirs.py` ✓、`py -3` ✓）在**干净机器**上还成不成立 ✓ |
+| **macOS** | **xpack** `riscv-none-elf-gcc` ✓（`make` 由 Xcode CLT 自带 ✓） | 另一套 Unix 变体（`/bin/sh` ✓、`python3` ✓） |
+
+价值 = 换环境仍全过 ✓（补上"自己机器上过"这一环 ✗）。
+★ **三条它不证明** ✗：① 那不是**烧录用**固件（烧录必须用 MounRiver ✓；★ Windows / macOS 两栏用的
+**xpack** 恰恰是 AGENTS §1 里记的"中断模型不同、会跑飞"的同一族 ⇒ **更不能**当烧录固件 ✗）；
+② 台架那栏跑不了 ✗（要板子/SE/模组 ✓）；③ `--from-keystore` 跑不了 ✗（要隔壁仓的真密钥库 ✓）
+⇒ **CI 绿 ≠ 可以烧** ✗。
 ★★ **首次运行（2026-10-12）红了，而且红得有价值** ✓ —— 量出**两代工具链的两处口径差异**（现已做成显式旋钮 ✓）：
 1. **`zicsr` 要两种写法** ✗：启动文件里的 `csrw` 在通用工具链（GCC 12+）上报 `requires extension 'zicsr'` ✗
    ⇒ 要 `-march=rv32imac_**zicsr**`；而 MounRiver 那份（GCC 8.2）**反而不认** `_zicsr` ✗

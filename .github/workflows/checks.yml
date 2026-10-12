@@ -24,6 +24,8 @@
 #   ① **这不是烧录用固件** ✗ —— 烧录必须用 **MounRiver** 那份工具链
 #      （`-DWCH_INTERRUPT_FAST` 的语义属于它 ✓；`firmware/Core/board.h` 里对通用工具链有回退 ✓，
 #       但"通用工具链编过"≠"在 CH32V203 上跑得对" ✗）。
+#      ★ 这句在**三系统矩阵**下更强 ✗：Windows / macOS 两栏用的是 **xpack** 的 `riscv-none-elf-gcc`，
+#        而 AGENTS §1 记的正是"xpack 版中断模型不同、会跑飞" ⇒ 那两栏**尤其**不是烧录固件 ✗。
 #   ② **台架那栏跑不了** ✗（`check_c4g2_bench.py`：要有板子 + ATECC608B + TX-AH 模组 ✓）。
 #   ③ **`--from-keystore` 也跑不了** ✗（要隔壁仓的 `orpah.db` 真密钥库 ✓）。
 #      ⇒ 所以这里只跑 `run_checks.py`（**不加** `--bench`）✓。
@@ -39,9 +41,50 @@ on:
   workflow_dispatch:
 
 jobs:
-  linux-offline-gates:
-    name: Linux 离线闸门（含固件从零编译）
-    runs-on: ubuntu-latest
+  # ★★ 三个系统**各跑同一套** `tools/run_checks.py` ✓（口径只有一份 ✓），
+  #   差别只在“去哪拿 RISC-V 工具链” + “这台 OS 上的 sh/make/Python 长什么样” ✓：
+  #     · Linux  = apt 的 `riscv64-unknown-elf-gcc`（快 ✓）
+  #     · Windows = **xpack 的 `riscv-none-elf-gcc`** + Git 自带的 `sh.exe` + choco 的 `make`
+  #     · macOS  = **xpack 的 `riscv-none-elf-gcc`**（make 由 Xcode CLT 自带 ✓）
+  #   ★ 为什么 Windows/macOS 值得跑 ✗：正是为了量“**清干净的**机器上，本仓那套路径/编码/sh/make
+  #     假设还成不成立” ✓ —— 本仓开发机是 Windows，而那些假设平常只在一台机器上被验过 ✗。
+  #   ⚠ 三栏**都不是** MounRiver 那份 ⇒ 都只证明「**可移植配置**编得过」✗：
+  #     xpack 恰恰是 AGENTS §1 里说“中断模型不同、会跑飞”的**同一族** ⇒ 更不能当烧录固件 ✗。
+  gates:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false            # 一个系统红，别的照样跑完 ✓（三栏一起看才有意义 ✓）
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux（apt riscv64-unknown-elf-gcc）
+            prefix: riscv64-unknown-elf-
+          - os: windows-latest
+            label: Windows（xpack riscv-none-elf-gcc + Git sh + choco make）
+            prefix: riscv-none-elf-
+          - os: macos-latest
+            label: macOS（xpack riscv-none-elf-gcc）
+            prefix: riscv-none-elf-
+    env:
+      # xpack 工具链版本（Windows / macOS 用）—— 值来自**公开 API 实测**，不是猜的 ✓：
+      #   https://api.github.com/repos/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/latest
+      #   → v15.2.0-1（2026-10-12 查 ✓；资产名 =`xpack-riscv-none-elf-gcc-<ver>-win32-x64.zip` /
+      #                          `...-darwin-arm64.tar.gz` ✓）
+      XPACK_VER: 15.2.0-1
+      RISCV_PREFIX: ${{ matrix.prefix }}   # 透给 make ✓（本机不设 ⇒ 用 MounRiver 的默认路径 ✓）
+      # ★★ 下面两个是**实测出来的口径差异**（2026-10-12 首次/第二次 CI ✓）—— 通用工具链与
+      #   MounRiver 那份在这里不同，所以**由 CI 显式传**（Makefile 的默认值留给**烧录**那条路 ✓）：
+      #   · ISA=rv32imac_zicsr：GCC 12+ 不再让 `rv32imac` 隐含 zicsr ⇒ 否则汇编里
+      #     `csrw` 直接报 `requires extension 'zicsr'` ✗（首次 CI 就是这么红的：5 条全中）；
+      #     而 MounRiver 的 GCC 8.2 **不认** `_zicsr` ✗（两代写法不同 ⇒ 做成变量 ✓）。
+      #   · INTFAST=0：WCH 的 `interrupt("WCH-Interrupt-fast")` 通用工具链**认不出** ✗
+      #     ⇒ 12 处 `-Wattributes` 告警会顶掉“零 warning” ✓；关掉这个宏 = 走 `board.h` 的
+      #     泛型 `interrupt` 回退 ✓ ⇒ 这一栏证明的是「**可移植配置**编得过」✓，
+      #     **不是**「烧录固件编得过」✗（WCH 的快速中断语义只在 MounRiver 那份上 ✓）。
+      ISA: rv32imac_zicsr
+      INTFAST: "0"
     steps:
       - uses: actions/checkout@v4
 
@@ -54,37 +97,67 @@ jobs:
 
       - name: 隔壁仓 orpah-over-halow（可选：交叉测试的 Python 参考）
         continue-on-error: true
+        shell: pwsh                 # ★ 用 pwsh 是为了**三个系统同一条**（原来的 `\` 续行只有 bash 认 ✗）
         run: |
-          git clone --depth 1 \
-            "https://github.com/${{ github.repository_owner }}/orpah-over-halow.git" \
-            ../orpah-over-halow || echo "::warning::没拿到 orpah-over-halow ⇒ 交叉测试只跑本仓自带那半"
+          $url = "https://github.com/${{ github.repository_owner }}/orpah-over-halow.git"
+          git clone --depth 1 $url ../orpah-over-halow
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::没拿到 orpah-over-halow ⇒ 交叉测试只跑本仓自带那半"
+          }
 
-      - name: 装通用 RISC-V 工具链（★ 不是 MounRiver 那份 ⇒ 只作交叉编译验证）
+      - name: 装 RISC-V 工具链（Linux：apt；★ 不是 MounRiver 那份 ⇒ 只作交叉编译验证）
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-riscv64-unknown-elf
           riscv64-unknown-elf-gcc --version | head -1
 
+      - name: 装 RISC-V 工具链（Windows / macOS：xpack，版本见 env.XPACK_VER）
+        if: runner.os != 'Linux'
+        shell: pwsh
+        run: |
+          $ver = $env:XPACK_VER
+          if ($IsMacOS) {
+            $arch  = if ((uname -m) -eq 'arm64') { 'darwin-arm64' } else { 'darwin-x64' }
+            $asset = "xpack-riscv-none-elf-gcc-$ver-$arch.tar.gz"
+          } else {
+            $asset = "xpack-riscv-none-elf-gcc-$ver-win32-x64.zip"
+          }
+          $dst = Join-Path $env:GITHUB_WORKSPACE '.xpack'
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          $tmp = Join-Path $env:RUNNER_TEMP $asset
+          $url = "https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v$ver/$asset"
+          Write-Host "下载：$url"
+          Invoke-WebRequest -Uri $url -OutFile $tmp
+          if ($asset.EndsWith('.zip')) { Expand-Archive -Path $tmp -DestinationPath $dst -Force }
+          else { tar -xzf $tmp -C $dst }
+          $bin = Get-ChildItem -Path $dst -Recurse -Directory -Filter bin |
+                   Where-Object { Test-Path (Join-Path $_.FullName 'riscv-none-elf-gcc*') } |
+                   Select-Object -First 1 -ExpandProperty FullName
+          if (-not $bin) { throw "解包后找不到 bin（$dst）" }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Write-Host "工具链 bin = $bin"
+
+      - name: 装 make（Windows 上 runner 不预装 GNU make）
+        if: runner.os == 'Windows'
+        run: choco install make -y --no-progress
+
+      - name: 记下这台机器的版本（日志里留痕，便于“上次用的是什么”一眼可查）
+        shell: pwsh
+        run: |
+          Write-Host "OS        : $($env:RUNNER_OS) $($env:ImageOS)"
+          Write-Host "python    : $(python --version 2>&1)"
+          Write-Host "make      : $(make --version 2>&1 | Select-Object -First 1)"
+          Write-Host "riscv gcc :"
+          & "$($env:RISCV_PREFIX)gcc" --version | Select-Object -First 1
+
       - name: 一键闸门（口径 = 退出码 0 且输出无 FAIL/Traceback）
-        env:
-          RISCV_PREFIX: riscv64-unknown-elf-   # 透给 make ✓（本机不设 ⇒ 用 MounRiver 的默认路径 ✓）
-          # ★★ 下面两个是**首次运行（2026-10-12）实测出来的口径差异** ✓ —— 通用工具链与
-          #   MounRiver 那份在这里不同，所以**由 CI 显式传**（Makefile 的默认值留给**烧录**那条路 ✓）：
-          #   · ISA=rv32imac_zicsr：GCC 12+ 不再让 `rv32imac` 隐含 zicsr ⇒ 否则汇编里
-          #     `csrw` 直接报 `requires extension 'zicsr'` ✗（首次 CI 就是这么红的：5 条全中）；
-          #     而 MounRiver 的 GCC 8.2 **不认** `_zicsr` ✗（两代写法不同 ⇒ 做成变量 ✓）。
-          #   · INTFAST=0：WCH 的 `interrupt("WCH-Interrupt-fast")` 通用工具链**认不出** ✗
-          #     ⇒ 12 处 `-Wattributes` 告警会顶掉“零 warning” ✓；关掉这个宏 = 走 `board.h` 的
-          #     泛型 `interrupt` 回退 ✓ ⇒ 这一栏证明的是「**可移植配置**编得过」✓，
-          #     **不是**「烧录固件编得过」✗（WCH 的快速中断语义只在 MounRiver 那份上 ✓）。
-          ISA: rv32imac_zicsr
-          INTFAST: "0"
         run: python tools/run_checks.py
 
-      - name: 把报告捞出来（失败时也留档）
+      - name: 把报告捞出来（失败时也留档；三个系统各一份）
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: checks_report
+          name: checks_report-${{ matrix.os }}
           path: checks_report.md
           if-no-files-found: warn

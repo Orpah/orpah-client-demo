@@ -112,8 +112,16 @@
   （交叉测试 / 接线图网表 / 标注扫描 / Python 语法 / 固件编译零 warning），报告写到
   `checks_report.md`（入库）；接上板子再加 `--bench`。判定口径与上游一致：
   **退出码 0 且输出无 `FAIL`/`Traceback`**（有些脚本自己吞异常还会往下跑）—— **改完先跑它** ✓。
-- **CI = 第三方环境交叉验证**（2026-10-12 加 ✓）：`.github/workflows/checks.yml` —— 在
-  **ubuntu-latest + 通用 `riscv64-unknown-elf-gcc`** 上跑 `tools/run_checks.py`（**不加** `--bench` ✓）。
+- **CI = 第三方环境交叉验证**（2026-10-12 加 ✓；同日扩成**三系统矩阵** ✓）：`.github/workflows/checks.yml`
+  —— `ubuntu-latest` / `windows-latest` / `macos-latest` 三栏（`fail-fast: false` ✓）各跑**同一份**
+  `tools/run_checks.py`（**不加** `--bench` ✓），差别只在"去哪拿 RISC-V 工具链" ✓：
+  Linux 用 apt 的 `riscv64-unknown-elf-gcc` ✓；Windows / macOS 用 **xpack 的 `riscv-none-elf-gcc`** ✓
+  （版本 = workflow 里的 `XPACK_VER`，值取自**公开 API 实测** ✓；Windows 还需 `choco install make` ✓，
+  macOS 的 make 由 Xcode CLT 自带 ✓）。
+  ★ **Windows 栏的价值最实在** ✓：本仓那套路径/编码/sh/make 假设（`find_sh()` 的三个绝对路径 ✓、
+  `mkdirs.py` ✓、`PY ?= py -3` ✓）平常只在**一台**机器上被验过 ✗ ⇒ 干净机器上跑一遍才知道它们是不是真的 ✗。
+  ⚠ Windows / macOS 用的 xpack **正是** AGENTS §1 里记的"中断模型不同、会跑飞"的同一族 ⇒
+  三栏**都只证明「可移植配置编得过」** ✗，**都不是**烧录固件 ✓。
   价值 = 换机器、换工具链之后仍全过 ✓（正好补上"自己机器上过 = 自证"那一环 ✗）。
   **三条它不证明** ✗：① **不是烧录用固件** ✗（烧录必须用 MounRiver ✓ —— `-DWCH_INTERRUPT_FAST`
   的语义属于它 ✓）；② **台架那栏跑不了** ✗（要板子 + SE + 模组 ✓）；③ **`--from-keystore` 跑不了** ✗
