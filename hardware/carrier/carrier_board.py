@@ -51,6 +51,24 @@ U = "C:/Users/shi.jinghai-honor/Documents/Fritzing/parts/user"
 #   ⇒ 库件的 moduleId / fzp 名**从部件目录里读** ✓（不写死 ✗，免得改名就漂 ✗）。
 LIB_DIRS = ["CH32V203F8U6", "ATECC608B", "Resistor-0603", "Capacitor-0603",
             "SOD-123", "NetLabel-Pad"]
+# ★★ **核心件**（Fritzing 自带 ✓）2026-10-13 实测定口径 ✗：
+#   · 核心件的 `path` **必须写绝对路径** ✓（`…/Fritzing/fritzing-parts/core/<文件>.fzp` ✓）——
+#     ✗ 写成 Fritzing 内部记号 `:/resources/parts/core/…` 我们的工具链**读不到** ✗
+#     （`part_measure.py` 明写：core 件不在 .fzz 里 ⇒ 按实例给的**绝对路径**读它的 .fzp ✓）。
+#   · 但 Fritzing 那只**泛用排针/Generic IC 是运行时生成的** ✗ —— `fritzing-parts/core/` 里
+#     **没有它的 .fzp** ✗ ⇒ 工具链读不到 ✗（只能用真存在的核心件 ✓，或自己在库里做 ✓）。
+FRITZ_CORE = pathlib.Path(r"C:\Users\shi.jinghai-honor\AppData\Local\Programs\Fritzing\fritzing-parts\core")
+
+
+def core_part(filename):
+    """核心件 ⇒ `(moduleId, 绝对路径)` ✓（moduleId 从它的 fzp 里读 ✓）"""
+    f = FRITZ_CORE / filename
+    if not f.exists():
+        raise SystemExit("✗ 核心件不存在：%s" % f)
+    m = re.search(r'moduleId="([^"]+)"', f.read_text(encoding="utf-8", errors="replace"))
+    if not m:
+        raise SystemExit("✗ %s 里没读到 moduleId" % filename)
+    return m.group(1), str(f).replace("\\", "/")
 
 
 def lib_part(dirname):
@@ -72,10 +90,11 @@ SPEC = [
     ("R1", "Resistor-0603", "R1 4.7k"),
     ("R2", "Resistor-0603", "R2 4.7k"),
     ("R3", "Resistor-0603", "R3 10k"),
-    # D1 心跳灯：库里暂时**没有 LED 件** ✗ ⇒ 先拿二极管封装件占位 ✓（记在待核里 ✓）
-    ("D1", "SOD-123", "D1 心跳灯"),
-    # BT1 = 5.5 V 超容 ✓ ⇒ 用电容件 ✓（超容就是电容 ✓）
-    ("BT1", "Capacitor-0603", "BT1 5.5V 超容"),
+    # D1 心跳灯：用 Fritzing 的 **SMD 0603 LED 核心件** ✓（真件 ✓，不再是占位 ✗）
+    ("D1", "core:SMD_LED_generic_0603.fzp", "D1 心跳灯"),
+    # BT1 = 5.5 V 超容 ✓ ⇒ 用核心件里的 **goldcap（超容）** ✓（真件 ✓）
+    ("BT1", "core:capacitor_elko_goldcap_4.0F_92eef0d1d2f548b9db9918a1769107d3_2.fzp",
+     "BT1 5.5V 超容"),
 ]
 # 接口占位（每个 `NetLabel-Pad` 一 1 只脚 ✓，脚名 `PAD` ✓）—— ★ 缺 4/6/7 脚排针件 ✗（见文件头 ✓）
 LABELS = [
@@ -91,6 +110,12 @@ def build_parts():
     """⇒ `[(位号, moduleId, fzp 路径, 脚数, 标题, 部件目录), …]` ✓（脚数 = fzp 里 `<connector>` 个数 ✓）"""
     out = []
     for ref, d, title in SPEC + [(r, "NetLabel-Pad", n) for r, n in LABELS]:
+        if d.startswith("core:"):               # ★ 核心件：绝对路径 ✓、不内嵌 ✓
+            mid, path = core_part(d.split(":", 1)[1])
+            n = len(re.findall(r"<connector\b",
+                               pathlib.Path(path).read_text(encoding="utf-8", errors="replace")))
+            out.append((ref, mid, path, n, title, None))
+            continue
         mid, path, dirname = lib_part(d)
         n = len(re.findall(r"<connector\b",
                            sorted((LIB_SVG / dirname).glob("part.*.fzp"))[0]
@@ -164,7 +189,7 @@ def emit(place, out_path):
     head = re.sub(r"<instances.*\Z", "", head, flags=re.S)
     text = head + body
     # 内嵌用到的**库件**（fzp + 4 个视图 svg ✓）——与 Fritzing 自己打包的口径一致 ✓
-    used = sorted({d for *_x, d in PARTS})
+    used = sorted({d for *_x, d in PARTS if d})
     emb = [f for d in used for f in sorted((LIB_SVG / d).glob("*"))
            if f.is_file() and (f.suffix == ".fzp" or f.name.startswith("svg."))]
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zo:
