@@ -43,3 +43,5 @@ capture_*.txt
 *.tmp
 *.bak
 *~
+# 载板源草图生成器的临时件（不入库 ✓）
+hardware/carrier/_work/

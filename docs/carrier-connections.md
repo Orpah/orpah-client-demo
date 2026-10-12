@@ -136,3 +136,26 @@ py -3.13 <库仓>\tools\sch_straighten.py <草图.fzz> [--apply]
 ★ 布线器怎么搬过来 ✓：它**唯一项目专属的东西 = 文件顶部的 `NETS`** ✓ ⇒ 换成
 `hardware/carrier/carrier_nets.py` 的 15 张网 ✓，其余开关用 CLI 调 ✓（`--ratio` 用
 `render_sch` 出的尺子 = **1.0** ✓；对 Fritzing 导出的 svg 才是 1.25 ✓）。
+
+## 8. 源草图生成器（2026-10-13 建 ✓：管线那唯一的缺口补上了 ✓）
+
+**`hardware/carrier/carrier_board.py`** ✓ —— 造「**含元件、零导线**」的源草图 ✓：
+- 骨架从**现成的台架草图**抄 ✓（只留它的 `<boards>` 与板框件 `PCB1` ✓，别的实例与全部悬空
+  `<connects>` 一律删掉 ✓）⇒ Fritzing 要的外层结构是**它自己写的形状** ✓，不是我编的 ✗；
+- 两趟摆位 ✓：① 粗摆（固定间距 ✓ 不必先知道尺寸 ✓）⇒ ② 跑库仓 `render_sch.py --pins-out`
+  拿到**本体框** ✓ 再按 `GAP = 2 格` 精摆 ✓（几何来自工具 ✓，不是我拍的数 ✓）；
+- 件一律用**库件** ✓ —— ★ **核心件（`:/resources/parts/core/…`）我们的工具链解析不了** ✗
+  （实测：17 件只认 15 件 ✓，丢的正是两只核心件 ✗）⇒ 全改库件 ✓，`moduleId`/fzp 名**从部件目录读** ✓。
+
+**产物** ✓：`hardware/carrier/carrier-board.fzz`（**17 件 / 零导线 / 183×68 mm** ✓，
+`render_sch --pins-out` rc=0 ✓）；临时件在 `hardware/carrier/_work/`（不入库 ✓）。
+
+**两个缺件（都在待核里 ✓）** ✗：
+1. **4/6/7 脚的排针件**（`J1`/`J3` 4 脚 ✓、`J2` 6 脚 ✓、`J4` 7 脚 ✓）—— 库里没有 ✗，
+   Fritzing 那套 Generic IC 是 GUI 现场生成的、不在核心件目录里 ✗ ⇒ 现在用
+   **`NetLabel-Pad` 占位**（`JP1`…`JP10` ✓，网名写在标题上 ✓ —— 电气语义对 ✓：同名即连通 ✓）；
+2. **LED 件** ✗ ⇒ `D1` 先用二极管封装件 `SOD-123` 占位 ✓。
+
+**位号 0 个** ✗（渲染器报的）：我造的实例**没有 `<titleGeometry>`** ✓（Fritzing 自己的实例里有 ✓）
+⇒ 交给布线器的 `--relabel` ✓ 去摆 ✓（它就是干这个的 ✓，不另写一份 ✗）。
+
