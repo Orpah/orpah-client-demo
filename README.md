@@ -100,6 +100,7 @@ orpah-client-demo/
 | `docs/txah-uart-macbus.md` | 模组侧的 UART-MACBUS（HGIC 帧）：为什么选 UART、接线、协议要点、首测判据与分层排查、**双模块上行/下行实测**、§8.1 顺带量出的七条硬规矩、未做项 |
 | `docs/nano-ch32v203-uart-bridge.md` | nanoCH32V203 刷 `SimulateCDC` 当 USB-UART 桥（COM32）、AT 验证；含 `AT+TXDATA` 在真模组上不成立的结论 |
 | `docs/ch347f-txah-spi-probe.md` | SPI/电气探测（判据 = SD-SPI 的 CMD0/CMD5 有没有合法 R1） |
+| `docs/carrier-board-spec.md` | **d 步载板规格（草稿，未上机 ✗）**：器件表 / 引脚分配（**逐条标出处**）/ 电源树（电池 + 预留取能）/ 测试点与产线夹具接口 / **验收判据**（台架上验过的每一条都要在载板上再验一遍）/ 待定清单 |
 
 ## 构建与烧录（2026-09-21 实测；2026-10-12 补 Python 依赖）
 
