@@ -19,15 +19,11 @@
 #   ⇒ 本仓三条 recipe 已改成**不依赖 sh**：去掉 `ls`（改用 echo）、`mkdir -p`/`rm -rf`
 #     换成 `cmd /c`（见下面的 MKDIR/RMDIR；POSIX 平台仍用 mkdir/rm）⇒ 干净树上 `make` 可跑。
 #
-# ★★ 2026-10-12 实测**更正上面最后那句**：**干净树上 `make` 现在跑不了** ✗ ——
-#   `cmd /c "…"` 那两条（MKDIR/RMDIR）在这个 make 组合下会**启动交互式 cmd** 并卡住
-#   （现场看到 cmd 的版本横幅 + `f:\…\firmware>` 提示符，recipe 永不返回）⇒
-#   `make clean` 与"`build/` 不存在时的 `make`"**都挂** ✗。
-#   **确定能用的做法**：目录先由外部建好（`build/` + `build/{Core,Periph,proto}`）之后再 `make`，
-#   一切正常 ✓ —— `tools/run_checks.py` 走的正是这条（它**不删** `build/`，所以平时不会撞上）。
-#   ⇒ 在干净树上编译：先用 PowerShell/Python 把上面四个目录建出来，再 `make` ✓。
-#   （去掉引号的 `cmd /c mkdir x` 能过，但**路径带空格就废** ✗ ⇒ 没敢这么改；
-#     正确的修法试出来之前，这里只写**实测到的**状态，不写"可跑" ✗。）
+# ★★ 2026-10-12 已**实测修好**（对照实验：5 种写法 × 2 种环境，见下面 MKDIR/RMDIR 处）：
+#   · 引号写法（原来是它）✗：正常环境里 make 报 `rc=2` 且**目录没建出来** ✗；在 PATH 不全的
+#     终端里更糟 —— 会**起一个交互式 cmd** 卡住 ✗（当晚就是这么被误导的 ✓）。
+#   · **无引号写法 ✓**：建/删目录在两种环境里都成功 ✓ ⇒ 已改成它（见下面的 MKDIR/RMDIR）。
+#   ⚠ 仍如实记着的边界：无引号写法**扛不住含空格的路径** ✗（那种情况请先手工建目录再 `make` ✓）。
 #
 # ★ 另一条测出来的坑：变量赋值**不要写行内注释** —— `PROTO_DIR = ../proto   # 说明`
 #   会把注释前的对齐空格留在值里 ⇒ 先决条件变成 `../proto   /sn.c`（找不到）而规则静静失效，
@@ -68,9 +64,14 @@ LDLIBS = -lgcc
 # CreateProcess 那个程序（不经 sh），而 `mkdir`/`rm` 都不是 Windows 程序（实测都报「找不到
 # 指定的文件」；`SHELL=` 也改变不了）。改用 **cmd 这个真程序**（走 `cmd /c`）；
 # POSIX 平台（make 的 OS 不是 Windows_NT）仍用 mkdir/rm。
+# ★★ MKDIR/RMDIR：**必须用无引号的 `cmd /c`** ✓（2026-10-12 对照实验定的，别改回带引号 ✗）：
+#   `cmd /c "if not exist X mkdir X"` 在本机 make 上**不建目录** ✗（正常环境 `rc=2`；
+#   PATH 不全的终端里会起交互式 cmd 卡住 ✗）；去掉引号后两种环境都成功 ✓。
+#   ⚠ 边界：无引号 ⇒ 路径含空格时不行 ✗（先手工建目录再 `make` ✓）。
+#   POSIX 平台仍用 mkdir/rm ✓。
 ifeq ($(OS),Windows_NT)
-  MKDIR = cmd /c "if not exist $(subst /,\,$(1)) mkdir $(subst /,\,$(1))"
-  RMDIR = cmd /c "if exist $(subst /,\,$(1)) rmdir /s /q $(subst /,\,$(1))"
+  MKDIR = cmd /c if not exist $(subst /,\,$(1)) mkdir $(subst /,\,$(1))
+  RMDIR = cmd /c if exist $(subst /,\,$(1)) rmdir /s /q $(subst /,\,$(1))
 else
   MKDIR = mkdir -p $(1)
   RMDIR = rm -rf $(1)
