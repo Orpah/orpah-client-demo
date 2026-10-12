@@ -498,6 +498,24 @@ orpah-client-demo/
       `TX-AH-R900PNR` 都已在 `fritzing-parts-langhua` ✓；前端第一版**插 CJMCU-2557 模块** ⇒ 排针 + 网标签 ✓）。
    ③ 规格里剩余的 **SPV1050 口径已统一成 BQ25570** ✓（§0 图 / BT1 行 / 取能行 / 储能粗算 ⇒
       **3.2 J + 53 mW**（旧 5.8 J/97 mW 作废 ✗）；储能粗算不再拿 2.2 V 当可用下限 ✗）。
+   ④ ★★ **查清「工具能画图」** ✓（2026-10-13 用户点出）：库仓 `tools/` 有一整套原理图工具 ✓
+      （`render_sch` / `sch_metrics` / `sch_strip_wires` / `sch_straighten` / `sch_net` / `sch_box` /
+      `merge_sch` / `check_netlist` / `part_measure` / `pin_ruler`… ✓）；**布线器在项目侧**
+      （`F:\git\AuroraTessellation-NFC\hardware\pixel\gen_schematic_wires.py` ✓ **9378 行、网表写死在
+      文件里** ✗ ⇒ 不能直接搬到载板 ✗）。
+      ★★ **要工具，先要有「元件已摆位、零导线的草图」** ✗ —— 那个只能在 Fritzing 里放 ✓
+      （全套工具都建立在它之上 ✓）。⇒ 分工：**你在 Fritzing 里放 3 个元件 + 存盘**（3 分钟 ✓，
+      存成 `hardware/carrier/carrier-board.fzz` ✓）；连线可以 Fritzing 点两脚自动布线（快 ✓），
+      或我拿 `sch_*` 那套另写一个小号布线器（新工具 ✗、要你点头 ✓）。
+   ⑤ ★★ **两条由「真脚名」抓出来的真问题** ✗（2026-10-13，读 `part.*.fzp` 的连接器名时发现 ✓）：
+      ① **`CH32V203F8U6` 没有 `PA15`** ✗（21 只脚里没有 ✓）⇒ **载板心跳灯必须换脚**（建议 `PB0` ✓）
+         ＋ **固件要加「板档」开关** ✗（`board.h` 现在写死 PA15 ✓）—— 台架档不受影响 ✓；
+      ② **U1 只有一只 `VDD`** ✓（**没有单独的 `VDDA`** ✗）⇒ 之前写"每个电源脚一只 100 nF、
+         `VDDA` 另加 1 µF" ✗ 已改成一只 100 nF ✓。
+      ⇒ 教训：**脚名不要凭规格表抄，要读部件的 `.fzp`** ✓（连"这只脚到底有没有"都能查出来 ✓）。
+   ⑥ 建 **`hardware/carrier/carrier_nets.py`**（= 载板的「项目数据」✓：`NETS` **15 张网** / `POWER` /
+      `COLOR` 只取官方 13 色 ⇒ 两张共用 ✗）⇒ 库仓那套工具**直接能用在载板上** ✓；
+      ⚠ `EXPECT` 待草图存在后照 `pixel_nets.py` 补 ✗。
   ③ ★ **储能改定（用户 2026-10-13 ✓）：锂电 400909 不装** ✗（太占地方 ✗）⇒ **只留超级电容** ✓；
      **超容选「5.5 V 组件」（= 两串 2.7 V ✓）、挂 `BATT` 脚** ✓ —— 依据 = 手册原文
      “battery **or super-cap** connected to **BATT pin**” ＋ 图 3 的 “Battery (Super-Cap)” ✓（p12 ✓）。
