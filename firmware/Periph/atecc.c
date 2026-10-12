@@ -117,6 +117,7 @@ static void wake_pulse(void)
  *      **正是这串旧的唤醒应答** ✓（2026-10-10 实测：`04 11 33 43` 反复被读回来 ✗）。
  *   返回 0 = 拿到并读掉了正确的唤醒应答；-4 = 自检失败；其它 <0 = 没拿到（见下）。*/
 static int wake_reply_read(uint8_t out4[4]);   /* 定义在 resp_read() 之后 */
+static void gap_ms(uint32_t ms);               /* 定义在 SHA 那一节；ES256 的"整条重来"也要用它 ✓ */
 
 int atecc_wake(void)
 {
@@ -504,9 +505,31 @@ int atecc_random(uint8_t out32[ATECC_RANDOM_BYTES])
  *   ② `Sign(0x41)`：用槽里的私钥签（param2 = 槽号）⇒ 响应 67 B = `43 | r||s(64) | CRC`
  * ⚠ 为什么两步都要重试：器件"算完之前地址是不 ACK 的"（`GenKey`/`ECDH` ≈ 40–50 ms）⇒
  *   `transact()` 里的 `wait_ready()`（250 ms）就是为它准备的；NACK 一律当"还没好" ✓。
- * ⚠ 失败时**保持槽号/结果原样**，让上层按 §8.2 Step2 降级（L0 → L1）—— 别在这里兜底 ✗。*/
-int atecc_sign_digest(const uint8_t digest32[ATECC_NONCE_DIGEST_BYTES],
-                      uint8_t out64[ATECC_SIGN_BYTES])
+ * ⚠ 失败时**保持槽号/结果原样**，让上层按 §8.2 Step2 降级（L0 → L1）—— 别在这里兜底 ✗。
+ *
+ * ★★ 2026-10-12（联合台架实测）：**`Nonce` 与 `Sign` 之间那条唤醒令牌是真凶** ✗ ——
+ *   旧写法在**每条命令前都发**一条（`atecc_wake()`），于是 `Sign` 之前那次多出来的 I²C 事务
+ *   会让 `Sign` 间歇回 **`0x0F`（cannot execute）** ✗（实测：`se` 连跑 6 次挂 1 次 ≈17% ✗，
+ *   而 `Random` 5/5 全好 ✓、成功的那些签名拿去用库里的公钥**验得过** ✓ ⇒ 不是"芯片坏了" ✗）。
+ *   这与 2026-10-11 在 **SHA** 那条路上定案的同一条教训（§8.29）是**同一类**：
+ *   **序列中间的多余唤醒令牌会打断器件上下文** ✗。
+ *   ⇒ 现在照 `sha_hmac_once()`/`sha_hmac_body()` 的分工改：**首条（`Nonce`）必发唤醒** ✓、
+ *     **`Sign` 按 `s_sign_wake`（缺省 0 = 不发 ✓）**、**整条（Nonce→Sign）失败就从头重来** ✓。
+ *   ⚠ 为什么不能"只去掉唤醒、不做重来" ✗：器件在两步之间可能自己睡下去（那得靠重来救 ✓），
+ *     单改一处会让失败率**更高** ✗ —— 这两半是**一件事**（同一趟验证 ✓）。
+ *   `setime … wake_each=1` 可把两条路**一起**切回旧行为做 A/B ✓（一次烧录、控制台扫参数 ✓）。*/
+
+/* ★ 这条是"序列中间要不要发唤醒令牌"的运行期副本（与 SHA 的 `s_wake_each` 同源 ✓，
+ *   `atecc_sha_timing_set()` 会一起设 ✓）。定义在这里是因为 ES256 这一节在文件里更靠前 ✓。*/
+static int s_sign_wake = 0;
+
+#define ATECC_SIGN_ATTEMPTS        3u     /* 事务级毛刺（唤醒/IO）✓（同 SHA ✓）*/
+#define ATECC_SIGN_RESTARTS        4u     /* ★ 整条（Nonce→Sign）重来上限 ✓（同 SHA ✓）*/
+#define ATECC_SIGN_RESTART_GAP_MS 20u     /* 重来前的一小段（同 SHA 的 `ATECC_RESTART_GAP_MS` ✓）*/
+
+/* ★ 单趟：`Nonce`（把摘要装进 TempKey）→ `Sign`（用槽里的私钥签）。整条重来那层在下面 ✓。*/
+static int sign_once(const uint8_t digest32[ATECC_NONCE_DIGEST_BYTES],
+                     uint8_t out64[ATECC_SIGN_BYTES], int wake_sign)
 {
     uint8_t pkt[ATECC_CMD_LEN_NONCE_CRC];
     uint8_t resp[ATECC_RESP_LEN_SIG_CRC];
@@ -519,7 +542,6 @@ int atecc_sign_digest(const uint8_t digest32[ATECC_NONCE_DIGEST_BYTES],
     if (digest32 == 0 || out64 == 0) {
         return ATECC_E_ARG;
     }
-    s_st.sign_slot = ATECC_SIGN_SLOT;
 
     /* ---- ① Nonce：装摘要 ---- */
     pklen = (uint32_t)atecc_msg_nonce_load(pkt, sizeof(pkt), digest32, with_crc);
@@ -548,7 +570,7 @@ int atecc_sign_digest(const uint8_t digest32[ATECC_NONCE_DIGEST_BYTES],
                     (unsigned)(attempt + 1u), (unsigned)replen, (unsigned)resp[0]);
     }
     if (attempt >= ATECC_CMD_ATTEMPTS) {
-        s_st.sign_fail++;
+        /* 计数由外层 `atecc_sign_digest()` 统一记（含重来的最终结果 ✓）*/
         uart_printf(CONSOLE_UART, "[se] Nonce 装摘要失败（%u 次都没拿到状态 0）\r\n",
                     (unsigned)ATECC_CMD_ATTEMPTS);
         return ATECC_E_IO;
@@ -561,7 +583,9 @@ int atecc_sign_digest(const uint8_t digest32[ATECC_NONCE_DIGEST_BYTES],
     }
     for (attempt = 0u; attempt < ATECC_CMD_ATTEMPTS; attempt++) {
         replen = 0u;
-        (void)atecc_wake();
+        if (wake_sign) {                    /* ★ 缺省不发（见本节开头那段）✓ */
+            (void)atecc_wake();
+        }
         rc = transact(pkt, pklen, resp, sizeof(resp), &replen);
         if (rc != 0) {
             uart_printf(CONSOLE_UART, "[se] Sign 第%u次：事务失败 rc=%d（%u B 包）\r\n",
@@ -570,8 +594,7 @@ int atecc_sign_digest(const uint8_t digest32[ATECC_NONCE_DIGEST_BYTES],
         }
         mrc = atecc_msg_resp_sign(resp, (size_t)replen, out64);
         if (mrc == 0) {
-            s_st.sign_ok++;
-            return 0;
+            return 0;                       /* 计数由外层统一记 ✓ */
         }
         /* 4 字节错误包 ⇒ **把状态翻成文字**（现场判据：0x0F「cannot execute」最常见的原因是
          *   这个槽不是密钥槽 / 配置与预期不符，0x05 = ECC 计算错）。*/
@@ -588,6 +611,39 @@ int atecc_sign_digest(const uint8_t digest32[ATECC_NONCE_DIGEST_BYTES],
     s_st.sign_fail++;
     s_st.last_err = (uint32_t)(-ATECC_E_RESP);
     return ATECC_E_RESP;
+}
+
+/* ★★ 对外干活的那一层：**整条（Nonce→Sign）重来** —— 与 `sha_hmac_body()` 同一套路 ✓
+ *   为什么必须有它 ✗：器件在两步之间一睡，TempKey 里的摘要就没了 ⇒ `Sign` 回 `0x0F` ✗，
+ *   而**重发 `Sign` 那一条救不回来** ✓（摘要已丢）⇒ 必须带着 `Nonce` 一起重来 ✓。
+ *   语义安全性 ✓：`Nonce` 只写**器件的易失 TempKey**（不写槽、不改配置 ✓）、`Sign` 只读私钥 ✓
+ *   ⇒ "整条重算"不改器件任何持久状态 ✓（不像 `GenKey(创建)`/`Write` 那种有状态命令 ✗）。
+ *   统计口径：`sign_ok`/`sign_fail` = **按每次调用**（含重来的最终结果 ✓），不是按趟 ✗。*/
+int atecc_sign_digest(const uint8_t digest32[ATECC_NONCE_DIGEST_BYTES],
+                      uint8_t out64[ATECC_SIGN_BYTES])
+{
+    uint32_t k;
+    int rc = ATECC_E_RESP;
+
+    if (digest32 == 0 || out64 == 0) {
+        return ATECC_E_ARG;
+    }
+    s_st.sign_slot = ATECC_SIGN_SLOT;
+
+    for (k = 0u; k < ATECC_SIGN_RESTARTS; k++) {
+        rc = sign_once(digest32, out64, s_sign_wake);
+        if (rc == 0) {
+            s_st.sign_ok++;
+            return 0;
+        }
+        if (k + 1u < ATECC_SIGN_RESTARTS) {
+            uart_printf(CONSOLE_UART, "[se] Sign 整条重来（第%u趟）\r\n", (unsigned)(k + 2u));
+            gap_ms(ATECC_SIGN_RESTART_GAP_MS);
+        }
+    }
+    s_st.sign_fail++;
+    s_st.last_err = (uint32_t)(-rc);
+    return rc;
 }
 
 int atecc_sign_pre(uint8_t out64[ATECC_SIGN_BYTES], const void *pre, size_t prelen, void *ctx)
@@ -849,6 +905,7 @@ void atecc_sha_timing_set(int poll, uint32_t ready_ms, uint32_t gap_ms,
     if (restart_gap_ms > 0u) { s_restart_gap_ms = restart_gap_ms; }
     if (restarts > 0u)       { s_restarts = restarts; }
     s_wake_each      = (wake_each != 0) ? 1 : 0;
+    s_sign_wake      = s_wake_each;      /* ★ 两条路（SHA / ES256）**一起**切，便于 A/B ✓（2026-10-12）*/
 }
 
 void atecc_sha_timing_get(int *poll, uint32_t *ready_ms, uint32_t *gap_ms,
