@@ -145,6 +145,16 @@
   `ELFCLASS32 incompatible with ELFCLASS64` / `final link failed: file in wrong format`），
   而 MounRiver（`riscv-none-embed-*`，默认就是 rv32imac/ilp32）**不带也碰巧对** ✓。
   ⇒ 已把 `$(ARCH)` 加进 `LDFLAGS` ✓（本机复验：产物 SHA256 **未变** ✓，烧录那条路不受影响 ✓）。
+  ★★ **第三次运行（2026-10-12）抓到一个真缺陷** ✓✓（这才是要 CI 的理由 ✓）：
+  `id_cli.c` 少 include 了 `ecdsa.h` ✗ ⇒ 调用 `ecdsa_sign_p256_msg()` 是**隐式声明** ✗：
+  · GCC 13 / MounRiver 8.2 / MSVC 上只算**警告** ⇒ 一路“编得过”✗（本机 + Linux 全绿 ✗）；
+  · **GCC 14+ / Clang 15+ 默认就是错误** ✗ ⇒ CI 的 Windows / macOS 两栏当场红 ✓。
+  ⇒ 两条落实：① `id_cli.c` 补上 include ✓；② **判据要比任何单一编译器都严** ✓ ——
+  `run_cross_test.py` 的 host 编译主动加 **`-Werror=implicit-function-declaration`** ✓
+  （“老编译器碰巧放过”的东西，我们主动当错误 ✗ —— 否则“换机器才炸” = 最贵的那种发现 ✗）。
+  ★ 另一课（同一轮）：`run_checks.py` 原来只印**尾部 8 行** ✗ ⇒ 那段编译报错被裁掉 ✓，
+  日志里只剩 `FAIL 1 项未过：[…]` ✗ ⇒ **拿着完整日志也说不清为什么红** ✗。已改成
+  失败时印「**报错行（≤20）+ 尾部 25 行**」✓，报告里的失败闸门同样 ✓（绿的仍是短尾巴 ✓）。
 - **常量/阈值不许拍脑袋**：照上游做法先量（零假设分布/实测），并在注释里写"怎么量出来的"。
   常态周期这类基准要有**单一源**（一处定义，多处引用）。
 - 真机结论只认**实测**（哪块板、哪版固件、什么命令、什么现象）；没做过就写"未做"。

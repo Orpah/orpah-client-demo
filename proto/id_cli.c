@@ -25,6 +25,14 @@
 #include "id_level.h"
 #include "hmac.h"              /* HS256 的 PC 侧替身要用 hmac_sha256 ✓ */
 #include "p256.h"
+/* ★★ `ecdsa.h` 必须显式 include（2026-10-12 CI 三系统矩阵抓出来的真缺陷 ✗）：
+ *   本文件用 `ecdsa_sign_p256_msg()`（见 `_prov_soft()`），但原来只 include 了 `p256.h` ✗
+ *   ⇒ 那是个**隐式声明**，而：
+ *     · GCC 13 / MounRiver 8.2 / MSVC 上只是**警告** ⇒ 一路“编得过”✗（所以本机与 Linux 都没报 ✗）；
+ *     · GCC 14+ / Clang 15+ 上**默认就是错误** ✗ ⇒ Windows / macOS 两栏当场红在
+ *       `error: implicit declaration of function 'ecdsa_sign_p256_msg'` ✓。
+ *   ⇒ 教训：光靠“在手上这台编得过”是不够的（AGENTS §4 的“交叉验证”就是这个意思 ✓）。*/
+#include "ecdsa.h"
 
 #define LINE_MAX 8192
 

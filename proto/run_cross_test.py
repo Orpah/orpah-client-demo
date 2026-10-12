@@ -1548,14 +1548,24 @@ def _run(cmd, **kw):
 
 def compile_c(exe, srcs):
     """编译 host 侧对拍程序。返回 (说明, 错误输出或 None)。**不吞报错**。"""
+    # ★★ 2026-10-12（CI 三系统矩阵第一次跑出来的一课 ✓）：**主动把“隐式函数声明”当错误** ✗。
+    #   起因：`id_cli.c` 少 include 了 `ecdsa.h` ✗ ——
+    #     · GCC 13 / MounRiver 8.2 / MSVC 上只是**警告** ⇒ 一路“编得过”✗（本机 + Linux 全绿 ✗）；
+    #     · GCC 14+ / Clang 15+ 上**默认就是错误** ✗ ⇒ CI 的 Windows / macOS 当场红在
+    #       `error: implicit declaration of function 'ecdsa_sign_p256_msg'` ✓（而报错正文当时还被
+    #       `run_checks.py` 的 8 行尾巴裁掉了 ✗ —— 那把尺子也已修 ✓）。
+    #   ⇒ 口径：**本仓的闸门要比任何单一编译器都严** ✓ —— “老编译器碰巧放过”的东西，我们主动当错误 ✗。
+    #   ⚠ MSVC 那条兜底路不在内（本机的 host 编译器就是它，要加得等 Windows CI 真走到那条路 ✓；
+    #     反正 Clang/GCC 这条已经是错误级别了 ✓）。
+    ERRFLAGS = ["-Werror=implicit-function-declaration"]
     cc = os.environ.get("CC")
     if cc:
-        cmd = cc.split() + ["-std=c99", "-O2", "-o", exe] + srcs
+        cmd = cc.split() + ["-std=c99", "-O2"] + ERRFLAGS + ["-o", exe] + srcs
         p = _run(cmd)
         return ("CC=" + cc), (None if p.returncode == 0 else (p.stdout or "") + (p.stderr or ""))
     for cand in ("gcc", "clang", "cc"):
         if shutil.which(cand):
-            p = _run([cand, "-std=c99", "-O2", "-Wall", "-Wextra", "-o", exe] + srcs)
+            p = _run([cand, "-std=c99", "-O2", "-Wall", "-Wextra"] + ERRFLAGS + ["-o", exe] + srcs)
             return cand, (None if p.returncode == 0 else (p.stdout or "") + (p.stderr or ""))
     vc = _vs_env()
     if vc and shutil.which("cl"):
