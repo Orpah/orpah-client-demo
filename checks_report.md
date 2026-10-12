@@ -1,6 +1,6 @@
 # checks_report.md —— `tools/run_checks.py` 的输出（**入库**，同隔壁仓惯例）
 
-跑的时间：2026-10-12 10:40:52
+跑的时间：2026-10-12 11:00:30
 
 判定口径：**退出码 0 且输出里没有 `FAIL` / `Traceback`**（只看退出码会漏 —— 有些脚本自己吞异常）。
 
@@ -9,8 +9,8 @@
 | ✅ PASS | 协议内核交叉测试（C ↔ Python） | `C:\Python313\python.exe run_cross_test.py` | 0 |
 | ✅ PASS | 接线图网表 vs 规格表（9 张） | `C:\Python313\python.exe fzz_nets.py` | 0 |
 | ✅ PASS | 标注扫描（量尺，不作闸门） | `C:\Python313\python.exe fzz_annot_scan.py --svg` | 0 |
-| ✅ PASS | Python 语法（tools/ + proto/） | `C:\Python313\python.exe -m compileall -q tools proto` | 0 |
-| ✅ PASS | 固件编译（riscv-none-embed-gcc，要求零 warning） | `make -C firmware SHELL=D:\Program Files\Git\bin\sh.exe` | 0 |
+| ✅ PASS | Python 语法（tools/ + proto/ + firmware/） | `C:\Python313\python.exe -m compileall -q tools proto firmware` | 0 |
+| ✅ PASS | 固件从零编译（riscv-none-embed-gcc，要求零 warning） | `make -C firmware rebuild SHELL=D:\Program Files\Git\bin\sh.exe` | 0 |
 | ✅ PASS | 台架判据：SE 唤醒/Random/签名/nonce_src/sign_src/上游收帧 | `C:\Python313\python.exe check_c4g2_bench.py --port COM23 --from-keystore` | 0 |
 
 ## 各闸门输出的尾部（便于「上次为什么红」一眼可查）
@@ -64,7 +64,7 @@ cstep-nanoch32-atecc608b.fzz -> F:\git\orpah-client-demo\hardware\wiring\cstep-n
   --- 逐网核对（模块侧不限实例编号）---
     ✓ MCU.PB7/USB2DM  <->  电阻.connector1  <->  安全元件.SDA  （图上 = R1.connector1  U5.SDA  U6.PB7/USB2DM）
     ✓ MCU.PB6/USB2DP  <->  电阻.connector1  <->  安全元件.SCL  （图上 = R2.connector1  U5.SCL  U6.PB6/USB2DP）
-    ✓ MCU.VDDA  <->  电阻.connector0  <->  安全元件.VCC  （图上 = R1.connector0  U5.VCC  U6.VDDA）
+    ✓ MCU.VDDA  <->  电阻.connector0  <->  安全元件.VCC  （图上 = R2.connector0  U5.VCC  U6.VDDA）
     ✓ MCU.GND  <->  安全元件.GND                      （图上 = U5.GND  U6.GND）
     · 非连线（部件内部同网 / 空孔）：U5.NC  @E7
     · 非连线（部件内部同网 / 空孔）：U5.NC  @E6
@@ -101,16 +101,15 @@ cstep-nanoch32-atecc608b.fzz -> F:\git\orpah-client-demo\hardware\wiring\cstep-n
 合计命中 0 处（.fzz 内）。0 = 这些字都只在导出的 .svg 上。
 ```
 
-### Python 语法（tools/ + proto/）（rc=0，PASS）
+### Python 语法（tools/ + proto/ + firmware/）（rc=0，PASS）
 
 ```
 
 ```
 
-### 固件编译（riscv-none-embed-gcc，要求零 warning）（rc=0，PASS）
+### 固件从零编译（riscv-none-embed-gcc，要求零 warning）（rc=0，PASS）
 
 ```
-F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/msg.c -o build/proto/msg.o
 F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/downlink.c -o build/proto/downlink.o
 F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/sha256.c -o build/proto/sha256.o
 F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-gcc -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore -Os -ffunction-sections -fdata-sections -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -DWCH_INTERRUPT_FAST -ICore -IPeriph -I../proto -c ../proto/hmac.c -o build/proto/hmac.o
@@ -134,6 +133,7 @@ F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Tool
   built: build/orpah-client.bin  (raw binary; bytes = size text + data above)
 F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Toolchain/RISC-V Embedded GCC/bin/riscv-none-embed-objcopy -O ihex build/orpah-client.elf build/orpah-client.hex
   built: build/orpah-client.hex  (intel hex; for WCHISPTool / MounRiver download)
+make[1]: Leaving directory 'F:/git/orpah-client-demo/firmware'
 make: Leaving directory 'F:/git/orpah-client-demo/firmware'
 ```
 
@@ -142,17 +142,17 @@ make: Leaving directory 'F:/git/orpah-client-demo/firmware'
 ```
 
 warn 唤醒判据没过（不是），但随后的 `Random` 成功 ⇒ **器件本来就醒着**（这一条只在「它从睡眠里被叫醒」时才有意义）—— 不算失败
-PASS `se` 统计：cmd=116 ok=35 fail=0  ★ crc_mode=crc(响应 35 B)
+PASS `se` 统计：cmd=206 ok=64 fail=0  ★ crc_mode=crc(响应 35 B)
 PASS 响应字地址 resp_waddr=0x00（公开实现里的正确值）
-PASS 取到 32 B 随机数；前 16 B = 36B2E9A19571C8E0DF493A9B25BCFDD9
-PASS 两次 `se` 的 16 B 不同（RNG 在动）：36B2E9A19571C8E0… / 6089F291A690AA69…
+PASS 取到 32 B 随机数；前 16 B = 59C70356C5D84A94192528673D0599C6
+PASS 两次 `se` 的 16 B 不同（RNG 在动）：59C70356C5D84A94… / 553FAD2D159D8190…
 PASS `id` 显示 nonce_src=se（流水线取的是 SE 的随机数）
 PASS `id` 显示签名来源 = SE（level=0 的 ES256 在 SE 里签）
-info `se` 计数：sign_ok=32 sign_fail=0
+info `se` 计数：sign_ok=61 sign_fail=0
 PASS 板上那条签名被 **Slot 0 的公钥独立验过**（Prehashed(SHA256)；公钥来源 = 密钥库里登记的（sn=CN-T1AN1V-X3HANM2E20-H ✓））✓
-固件自报：level=0 alg=ES256 nonce=FBC3B1FA7FAF1922EA04F91446C87CD6 len=407 build_ms=404
+固件自报：level=0 alg=ES256 nonce=EDA0465281807A631ED99EC06B986B50 len=407 build_ms=628
 拿到帧 407 字节（hex 814 字符）
-帧长 407 B  type=ORPAH-ID-REPORT  sn=CN-T1AN1V-X3HANM2E20-H  ts=0  level=0  alg=ES256  nonce=373E4E50BBA21F13D9C7C09FA5333F68
+帧长 407 B  type=ORPAH-ID-REPORT  sn=CN-T1AN1V-X3HANM2E20-H  ts=0  level=0  alg=ES256  nonce=EDA0465281807A631ED99EC06B986B50
 cap={'rtc': False}  battery_mv=None  firmware=0.1.0-c4g1  seen_routers=[]
 密钥库：用**真库**（orpah.db）里登记给该 SN 的钥验（ES256 取公钥 / HS256 取降级 HMAC 钥 ✓）
 服务端判定：accepted=True level=0 trust=high coverage_only=False error=None

@@ -11,7 +11,7 @@
   · `tools/fzz_nets.py`            —— 9 张接线图的**网表 vs 规格表**（`EXPECT` 是单一源）
   · `tools/fzz_annot_scan.py --svg`—— 标注扫描（**量尺不是闸门**，退出码恒 0 ⇒ 只记 info）
   · `make -C firmware`             —— 固件编译（要求 **零 warning**；缺 `sh` 就**明确跳过** ✗ 不静默当通过）
-  · `python -m compileall`         —— `tools/` 与 `proto/` 的 Python 语法
+  · `python -m compileall`         —— `tools/`、`proto/` 与 `firmware/`（后者的 `mkdirs.py` 是构建依赖 ✓）的 Python 语法
   · 报告写到仓库根 `checks_report.md`（入库，同隔壁仓惯例 ⇒ "上次是不是全绿"一眼可查）
 
 需要台架的**不在**默认里（要跑就加 `--bench`，那时请先确认台架接线与 `hardware/wiring/README.md` 一致）：
@@ -102,9 +102,12 @@ def main():
     inf["ok"] = True                                            # 量尺 ✓ 不判红
     res.append(inf)
 
-    # ④ Python 语法（tools/ 与 proto/）
-    res.append(run("Python 语法（tools/ + proto/）",
-                   [PY, "-m", "compileall", "-q", HERE, os.path.join(REPO, "proto")]))
+    # ④ Python 语法（tools/ / proto/ / firmware ←2026-10-12 加上：firmware/mkdirs.py 是构建
+    #    依赖的脚本，它坏了会让"干净树上 make"静静挂在建目录那一步 ✗（构建只在 build/ 不存在时
+    #    才调它 ⇒ 普通跑不一定会执行到 ⇒ 光靠 make 盖不住它 ✗）
+    res.append(run("Python 语法（tools/ + proto/ + firmware/）",
+                   [PY, "-m", "compileall", "-q", HERE, os.path.join(REPO, "proto"),
+                    os.path.join(REPO, "firmware")]))
 
     # ⑤ 固件编译（零 warning；缺 sh 就明确跳过）
     if args.quick:
@@ -114,8 +117,13 @@ def main():
         if sh is None:
             skipped.append("固件编译（本机找不到 Git 的 sh.exe —— **明确跳过**，别当通过 ✗）")
         else:
-            res.append(run("固件编译（riscv-none-embed-gcc，要求零 warning）",
-                           ["make", "-C", os.path.join(REPO, "firmware"), "SHELL=" + sh]))
+            # ★★ 2026-10-12：改成 **`make rebuild`（从零）** ✓ —— 增量 `make` 时这条只保证
+            #   “make 认为该编的那些”零 warning ✗（而“改 .h 不重编”就是这么漏过去的 ✓）；
+            #   从零后 “零 warning” = **整棵树都编过** ✓，且不靠增量依赖写得全不全 ✓。
+            #   代价约 3 s（本机 / 26 个编译单元 ✓）。
+            res.append(run("固件从零编译（riscv-none-embed-gcc，要求零 warning）",
+                           ["make", "-C", os.path.join(REPO, "firmware"), "rebuild",
+                            "SHELL=" + sh]))
 
     # ⑥ 台架判据（默认不跑）
     if args.bench:

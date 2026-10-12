@@ -16,14 +16,13 @@
 #   CreateProcess 那个程序 ⇒ `mkdir -p` / `ls -l` / `rm -rf` 都报「找不到指定的文件」。
 #   而 `make SHELL='D:/Program Files/Git/bin/sh.exe'` 在这个组合下**没能改变**这一点
 #   （`sh.exe` 确实在 D:/Program Files/Git/bin/ 里，但不在 PATH；把它加进 PATH 也没用）。
-#   ⇒ 本仓三条 recipe 已改成**不依赖 sh**：去掉 `ls`（改用 echo）、`mkdir -p`/`rm -rf`
-#     换成 `cmd /c`（见下面的 MKDIR/RMDIR；POSIX 平台仍用 mkdir/rm）⇒ 干净树上 `make` 可跑。
+#   ⇒ 本仓的 recipe **不依赖 sh**：去掉 `ls`（改用 echo）、建/删目录**交给 Python**（`mkdirs.py` ✓）。
 #
-# ★★ 2026-10-12 已**实测修好**（对照实验：5 种写法 × 2 种环境，见下面 MKDIR/RMDIR 处）：
-#   · 引号写法（原来是它）✗：正常环境里 make 报 `rc=2` 且**目录没建出来** ✗；在 PATH 不全的
-#     终端里更糟 —— 会**起一个交互式 cmd** 卡住 ✗（当晚就是这么被误导的 ✓）。
-#   · **无引号写法 ✓**：建/删目录在两种环境里都成功 ✓ ⇒ 已改成它（见下面的 MKDIR/RMDIR）。
-#   ⚠ 仍如实记着的边界：无引号写法**扛不住含空格的路径** ✗（那种情况请先手工建目录再 `make` ✓）。
+# ★★ 2026-10-12：**建/删构建目录交给 Python**（`mkdirs.py`，用户当天定 ✓ —— 见下面那段说明）：
+#   shell 那几种写法都**实测过** ✗：`mkdir -p` 不是 Windows 程序；带引号的 `cmd /c "…"` 在本机 make 上
+#   **不建目录**（正常环境 rc=2；PATH 不全的终端里会起交互式 cmd 卡住 ✗）；无引号的 `cmd /c …`
+#   能过但**路径含空格就废** ✗。⇒ 用 `py -3 mkdirs.py`（**不传路径**，空格不再是问题 ✓、跨平台 ✓）。
+#   ⚠ 代价：**构建需要 Python**（`py -3`；或 `make PY=python3`）—— `firmware/README.md` 已记明 ✓。
 #
 # ★ 另一条测出来的坑：变量赋值**不要写行内注释** —— `PROTO_DIR = ../proto   # 说明`
 #   会把注释前的对齐空格留在值里 ⇒ 先决条件变成 `../proto   /sn.c`（找不到）而规则静静失效，
@@ -60,22 +59,19 @@ LDFLAGS = -nostartfiles -nostdlib -T $(LINK) \
 # `--gc-sections` 时不加它就链不上（不加也能编过，只因那时 proto 全是没人调用的死代码）。
 LDLIBS = -lgcc
 
-# 建目录 / 删目录：**不能用 `mkdir -p` / `rm -rf`** —— make 对没有 shell 元字符的行会直接
-# CreateProcess 那个程序（不经 sh），而 `mkdir`/`rm` 都不是 Windows 程序（实测都报「找不到
-# 指定的文件」；`SHELL=` 也改变不了）。改用 **cmd 这个真程序**（走 `cmd /c`）；
-# POSIX 平台（make 的 OS 不是 Windows_NT）仍用 mkdir/rm。
-# ★★ MKDIR/RMDIR：**必须用无引号的 `cmd /c`** ✓（2026-10-12 对照实验定的，别改回带引号 ✗）：
-#   `cmd /c "if not exist X mkdir X"` 在本机 make 上**不建目录** ✗（正常环境 `rc=2`；
-#   PATH 不全的终端里会起交互式 cmd 卡住 ✗）；去掉引号后两种环境都成功 ✓。
-#   ⚠ 边界：无引号 ⇒ 路径含空格时不行 ✗（先手工建目录再 `make` ✓）。
-#   POSIX 平台仍用 mkdir/rm ✓。
+# 建目录 / 删目录：**用 Python**（`mkdirs.py`，见下面那段）—— `mkdir -p` / `rm -rf` 都**不行** ✗
+# （不是 Windows 程序，make 对没有 shell 元字符的行会直接 CreateProcess ⇒ 报「找不到指定的文件」；
+#  `SHELL=` 也改变不了 ✓）。
+# ★★ 建/删构建目录 = **Python 干**（`mkdirs.py`，用户 2026-10-12 定 ✓）—— 建目录本来就不是
+#   C/C++ 的任务 ✗；shell 那几种写法实测都不行（见文件头）。★ 关键：**不把路径传给脚本** ✓
+#   —— 目录按脚本自己所在位置算 ⇒ **路径含空格也没事** ✓（无引号 `cmd /c` 就死在这里 ✗）。
+#   脚本可用 `make PY=python3` 换解释器 ✓；POSIX 也走同一条路（少一套分支 ✓）。
 ifeq ($(OS),Windows_NT)
-  MKDIR = cmd /c if not exist $(subst /,\,$(1)) mkdir $(subst /,\,$(1))
-  RMDIR = cmd /c if exist $(subst /,\,$(1)) rmdir /s /q $(subst /,\,$(1))
+  PY ?= py -3
 else
-  MKDIR = mkdir -p $(1)
-  RMDIR = rm -rf $(1)
+  PY ?= python3
 endif
+MKDIRS = $(PY) mkdirs.py
 
 # 固件自己的源文件。
 SRCS = Core/main.c \
@@ -124,10 +120,7 @@ $(OBJS): $(HEADERS)
 all: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex
 
 $(BUILD):
-	@$(call MKDIR,$(BUILD))
-	@$(call MKDIR,$(BUILD)/Core)
-	@$(call MKDIR,$(BUILD)/Periph)
-	@$(call MKDIR,$(BUILD)/proto)
+	@$(MKDIRS) make
 
 $(BUILD)/startup.o: $(STARTUP) | $(BUILD)
 	$(CC) $(ASFLAGS) -c $< -o $@
@@ -159,7 +152,18 @@ $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 	@echo "  built: $@  (intel hex; for WCHISPTool / MounRiver download)"
 
 clean:
-	@$(call RMDIR,$(BUILD))
+	@$(MKDIRS) clean
+
+# ★★ 2026-10-12 用户定：**固件构建一律从零**（`make rebuild`）✓ —— 全量约 **3 s**（本机 / 26 个编译单元），
+#   换来两件事：
+#     ① “零 warning”的含意变成**整棵树都编过** ✓（增量时只保证“make 认为该编的那些” ✗）；
+#     ② 彻底不靠“增量依赖写得全不全” ✓ —— 2026-10-12 之前正好漏了头依赖 ⇒ 改 `.h` 不重编 ✗、
+#        而闸门还报 PASS ✗（就是这条约定要防的那类事 ✓）。
+#   ⚠ 如实边界：3 s 是**本机 + 现规模**的数 ✓；固件长大后要重新捷量 ✓。
+#   增量 `make` 仍可用（不删 ✓），但它**不作为交付/闸门口径** ✓。
+rebuild:
+	@$(MKDIRS) clean
+	@$(MAKE) all
 
 # 烧录**由用户执行**（本仓不代跑）
 flash: $(BUILD)/$(TARGET).bin
@@ -169,4 +173,4 @@ flash: $(BUILD)/$(TARGET).bin
 	@echo "            -c \"program $(BUILD)/$(TARGET).bin 0x08000000 verify reset exit\""
 	@echo "  B) WCHISPTool（BOOT+RST 进刷机态，不需要 COM 口）"
 
-.PHONY: all clean flash
+.PHONY: all clean rebuild flash

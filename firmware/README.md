@@ -81,15 +81,28 @@ F:/MounRiver/MounRiver_Studio2/resources/app/resources/win32/components/WCH/Tool
 ⚠ 前缀是 **`riscv-none-embed-`**，不是 `riscv-none-elf-`。`Makefile` 的 `RISCV_PREFIX`
 默认就指向上面这个路径；换机器用 `make RISCV_PREFIX='.../bin/riscv-none-embed-'` 覆盖。
 
-⚠ Windows 上 make 的 recipe 要 POSIX 命令（`mkdir -p` / `rm -rf`）⇒ 需要一个 sh。
-实测可用：
+⚠ **构建还需要两样东西**（2026-10-12 定稿 ✓）：
+
+1. **Python**（`py -3`；或 `make PY=python3`）—— 建/删 `build/` 目录由 **`mkdirs.py`** 干 ✓。
+   为什么不让 shell 干 ✗：建目录本来就不是 C/C++ 的任务 ✓，而且本机那套 make + PowerShell 下
+   `mkdir -p` / `cmd /c "…"`（带引号）/ `cmd /c …`（不带引号）**都实测不行**（最后一种怕路径带空格 ✗）
+   —— 见 `Makefile` 头那段。**好处**：不把路径传给脚本 ⇒ **路径含空格也没事** ✓；
+   而且 `make clean` 与「干净树上 `make`」都能一把跑通 ✓（2026-10-12 从零实测：
+   `make clean` rc=0、随后 **26 个 .o 全部重编**、零 warning ✓）。
+2. 一个 **sh**（recipe 里还留着 `echo "…"` 这类 POSIX 写法）—— 实测可用：
 
 ```bash
 # Git Bash 或任何带 sh 的环境
-make SHELL='D:/Program Files/Git/bin/sh.exe'
+make rebuild SHELL='D:/Program Files/Git/bin/sh.exe'
 # 或在 Git Bash 里
-make
+make rebuild
 ```
+
+★ **固件构建一律从零**（2026-10-12 用户定 ✓）：`make rebuild` = 「删 `build/` + 编全部」✓（约 **3 s**，
+本机 / 26 个编译单元 ✓）。理由：① “零 warning”要的是**整棵树都编过** ✓（增量时只保证
+“make 认为该编的那些” ✗ —— 2026-10-12 之前正是这里漏了头依赖：改 `.h` 不重编、而闸门照样 PASS ✗）；
+② 不依赖增量依赖写得全不全 ✓。`tools/run_checks.py` 那条固件闸门**也改成了 `make rebuild`** ✓。
+增量 `make` 仍可用（不删 ✓）。
 
 产物（实测尺寸）：
 

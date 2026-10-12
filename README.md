@@ -101,13 +101,18 @@ orpah-client-demo/
 | `docs/nano-ch32v203-uart-bridge.md` | nanoCH32V203 刷 `SimulateCDC` 当 USB-UART 桥（COM32）、AT 验证；含 `AT+TXDATA` 在真模组上不成立的结论 |
 | `docs/ch347f-txah-spi-probe.md` | SPI/电气探测（判据 = SD-SPI 的 CMD0/CMD5 有没有合法 R1） |
 
-## 构建与烧录（2026-09-21 实测）
+## 构建与烧录（2026-09-21 实测；2026-10-12 补 Python 依赖）
 
 ```bash
 cd firmware
-make            # -> build/orpah-client.elf / .bin / .hex（默认已指向本机 MounRiver 内嵌工具链）
+make rebuild    # ★ 从零：mkdirs.py clean + make all（约 3 s）—— **固件构建一律用它** ✓
+make            # 增量（自己迭代时用，不作为交付/闸门口径）
 make clean
 ```
+
+> ★ **构建需要 Python**（`py -3`，或 `make PY=python3`）：建/删 `build/` 目录由 `firmware/mkdirs.py` 干 ✓
+> —— 干净的树（或 `make clean` 之后）直接 `make` 就能从零编完，**不需要先手工建目录** ✓、
+> **路径含空格也没事** ✓（理由与实测见 [`firmware/Makefile`](firmware/Makefile) 头 + [`firmware/README.md`](firmware/README.md) 的「构建」节）。
 
 ```bash
 # 烧录（用户执行）—— ★ 地址必须是 0x00000000（与 ld/link.ld 的链接基址一致）

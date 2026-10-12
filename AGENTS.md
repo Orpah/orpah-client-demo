@@ -65,6 +65,13 @@
 - **参考骨架 = `halow-demo/simulator/firmware/`**（Makefile / `ld/link.ld` / `startup/` / `Core/board.h`
   / `Periph/{gpio,uart,spi_slave}` / 状态机）：**复用其套路**（含 SPI1 从机 host 接口、UART2 虚拟空口、
   AT 引擎、迷你 printf），不要另起一套目录/驱动风格。
+- ★★ **固件构建一律从零**（2026-10-12 用户定 ✓）：`make rebuild`（= `mkdirs.py clean` + `make all` ✓），
+  全量约 **3 s**（本机 / 26 个编译单元 ✓）。理由：① “零 warning”要的是**整棵树都编过** ✓
+  （增量时只保证“make 认为该编的那些” ✗ —— 2026-10-12 之前正是这里漏了头依赖 ✗：
+  改 `.h` 不重编、而 `run_checks.py` 那条闸门照样报 PASS ✗）；② 不依赖增量依赖写得全不全 ✓。
+  `tools/run_checks.py` 的固件闸门**已改成 `make rebuild`** ✓；增量 `make` 仍可用（不删 ✓）。
+  ★ 建/删 `build/` 目录 = **`firmware/mkdirs.py`（Python）** ✓（建目录不是 C/C++ 的任务 ✗；
+  shell 那几种写法都实测不行 ⇒ 构建**需要 Python** ✓）。
 - **★ 平台层是「两份独立副本」，改一侧必须同步另一侧**（用户 2026-09-21 判定：不抽公共库、
   不做 submodule，两仓各自独立）。这 **7 个文件**：`ld/link.ld`、`startup/startup_ch32v203.S`、
   `Core/ch32v20x.h`、`Periph/gpio.{c,h}`、`Periph/uart.{c,h}` —— 参考仓那套**从未上机**、
