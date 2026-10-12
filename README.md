@@ -142,6 +142,9 @@ openocd -f interface/wch-link.cfg -f target/ch32v20x.cfg \
    ⇒ **我们那条“零 warning”规则当场抓住了“语义不同”** ✓ —— 通用工具链上 ISR 会退化成普通函数 ⇒ 就算编过也**不能烧** ✗。
    CI 传 `INTFAST=0`（走 `Core/board.h` 的泛型 `interrupt` 回退 ✓）⇒ 这一栏证明的是「**可移植配置**编得过」✓。
 ⇒ 两个声音分开说 ✗：CI = “换环境还编得过” ✓；**“烧录那份”永远是本机 MounRiver 那条闸门的事** ✓。
+★★ **同日第三次运行全绿** ✓（`bfb08ef`，2026-10-12，整条含固件编译共 **26 s**）——
+**三次运行的真实价值是把三处“在一套工具链上碰巧能过”变成了显式旋钮** ✓：`zicsr` 写法 ✗、
+WCH 中断属性语义 ✗、链接 emulation ✗（每处都附实测报错原文，见 `firmware/Makefile` 注释 ✓）。
 **模组侧判据（2026-10-12 入库）= `python tools\check_mod_side.py`** —— 判「`idsend` 的帧真的进了模组」
 （模组口 `[mbus rx] <帧长+8>` ✓）+ 「同一帧被上游接受」✓；**它故意不判 SE**
 （无 SE 的台架上那几条必然失败；要判 SE 用 `tools\check_c4g2_bench.py`）✓。
