@@ -118,8 +118,8 @@
   Linux 用 apt 的 `riscv64-unknown-elf-gcc` ✓；Windows / macOS 用 **xpack 的 `riscv-none-elf-gcc`** ✓
   （版本 = workflow 里的 `XPACK_VER`，值取自**公开 API 实测** ✓；Windows 还需 `choco install make` ✓，
   macOS 的 make 由 Xcode CLT 自带 ✓）。
-  ★ **Windows 栏的价值最实在** ✓：本仓那套路径/编码/sh/make 假设（`find_sh()` 的三个绝对路径 ✓、
-  `mkdirs.py` ✓、`PY ?= py -3` ✓）平常只在**一台**机器上被验过 ✗ ⇒ 干净机器上跑一遍才知道它们是不是真的 ✗。
+  ★ **Windows 栏**量的就是本仓那套路径/编码/sh/make 假设（`find_sh()` 的三个绝对路径 ✓、
+  `mkdirs.py` ✓、`PY ?= py -3` ✓）—— 它们平常只在**一台**机器上被验过 ✗ ⇒ 干净机器上跑一遍才知道是不是真的 ✗。
   ⚠ Windows / macOS 用的 xpack **正是** AGENTS §1 里记的"中断模型不同、会跑飞"的同一族 ⇒
   三栏**都只证明「可移植配置编得过」** ✗，**都不是**烧录固件 ✓。
   价值 = 换机器、换工具链之后仍全过 ✓（正好补上"自己机器上过 = 自证"那一环 ✗）。
