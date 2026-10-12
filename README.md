@@ -4,7 +4,7 @@ ORPAH（用无线技术找人）五仓里的**客户端侧**：**CH32V203 + 安�
 （802.11ah HaLow）模组**。目标是一台**免电池/低功耗**的客户端设备：周期性向 HaLow 路由器
 上报「我还在」（Orpah ID 签名上报），必要时按电量降级，并配合服务端做定位与搜寻。
 
-> **现状（2026-10-12 更新）**：四块拼图都已上机验过：
+> **现状（2026-10-12 更新）**：五块拼图都已上机验过：
 > ① **自家固件**（`firmware/`，c3-2b）—— 控制台 + 1 ms 时基 + 心跳灯（板载 `D1`=PA15）+
 >    **模组数据口**（USART2 ↔ TX-AH，HGIC 命令/应答双向通）；接线 / 判据 / 四个真凶见
 >    `docs/c3-2b-bench-bringup.md`；
@@ -16,9 +16,11 @@ ORPAH（用无线技术找人）五仓里的**客户端侧**：**CH32V203 + 安�
 >    ES256 在 Slot 0 签（`sign_src=se`）、HS256 在 Slot 4 算 HMAC（`nonce_src=se`）；
 >    实测 `build_ms` ~9 s（软件 P-256）→ **481 ms**；整帧被上游 `verify_report` 接受
 >    （`level=0` ⇒ `trust=high`；`level=1` ⇒ `trust=medium`）✓ —— 见 `docs/atecc608b-se.md`。
-> **未做（如实）**：**模组侧那一半**（`[mbus rx]` 那一条要接上 TX-AH 才有；见 `docs/atecc608b-se.md` §9.0 第 2 条）；
-> `0x64` 那颗芯片的地址谜团（§9.0 第 4 条）；低功耗与取能标定、d 步的**定制载板**、
-> 与 `orpah-over-halow` / `orpah-openwrt-demo` 的真机联调都未做。
+> ⑤ **模组侧那一半**（2026-10-12）—— 换到带模组的台架后 `idsend` ⇒ 模组口
+>    `[mbus rx] **415** byte(s)`（= 帧 407 + 8 B HGIC 头 ✓），同一帧仍被上游接受 ✓
+>    （一键 = `py tools\check_mod_side.py`，见 `docs/atecc608b-se.md` §8.31）。
+> **未做（如实）**：`0x64` 那颗芯片的地址谜团（§9.0 唯一还开着的一条）；
+> 低功耗与取能标定、d 步的**定制载板**、与 `orpah-over-halow` / `orpah-openwrt-demo` 的真机联调都未做。
 > ⚠ `AT+TXDATA`/`FRAME:RX` 那条路（`docs/nano-ch32v203-uart-bridge.md`）在**真模组上不成立**
 > （fmac 固件的 AT 没有用户数据命令）—— 实际走通的是 **UART-MACBUS（HGIC 帧）**，即上面 ③。
 
@@ -118,6 +120,10 @@ openocd -f interface/wch-link.cfg -f target/ch32v20x.cfg \
 接上板子再加 `--bench`（跑 `tools/check_c4g2_bench.py`：SE 唤醒·真随机数·**Slot 0 签名 + 上位机
 独立验签**·`nonce_src`/`sign_src`·上游 `verify_report` 收帧）。
 
+**模组侧判据（2026-10-12 入库）= `python tools\check_mod_side.py`** —— 判「`idsend` 的帧真的进了模组」
+（模组口 `[mbus rx] <帧长+8>` ✓）+ 「同一帧被上游接受」✓；**它故意不判 SE**
+（无 SE 的台架上那几条必然失败；要判 SE 用 `tools\check_c4g2_bench.py`）✓。
+
 **产线流程（2026-10-11 入库）= `python tools\se_provision.py <step>`** —— 步骤
 `read`（逐字节核对出厂配置）/ `lock-config` ✗ / `genkey` ✗ / `lock-data` ✗ / `verify` / `all`；
 不可逆步骤要 `--yes`，可 `--record <日志>` 留台账（登记公钥用）。
@@ -131,12 +137,11 @@ openocd -f interface/wch-link.cfg -f target/ch32v20x.cfg \
 
 ## 还没做（如实）
 
-- **模组侧那一半** —— 帧从固件发到 USART2 了，但本台架**没有模组** ⇒ 缺「`[mbus rx] <帧长+8> byte(s)`」
-  这一条实测（`docs/atecc608b-se.md` §9.0 第 2 条）；
 - **`0x64` 那颗芯片的地址谜团**（稳定 ACK、命令全不回；需要那颗芯片 + `seaddr 64` + `se`）；
 - 与 `orpah-over-halow`（服务端/仿真器）、`orpah-openwrt-demo`（路由器侧）的**真机联调**（e 步）；
 - 功耗实测（免电池取能曲线）、d 步的**定制载板**、e 步的一体板。
-★ **已结、别再说"未做"** ✗（2026-10-12）：b 步物理通路（= **UART-MACBUS** ✓）、
+★ **已结、别再说"未做"** ✗（2026-10-12）：**模组侧那一半**（`py tools\check_mod_side.py` —— 帧 415 B 进模组 + 上游接受 ✓）、
+b 步物理通路（= **UART-MACBUS** ✓）、
 **产线流程已在真片上跑完** ✓（`tools/se_provision.py`；**4 颗已配、公钥/降级钥已入库**，余 3 颗按用户决定保留不配 ✗）、
 **降级 HMAC 钥已在 SE 的 slot 4 里** ✓（不再是"演示派生"）。
 
