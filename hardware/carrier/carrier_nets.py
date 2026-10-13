@@ -69,20 +69,30 @@ POWER = ("3V3", "GND")
 COLOR = {
     "GND":     "#404040",   # black ✓
     "3V3":     "#cc1414",   # red ✓
-    "VBAT":    "#ef6100",   # orange ✓
+    "VBAT":    "#a37911",   # brown ✓（★ 与取能输入 `VBUS_IN` 共用 —— 两者都是“能量”✓）
     "VBUS_IN": "#a37911",   # brown ✓
     "SDA":     "#418dd9",   # blue ✓
-    "SCL":     "#fff800",   # yellow ✓
+    "SCL":     "#8c3b00",   # dark brown ✓（★ 从 SWCLK 那里取来 —— 见下面黄色那条 ✓）
     "MOD_RX":  "#25cc35",   # green ✓
     "MOD_TX":  "#33ffc5",   # cyan ✓
     "CON_TX":  "#ab58a2",   # purple ✓
     "CON_RX":  "#fa50e6",   # magenta ✓
     "SWDIO":   "#999999",   # grey ✓
-    "SWCLK":   "#8c3b00",   # dark brown ✓
+    "SWCLK":   "#999999",   # grey ✓（★ 与 `SWDIO` 共用 —— 同一条 SWD 调试对 ✓）
     "VBAT_OK": "#ffffff",   # white ✓（原理图上底是白的 ⇒ 只当"第 13 色"用 ✓）
-    "LED_R":   "#ef6100",   # ★ 与 VBAT 共用（13 色不够 15 网 ✗）
-    "LED_HB":  "#fff800",   # ★ 与 SCL 共用（同上 ✓）
+    "LED_R":   "#ef6100",   # orange ✓
+    "LED_HB":  "#ef6100",   # ★ 与 `LED_R` 共用 —— 同一条 LED 支路 ✓
 }
+#   ★★★ 2026-10-13 ✓ **用户定：不用黄色** ✗ —— 原话：「**限制使用黄色** —— 在有其它颜色
+#     可选时，不使用黄色，因为在 Fritzing 界面上，黄色不明显」✓。
+#     ⇒ 原来 `SCL` / `LED_HB` 都是 `#fff800`（yellow ✗）⇒ 重新分配 ✓；
+#     官方表**一共 13 色**（含 yellow ✗）、本板 **15 张网** ⇒ **不用黄就只剩 12 色**
+#     ⇒ **必须有 3 对共用** ✓（自取色不可能做到 15 色全不同 ✗）。共用的三对都挑**语义成对**的：
+#       · `VBUS_IN` ⇔ `VBAT`（取能输入 / 储能 ✓ 都是“能量”）
+#       · `SWDIO` ⇔ `SWCLK`（一条 SWD 调试对 ✓）
+#       · `LED_R` ⇔ `LED_HB`（一条 LED 支路 ✓）
+#     ★ 库里也有**全局兜底** ✓（`sch_route.py` 的“黄色重分配” ✓）——
+#       就算别的项目文件里写了黄色，工具也会换成没被占的非黄色并**打印**出来 ✓。
 
 # ── 网表核对器的期望（`check_netlist.py` ✓，格式照 `pixel_nets.py` ✓）────────────
 #   ★ **自动生成** ✗ 不手抄 ✓：脚名 → `connectorN` 从各件 `.fzp` 读 ✓
