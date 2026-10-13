@@ -83,3 +83,24 @@ COLOR = {
     "LED_R":   "#ef6100",   # ★ 与 VBAT 共用（13 色不够 15 网 ✗）
     "LED_HB":  "#fff800",   # ★ 与 SCL 共用（同上 ✓）
 }
+
+# ── 网表核对器的期望（`check_netlist.py` ✓，格式照 `pixel_nets.py` ✓）────────────
+#   ★ **自动生成** ✗ 不手抄 ✓：脚名 → `connectorN` 从各件 `.fzp` 读 ✓
+#     （`#N` ⇒ `connector<N-1>` ✓，与工具 `pin_of` 同一口径 ✓）。
+#   ★ 生成脚本不进仓 ✗（一次性 ✓）；改网表后重跑生成一次 ✓。
+EXPECT = {
+    "3V3": {"U1.connector18", "U2.connector7", "R1.connector0", "R2.connector0", "R3.connector0", "J1.connector0", "J2.connector0", "J3.connector0", "J4.connector3", "J4.connector5", "J4.connector6"},
+    "GND": {"U1.connector20", "U2.connector3", "BT1.connector1", "J1.connector1", "J2.connector1", "J3.connector1", "J4.connector1"},
+    "VBAT": {"BT1.connector0", "J4.connector2"},
+    "SDA": {"U1.connector10", "U2.connector4", "R2.connector1", "J2.connector2"},
+    "SCL": {"U1.connector9", "U2.connector5", "R1.connector1", "J2.connector3"},
+    "MOD_RX": {"U1.connector2", "J1.connector2"},
+    "MOD_TX": {"U1.connector3", "J1.connector3"},
+    "CON_TX": {"U1.connector14", "J2.connector4"},
+    "CON_RX": {"U1.connector17", "J2.connector5"},
+    "SWDIO": {"U1.connector15", "J3.connector2"},
+    "SWCLK": {"U1.connector16", "J3.connector3"},
+    "VBAT_OK": {"U1.connector0", "J4.connector4"},
+    "LED_R": {"R3.connector1", "D1.connector0"},
+    "LED_HB": {"D1.connector1", "U1.connector7"},
+}

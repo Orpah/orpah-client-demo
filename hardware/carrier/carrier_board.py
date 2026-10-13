@@ -33,7 +33,12 @@ MINE = pathlib.Path(r"C:\Users\shi.jinghai-honor\Documents\Fritzing\parts")
 OUT = HERE / "carrier-board.fzz"
 WORK = HERE / "_work"
 GRID = 7.2                 # Fritzing 原理图网格 0.1 in ✓
-GAP = 2 * GRID             # 相邻本体框间隙 ✓（抄像素板定下来的 2 格 ✓）
+# ★★ 2026-10-13 实测调大 ✗：原来是 `2 * GRID`（= 14.4 单位 ≈ 4 mm，抄像素板 ✓）——
+#   像素板元件少、通道够 ✓；本板 **11 件、15 张网**（`3V3` 11 脚 / `GND` 7 脚）⇒ 太挤 ✗，
+#   布线器反复报「**没有一条候选**能…」✗，硬约束「线↔线净距 ≥ `--wire-gap`（1.000 mm）」
+#   实测 **37 对不足**（其中 3 对 0.0000 mm **完全贴** ✗）⇒ rc=1 ✗。
+#   ⇒ 间隙放大到 **4 格 ≈ 8.1 mm** 给布线留通道 ✓（一次只改这一个数 ✓）。
+GAP = 4 * GRID             # 相邻本体框间隙 ✓
 
 # ── 元件表 ───────────────────────────────────────────────────────────────────
 #   位号 / moduleId / fzp 路径 / 脚数 / 标题文字
@@ -93,8 +98,16 @@ SPEC = [
     ("R1", "Resistor-0603", "R1"),                 # 4.7k，I2C SDA 上拉 ✓
     ("R2", "Resistor-0603", "R2"),                 # 4.7k，I2C SCL 上拉 ✓
     ("R3", "Resistor-0603", "R3"),                 # 10k，心跳灯限流 ✓
-    # D1 心跳灯：用 Fritzing 的 **SMD 0603 LED 核心件** ✓（真件 ✓，不再是占位 ✗）
-    ("D1", "core:SMD_LED_generic_0603.fzp", "D1"),
+    # D1 心跳灯 = **SparkFun 的 0603 SMD LED** ✓（核心件 ✓，moduleId `SparkFun-LED-LED-0603` ✓）
+    #   ★★ 2026-10-13 实测换件 ✗：先前用的 `SMD_LED_generic_0603.fzp` 是**泛用壳** ✗ ——
+    #     icon / breadboard 都指向 **5mm 直插 LED** ✗，schematic 的脚又包在 `<g>` 里
+    #     ⇒ 本工具链 `pins_of` **一只脚都认不出**（`terminal 0 / pin 0 / none` ✗）⇒ 布线当场卡住 ✗。
+    #   选件判据（用户 2026-10-13 定：**看 pcb 确定** ✓）：两者 pcb 都是 0603 ✓，但只有这只
+    #   是**真件** —— 实测 `terminal=2 pin=2 ⇒ pins_of=terminal 2`（bad 空 ✓）。
+    #   ★ 脚序也正 ✓：`connector0 name=A`（**阳极** ✓）/ `connector1 name=C`（**阴极** ✓）
+    #     ⇒ 与 `carrier_nets.py` 的 `LED_R→#1`（限流电阻之后 = 阳极 ✓）/ `LED_HB→#2`
+    #     （MCU 脚 = 阴极，低电平点亮 ✓）对得上 ✓。
+    ("D1", "core:sparkfun-led-led-0603.fzp", "D1"),
     # BT1 = 5.5 V 超容 ✓ ⇒ 用核心件里的 **goldcap（超容）** ✓（真件 ✓）
     ("BT1", "core:capacitor_elko_goldcap_4.0F_92eef0d1d2f548b9db9918a1769107d3_2.fzp",
      "BT1"),
@@ -127,8 +140,13 @@ def build_parts():
 
 PARTS = build_parts()
 
-# 精摆的排布顺序 ✓（左→右：电源/储能 → MCU → SE → 上拉 → 灯 → 四个外部接口 ✓）
-ORDER = ["BT1", "U1", "U2", "R1", "R2", "R3", "D1", "J1", "J2", "J3", "J4"]
+# 精摆顺序 ✓（**排内**左→右 ✓；哪件在哪排见 `ROW_OF` ✓）
+#   ★ 2026-10-13 实测：原来是**一行平铺**（`BT1` 打头 ✓）⇒ 布线过不去 ✗
+#     （硬约束「线↔线净距 ≥ 1.000 mm」实测 34 对不足 ✗，见 `main()` 第②步那段 ✓）
+#     ⇒ 改**两排**：第 1 排 MCU 一族 ✓、第 2 排外部接口 ✓。
+ORDER = ["U1", "U2", "R1", "R2", "R3", "D1", "BT1", "J1", "J2", "J3", "J4"]
+ROW_OF = {"U1": 0, "U2": 0, "R1": 0, "R2": 0, "R3": 0, "D1": 0, "BT1": 0,
+          "J1": 1, "J2": 1, "J3": 1, "J4": 1}
 
 VIEWS = [("breadboardView", "breadboard", "2.50002"),
          ("schematicView", "schematic", "2.50002"),
@@ -137,7 +155,16 @@ VIEWS = [("breadboardView", "breadboard", "2.50002"),
 
 def inst_xml(mi, mid, path, npins, title, x, y):
     """一只元件的实例 XML ✓（三个视图各一份 ✓；★ 脚的 `<geometry x="0" y="0"/>` ✓ ——
-    脚位由**部件 svg + transform** 决定 ✓，不用我算 ✓；**零 `<connects>`** ✓）"""
+    脚位由**部件 svg + transform** 决定 ✓，不用我算 ✓；**零 `<connects>`** ✓）
+
+    ★★ 2026-10-13 补 ✗：**schematicView 还必须带 `<titleGeometry>`** ✓ ——
+      没它 `render_sch` 就算不出位号文字（它的口径 = 实例 `title` ＋ fzp 的 `showInLabel` 字段 ✓，
+      位置取 `titleGeometry` ✓）⇒ 图上**一个位号都没有** ✗（实测：`LAB = {}` / “位号 0 个” ✗），
+      布线器的 `relabel()`（避让重摆 ✓）也**无事可做** ✗。
+      · 格式照 Fritzing 自己写的 ✓（挂在**实例的 schematicView 里** ✓，与 `<geometry>` 同级 ✓）。
+      · 初位置给“本体框右上角外一点” ✓（`Fritzing` 的 `relabel()` 会把它避让重摆 ✓）；
+        是相对**实例锚点**的 ✓（与 `<geometry>` 同一坐标系 ✓）。
+    """
     def conns(layer):
         return "\n".join(
             '      <connector connectorId="connector%d" layer="%s">\n'
@@ -145,12 +172,16 @@ def inst_xml(mi, mid, path, npins, title, x, y):
             '      </connector>' % (i, layer)
             for i in range(npins))
 
-    views = "\n".join(
-        '    <%s layer="%s">\n'
-        '      <geometry z="%s" x="%s" y="%s" />\n'
-        '      <connectors>\n%s\n      </connectors>\n'
-        '    </%s>' % (v, layer, z, fmt(x), fmt(y), conns(layer), v)
-        for v, layer, z in VIEWS)
+    def view(v, layer, z):
+        tg = ''
+        if v == "schematicView":                   # ★ 位号只给原理图 ✓（另两个视图不需要 ✗）
+            tg = '\n      <titleGeometry z="2.50002" x="%s" y="%s" />' % (fmt(x + 3.0), fmt(y - 3.0))
+        return ('    <%s layer="%s">\n'
+                '      <geometry z="%s" x="%s" y="%s" />%s\n'
+                '      <connectors>\n%s\n      </connectors>\n'
+                '    </%s>' % (v, layer, z, fmt(x), fmt(y), tg, conns(layer), v))
+
+    views = "\n".join(view(v, layer, z) for v, layer, z in VIEWS)
     return ('  <instance moduleIdRef="%s" modelIndex="%d" path="%s">\n'
             '    <property name="part number" value="%s" />\n'
             '    <title>%s</title>\n'
@@ -246,29 +277,48 @@ def main(argv):
         return 0
 
     # ② 精摆：按本体框中心对齐 + GAP 间隙 ✓（几何来自**工具** ✓，不是我拍的数 ✓）
+    #
+    # ★★ 2026-10-13 实测：**一行平铺不行** ✗ ⇒ 改**两排** ✓
+    #   现象（实测 ✓）：11 件挤在一条 **222 mm** 的长条上 ⇒ 布线器反复报「**没有一条候选**
+    #   能…」✗；硬约束「线↔线净距 ≥ `--wire-gap`（1.000 mm，用户 2026-10-09 定 ✓）」
+    #   **34 对过不去** ✗（rc=1）—— 而且扫了 5 档开关（`--ground=GND` / `--label=3V3,SDA,SCL` /
+    #   `--trim` / `--relabel`）**结果一模一样** ✗ ⇒ 不是参数问题、是**布局**问题 ✓。
+    #   ⇒ 分两排（**结构性**改法 ✓，不是给参数打补丁 ✗）：
+    #       第 1 排 = MCU 一族（`U1`/`U2`/上拉/LED/储能 ✓）
+    #       第 2 排 = 外部接口（`J1`–`J4` ✓）
+    #   ★ 行距**由工具给的本体框算出** ✓（`half[0] + GAP + half[1]` ✓）—— 不是我拍的数 ✓。
     _t, _e, mi_of = emit(place, WORK / "x.fzz")
-    place2, x, bx = {}, 0.0, 0.0
+    place2, bx = {}, 0.0
+    box_of = {}
     for ref in ORDER:
         mi = mi_of.get(ref)
         b = boxes.get(str(mi)) or boxes.get(mi)
         if not b:
-            # ★ 网标签件**没有“本体框”** ✓（它的旗标本体见库仓 `sch_net.py` ✓）
-            #   ⇒ 摆到**第二排** ✓（粗摆那排是 x=120 递增 ✗ ⇒ 会把画布拉到 2000 单位 ✗）
-            #   ★ 旗标从锚点**向左上**伸 ✓ ⇒ 间距给足 ✓、整排放在第一排**下面** ✓
-            place2[ref] = (bx, -100.0)
-            bx += 60.0
-            continue
+            print("   !! 没拿到 %s 的本体框（mi=%s）⇒ 摆到第 2 排" % (ref, mi))
+        else:
+            box_of[ref] = b
+    half = {0: 0.0, 1: 0.0}
+    for ref, b in box_of.items():
+        r = ROW_OF.get(ref, 0)
+        half[r] = max(half[r], (b[3] - b[1]) / 2.0)
+    ycen = {0: 0.0, 1: -(half[0] + GAP + half[1])}      # ★ 两排框心间距 ✓
+    print("   两排：半高 %s ⇒ 框心 y = %s（单位 ✓）"
+          % ({k: round(v, 1) for k, v in half.items()}, {k: round(v, 1) for k, v in ycen.items()}))
+    xs = {0: 0.0, 1: 0.0}
+    for ref in ORDER:
+        b = box_of.get(ref)
         if not b:
-            print("   !! 没拿到 %s 的本体框（mi=%s）⇒ 摆到第二排" % (ref, mi))
-            place2[ref] = (bx, -100.0)
+            place2[ref] = (bx, ycen[1])                  # 兜底（没有本体框的件 ✓）
             bx += 60.0
             continue
+        r = ROW_OF.get(ref, 0)
         w = b[2] - b[0]
         cy = (b[1] + b[3]) / 2.0
-        place2[ref] = (x - b[0], -cy)          # 本体框左缘落在 x ✓、框心对 0 行 ✓
-        x += w + GAP
+        place2[ref] = (xs[r] - b[0], ycen[r] - cy)        # 本体框左缘落在本排 x ✓、框心对行 y ✓
+        xs[r] += w + GAP
     emit(place2, OUT)
-    print("② 精摆 → %s（%d 件）" % (OUT, len(PARTS)))
+    print("② 精摆 → %s（%d 件；第 1 排宽 %.0f 单位、第 2 排宽 %.0f 单位）"
+          % (OUT, len(PARTS), xs[0] - GAP, xs[1] - GAP))
 
     rc, out, err, pins2 = pins_out(OUT, "final")
     print("   复核 render_sch rc=%d" % rc)
