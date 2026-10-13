@@ -39,10 +39,11 @@ GAP = 2 * GRID             # 相邻本体框间隙 ✓（抄像素板定下来�
 #   位号 / moduleId / fzp 路径 / 脚数 / 标题文字
 #   ★ 库件 = `MINE/user/<moduleId>.fzp` ✓（部署口径见库仓 `check_deploy.py` ✓）
 #   ★ 核心件 = `:/resources/parts/core/<file>` ✓
-#   ⚠ J1–J4 是**外部接口**，本库暂时**没有** 4/6/7 脚的排针件 ✗（Fritzing 那套 Generic IC 是
-#      GUI 现场生成的、不在核心件目录里 ✗）⇒ 先各用一个 **`NetLabel-Pad`**（1 脚 ✓）占位 ✓，
-#     网名写在标题上 ✓ —— 电气语义是对的 ✓（同名即连通 ✓，见库仓 `sch_net.py` ✓），
-#     画法上等排针件做出来再换 ✗（记在 `carrier-connections.md` §4 待核里 ✓）。
+#   ★★ 2026-10-13：`J1–J4` 原来用 `NetLabel-Pad`（1 脚）+ 标题写网名**占位** ✗ ——
+#     当时本库**没有**排针件 ✗；现已有 **`PinHeader-1x2…1x10`** ✓（本库新件 ✓，
+#     几何照 Fritzing 核心库的 3 脚 0.1in 公排针 ✓）⇒ 换成真件 ✓。
+#     ★ 排针是**通用件** ✓（脚名 = `1`…`N` ✓）⇒ **信号名不写脚名** ✗、由连线表达 ✓
+#     （对应关系见 `carrier_nets.py` 末尾那张表 ✓）。
 U = "C:/Users/shi.jinghai-honor/Documents/Fritzing/parts/user"
 
 # ★★ 2026-10-13 实测定下的口径 ✗：**一律用库件** ✓ ——
@@ -50,7 +51,7 @@ U = "C:/Users/shi.jinghai-honor/Documents/Fritzing/parts/user"
 #   （实测：`render_sch --pins-out` 对 17 件只认 15 件 ✓，丢的正是那两只核心件 ✗）
 #   ⇒ 库件的 moduleId / fzp 名**从部件目录里读** ✓（不写死 ✗，免得改名就漂 ✗）。
 LIB_DIRS = ["CH32V203F8U6", "ATECC608B", "Resistor-0603", "Capacitor-0603",
-            "SOD-123", "NetLabel-Pad"]
+            "SOD-123", "PinHeader-1x4", "PinHeader-1x6", "PinHeader-1x7"]
 # ★★ **核心件**（Fritzing 自带 ✓）2026-10-13 实测定口径 ✗：
 #   · 核心件的 `path` **必须写绝对路径** ✓（`…/Fritzing/fritzing-parts/core/<文件>.fzp` ✓）——
 #     ✗ 写成 Fritzing 内部记号 `:/resources/parts/core/…` 我们的工具链**读不到** ✗
@@ -83,33 +84,33 @@ def lib_part(dirname):
     return m.group(1), "%s/%s.fzp" % (U, m.group(1)), dirname
 
 
-# (位号, 部件目录, 脚数, 标题) —— 脚数从 fzp 里数 ✓（下面自动填 ✓）
+# (位号, 部件目录, 实例标题) —— ★ 标题**必须是纯位号** ✗（`sch_route.py` 拿 `<title>` 当**位号**
+#   去 `insts[ref]` 查实例 ✗ —— 写成 `BT1 5.5V 超容` 会 KeyError ✗，2026-10-13 实测 ✓）
+#   ⇒ 说明文字只留在注释里 ✓。
 SPEC = [
-    ("U1", "CH32V203F8U6", "U1"),
-    ("U2", "ATECC608B", "U2"),
-    ("R1", "Resistor-0603", "R1 4.7k"),
-    ("R2", "Resistor-0603", "R2 4.7k"),
-    ("R3", "Resistor-0603", "R3 10k"),
+    ("U1", "CH32V203F8U6", "U1"),                  # MCU ✓
+    ("U2", "ATECC608B", "U2"),                     # 安全元件 ✓
+    ("R1", "Resistor-0603", "R1"),                 # 4.7k，I2C SDA 上拉 ✓
+    ("R2", "Resistor-0603", "R2"),                 # 4.7k，I2C SCL 上拉 ✓
+    ("R3", "Resistor-0603", "R3"),                 # 10k，心跳灯限流 ✓
     # D1 心跳灯：用 Fritzing 的 **SMD 0603 LED 核心件** ✓（真件 ✓，不再是占位 ✗）
-    ("D1", "core:SMD_LED_generic_0603.fzp", "D1 心跳灯"),
+    ("D1", "core:SMD_LED_generic_0603.fzp", "D1"),
     # BT1 = 5.5 V 超容 ✓ ⇒ 用核心件里的 **goldcap（超容）** ✓（真件 ✓）
     ("BT1", "core:capacitor_elko_goldcap_4.0F_92eef0d1d2f548b9db9918a1769107d3_2.fzp",
-     "BT1 5.5V 超容"),
-]
-# 接口占位（每个 `NetLabel-Pad` 一 1 只脚 ✓，脚名 `PAD` ✓）—— ★ 缺 4/6/7 脚排针件 ✗（见文件头 ✓）
-LABELS = [
-    ("JP1", "MOD_RX"), ("JP2", "MOD_TX"),
-    ("JP3", "CON_TX"), ("JP4", "CON_RX"),
-    ("JP5", "SDA"), ("JP6", "SCL"),
-    ("JP7", "SWDIO"), ("JP8", "SWCLK"),
-    ("JP9", "VBAT_OK"), ("JP10", "VBUS_IN"),
+     "BT1"),
+    # ── 外部接口（★ 2026-10-13 起用**真排针** ✓，不再是 NetLabel-Pad 占位 ✗）──────────
+    #   脚号 ↔ 信号名见 `carrier_nets.py` 末尾 ✓（出处 `carrier-connections.md` §2 ✓）
+    ("J1", "PinHeader-1x4", "J1"),                 # 模组口 ✓
+    ("J2", "PinHeader-1x6", "J2"),                 # 台架/产线 ✓
+    ("J3", "PinHeader-1x4", "J3"),                 # SWD ✓
+    ("J4", "PinHeader-1x7", "J4"),                 # CJMCU-2557 前端模块 ✓
 ]
 
 
 def build_parts():
     """⇒ `[(位号, moduleId, fzp 路径, 脚数, 标题, 部件目录), …]` ✓（脚数 = fzp 里 `<connector>` 个数 ✓）"""
     out = []
-    for ref, d, title in SPEC + [(r, "NetLabel-Pad", n) for r, n in LABELS]:
+    for ref, d, title in SPEC:
         if d.startswith("core:"):               # ★ 核心件：绝对路径 ✓、不内嵌 ✓
             mid, path = core_part(d.split(":", 1)[1])
             n = len(re.findall(r"<connector\b",
@@ -126,8 +127,8 @@ def build_parts():
 
 PARTS = build_parts()
 
-# 精摆的排布顺序 ✓（左→右：电源/储能 → MCU → SE → 上拉 → 灯 → 接口标签 ✓）
-ORDER = ["BT1", "U1", "U2", "R1", "R2", "R3", "D1"] + [r for r, _ in LABELS]
+# 精摆的排布顺序 ✓（左→右：电源/储能 → MCU → SE → 上拉 → 灯 → 四个外部接口 ✓）
+ORDER = ["BT1", "U1", "U2", "R1", "R2", "R3", "D1", "J1", "J2", "J3", "J4"]
 
 VIEWS = [("breadboardView", "breadboard", "2.50002"),
          ("schematicView", "schematic", "2.50002"),
