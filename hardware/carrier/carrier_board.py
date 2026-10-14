@@ -113,7 +113,7 @@ U = "C:/Users/shi.jinghai-honor/Documents/Fritzing/parts/user"
 #   （实测：`render_sch --pins-out` 对 17 件只认 15 件 ✓，丢的正是那两只核心件 ✗）
 #   ⇒ 库件的 moduleId / fzp 名**从部件目录里读** ✓（不写死 ✗，免得改名就漂 ✗）。
 LIB_DIRS = ["CH32V203F8U6", "ATECC608B", "Resistor-0603", "Capacitor-0603",
-            "SOD-123", "PinHeader-1x4", "PinHeader-1x6", "PinHeader-1x7"]
+            "SOD-123", "LED-0603", "PinHeader-1x4", "PinHeader-1x6", "PinHeader-1x7"]
 # ★★ **核心件**（Fritzing 自带 ✓）2026-10-13 实测定口径 ✗：
 #   · 核心件的 `path` **必须写绝对路径** ✓（`…/Fritzing/fritzing-parts/core/<文件>.fzp` ✓）——
 #     ✗ 写成 Fritzing 内部记号 `:/resources/parts/core/…` 我们的工具链**读不到** ✗
@@ -155,16 +155,19 @@ SPEC = [
     ("R1", "Resistor-0603", "R1"),                 # 4.7k，I2C SDA 上拉 ✓
     ("R2", "Resistor-0603", "R2"),                 # 4.7k，I2C SCL 上拉 ✓
     ("R3", "Resistor-0603", "R3"),                 # 10k，心跳灯限流 ✓
-    # D1 心跳灯 = **SparkFun 的 0603 SMD LED** ✓（核心件 ✓，moduleId `SparkFun-LED-LED-0603` ✓）
-    #   ★★ 2026-10-13 实测换件 ✗：先前用的 `SMD_LED_generic_0603.fzp` 是**泛用壳** ✗ ——
-    #     icon / breadboard 都指向 **5mm 直插 LED** ✗，schematic 的脚又包在 `<g>` 里
-    #     ⇒ 本工具链 `pins_of` **一只脚都认不出**（`terminal 0 / pin 0 / none` ✗）⇒ 布线当场卡住 ✗。
-    #   选件判据（用户 2026-10-13 定：**看 pcb 确定** ✓）：两者 pcb 都是 0603 ✓，但只有这只
-    #   是**真件** —— 实测 `terminal=2 pin=2 ⇒ pins_of=terminal 2`（bad 空 ✓）。
-    #   ★ 脚序也正 ✓：`connector0 name=A`（**阳极** ✓）/ `connector1 name=C`（**阴极** ✓）
+    # D1 心跳灯 = **本库自己的 `LED-0603`** ✓（2026-10-15 从 core 件换过来 ✓）
+    #   ★★ 为什么换 ✗（用户 2026-10-15 截图报 ✓）：core 那只 SparkFun 件的 schematic 里，
+    #     **两个端子画在引脚线的中点** ✗ ⇒ Fritzing 把从它接出去的导线端**吸在引线中间** ✗
+    #     （用户的图：从 2 脚出去的线端正落在**阴极杠**上 ✓）。
+    #   ✓ 本库新件 `LED-0603` 的 schematic 是**自绘**的 ✓：两端子显式落在引脚线的**外端** ✓
+    #     （生成器出处 `svg/LED-0603/gen_part.py`；那条 `min(x0, x1)` 踩坑也已修 ✓）。
+    #   ★ 脚序依旧：`connector0 name=A`（**阳极** ✓）/ `connector1 name=C`（**阴极** ✓）
     #     ⇒ 与 `carrier_nets.py` 的 `LED_R→#1`（限流电阻之后 = 阳极 ✓）/ `LED_HB→#2`
     #     （MCU 脚 = 阴极，低电平点亮 ✓）对得上 ✓。
-    ("D1", "core:sparkfun-led-led-0603.fzp", "D1"),
+    #   ★ 历史（2026-10-13，已作废 ✗）：先前用过 `SMD_LED_generic_0603.fzp`（**泛用壳** ✗ ——
+    #     icon/breadboard 指向 5mm 直插 ✗、schematic 的脚包在 `<g>` 里 ⇒ `pins_of` 一只都认不出 ✗）；
+    #     随后换成 core 的 SparkFun 件 ✓ —— 它的**端子位置**就是本次换掉的原因 ✓。
+    ("D1", "LED-0603", "D1"),
     # BT1 = 5.5 V 超容 ✓ ⇒ 用**我们库里**的真超容件 ✓
     #   ★★ 2026-10-13 用户定 ✓（原话：「**BT1 应该带电容值**」✗）：
     #     ✗ 原先用**核心库**的 goldcap（`core:capacitor_elko_goldcap_4.0F_…` ✗）——
