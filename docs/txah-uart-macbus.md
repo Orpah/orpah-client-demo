@@ -25,7 +25,7 @@ python tools\fmac_macbus_switch.py restore    # 还原
 - 2026-09-16 已切到 UART 并**编过**：产物 `FMAC_SDK\project\txw8301_v2.4.1.5-39777_2026.9.16_.bin`
   （365584 B，sha1 `06ea7ec83074…`），特征串 = `uart bus fixlen` + `mac_bus_uart_attach`
   （旧 bin 全是 `mac_bus_sdio_attach`）。
-- 构建/烧录/回退的完整说明与两条环境坑（make 要用 CDK 自带的 3.82.90 + msys sh）见
+- 构建/烧录/回退的完整说明与两条环境问题（make 要用 CDK 自带的 3.82.90 + msys sh）见
   `halow-demo/TXW8301/README.md`。
 - 烧录（**由用户执行**）：串口连 AT 口 → `at+fwupg` → SecureCRT 脚本「发送 Xmodem」选那个 bin。
 - ⚠ **未烧录、未上机**：这一节只说明"能编出来且宏切对了"。

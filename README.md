@@ -88,7 +88,7 @@ orpah-client-demo/
 ├── firmware/     # CH32V203 固件（Makefile/启动/驱动/模组数据口；平台层四个真凶已修）
 ├── proto/        # 协议内核 C 实现 + 测试向量 + 跨语言交叉测试（run_cross_test.py）
 ├── tools/        # 上位机/联调脚本（host 数据口、串口、真机轮询、网表核对 fzz_nets.py）
-├── docs/         # 上机记录、接线、踩坑（见下表）
+├── docs/         # 上机记录、接线、遇到的问题（见下表）
 └── hardware/     # 接线图（Fritzing .fzz + .svg 导出）
 ```
 

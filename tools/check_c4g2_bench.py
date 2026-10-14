@@ -164,7 +164,7 @@ def slot0_pub_by_sn(dbp, sn):
 
     ★ 为什么必须按 SN 取、不能只用硬编码常量 ✗（2026-10-12 跑台架闸门才抓到 ✓）：
       `SLOT0_PUB_X/Y` 是**某一颗**量出来的 ⇒ 换一颗就必然 `InvalidSignature`
-      —— 那是**尺子错、不是签名错** ✗（与 2026-10-11 `check_report_hex.py` 那个坑同一类）。
+      —— 那是**尺子错、不是签名错** ✗（与 2026-10-11 `check_report_hex.py` 那个问题同一类）。
     读法 = **直读 `keys` 表的 `pubkey_pem`**（与 `tools/which_chip.py` 同一张表、同一种读法 ✓）；
       用 `public_numbers()` 拼 `X||Y`（**绕开各种序列化枚举** ✓ 版本无尖）。
     """

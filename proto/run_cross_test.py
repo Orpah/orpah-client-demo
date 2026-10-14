@@ -1538,7 +1538,7 @@ def _run(cmd, **kw):
 
     ⚠ Windows 上 subprocess 默认按 GBK/936 解码输出 ⇒ 读线程里抛
       UnicodeDecodeError，而且 stdout 会变成空的 —— 于是“报错看起来什么都没有”。
-      这条坑在各仓 AGENTS 里都记过（`encoding="utf-8", errors="replace"`）。
+      这处问题在各仓 AGENTS 里都记过（`encoding="utf-8", errors="replace"`）。
     """
     kw.setdefault("capture_output", True)
     kw.setdefault("encoding", "utf-8")

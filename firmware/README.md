@@ -195,7 +195,7 @@ WCHISPTool 流程：按住 `BOOT` → 按/放 `RST` → 松 `BOOT` → 选 `buil
 > `uart_init` 补外设时钟、Makefile 的 objcopy 反参、Makefile 在 Win11 上能 `make`）。
 >
 > ★ **两个仓各自独立、各留一份平台层**（用户 2026-09-21 判定：不抽公共库、不做 submodule）——
-> 代价是**同一处坑不能在一边修完就算完**。平台层这 **7 个文件**要两侧同步：
+> 代价是**同一处问题不能在一边修完就算完**。平台层这 **7 个文件**要两侧同步：
 > `ld/link.ld`、`startup/startup_ch32v203.S`、`Core/ch32v20x.h`、`Periph/gpio.{c,h}`、`Periph/uart.{c,h}`；
 > 改任一侧时**顺手把另一侧也改掉**，并各自标清「哪一侧上机验证过」（本仓 = 已上机，
 > 记录见 `../docs/c3-2b-bench-bringup.md`；那一边 = **未上机**）。
