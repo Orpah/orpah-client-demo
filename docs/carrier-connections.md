@@ -143,14 +143,20 @@ py -3.13 <库仓>\tools\sch_straighten.py <草图.fzz> [--apply]
 - 骨架从**现成的台架草图**抄 ✓（只留它的 `<boards>` 与板框件 `PCB1` ✓，别的实例与全部悬空
   `<connects>` 一律删掉 ✓）⇒ Fritzing 要的外层结构是**它自己写的形状** ✓，不是我编的 ✗；
 - 两趟摆位 ✓：① 粗摆（固定间距 ✓ 不必先知道尺寸 ✓）⇒ ② 跑库仓 `render_sch.py --pins-out`
-  拿到**本体框** ✓ 再按 `GAP = 2 格` 精摆 ✓（几何来自工具 ✓，不是我拍的数 ✓）；
+  拿到**本体框** ✓ 再按 `GAP` 精摆 ✓（几何来自工具 ✓，不是我拍的数 ✓）。
+  ★ `GAP` 现在是 **11 格 ≈ 22.4 mm** ✓（2026-10-14 逐档量出来的 ✓；它那条注释里记着
+  **为什么从 2 → 4 → 6 → 12 → 11 格**，以及 **12 格 + 同 `--choffs` 也达标** 的对比 ✓）；
+  ★★ **出交付件的整条命令**（含 `--choffs 7.3,12,22,34` 与 `--no-mst-merge --no-mst-shape`
+  这两个**必须**的开关 ✓）写在 `carrier_board.py` 的**用法段**里 ✓ —— 以它为准 ✗，别凭记忆重建 ✗；
 - 件一律用**库件** ✓；★ **核心件（Fritzing 自带）也能用** ✓，但 `path` **必须写绝对路径**
   （`…/Fritzing/fritzing-parts/core/<文件>.fzp` ✓）✗ —— 写成 Fritzing 内部记号
   `:/resources/parts/core/…` 我们的工具链**读不到** ✗（`part_measure.py` 明写：core 件不在 `.fzz` 里
   ⇒ 按实例给的**绝对路径**读它的 `.fzp` ✓）。实测：换绝对路径后 **17/17 全认** ✓。
 
-**产物** ✓：`hardware/carrier/carrier-board.fzz`（**17 件 / 零导线 / 183×68 mm** ✓，
-`render_sch --pins-out` rc=0 ✓）；临时件在 `hardware/carrier/_work/`（不入库 ✓）。
+**产物** ✓：`hardware/carrier/carrier-board.fzz`（**11 件 / 零导线** ✓，`render_sch --pins-out` rc=0 ✓）；
+**交付件** = `hardware/carrier/carrier-schematic.{fzz,png,svg}` ✓（2026-10-14 定为 `c1` 版：
+贴脚 1 / 交叉 54 / 拒画 0 / 导线重叠 0 / `check_netlist` ✓ 14/14 ✓）；
+临时件在 `hardware/carrier/_work/`（不入库 ✓）。
 
 **已解决** ✓：`D1` 改用核心件的 **SMD 0603 LED** ✓、`BT1` 改用核心件的 **goldcap（超容）** ✓
 —— 都是真件 ✓，不再是占位 ✗。
