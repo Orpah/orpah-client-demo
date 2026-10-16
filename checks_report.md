@@ -1,6 +1,6 @@
 # checks_report.md —— `tools/run_checks.py` 的输出（**入库**，同隔壁仓惯例）
 
-跑的时间：2026-10-16 19:13:14
+跑的时间：2026-10-17 00:15:15
 
 判定口径：**退出码 0 且输出里没有 `FAIL` / `Traceback`**（只看退出码会漏 —— 有些脚本自己吞异常）。
 
@@ -8,6 +8,17 @@
 |---|---|---|---|
 | ✅ PASS | 协议内核交叉测试（C ↔ Python） | `C:\Python313\python.exe run_cross_test.py` | 0 |
 | ✅ PASS | 接线图网表 vs 规格表（9 张） | `C:\Python313\python.exe fzz_nets.py` | 0 |
+| ✅ PASS | 线色闸门 carrier-board.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py carrier-board.fzz` | 0 |
+| ✅ PASS | 线色闸门 carrier-schematic.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py carrier-schematic.fzz` | 0 |
+| ✅ PASS | 线色闸门 bstep-ch347f-2txah-evb.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py bstep-ch347f-2txah-evb.fzz` | 0 |
+| ✅ PASS | 线色闸门 bstep-ch347f-txah-evb-thrj45.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py bstep-ch347f-txah-evb-thrj45.fzz` | 0 |
+| ✅ PASS | 线色闸门 bstep-ch347f-txah-evb.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py bstep-ch347f-txah-evb.fzz` | 0 |
+| ✅ PASS | 线色闸门 cstep-ch347f-atecc608b.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py cstep-ch347f-atecc608b.fzz` | 0 |
+| ✅ PASS | 线色闸门 cstep-ch347f-nanoch32-atecc608b.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py cstep-ch347f-nanoch32-atecc608b.fzz` | 0 |
+| ✅ PASS | 线色闸门 cstep-ch347f-nanoch32-i2ctest.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py cstep-ch347f-nanoch32-i2ctest.fzz` | 0 |
+| ✅ PASS | 线色闸门 cstep-ch347f-txah-evb-nanoch32-atecc608b.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py cstep-ch347f-txah-evb-nanoch32-atecc608b.fzz` | 0 |
+| ✅ PASS | 线色闸门 cstep-ch347f-txah-evb-nanoch32.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py cstep-ch347f-txah-evb-nanoch32.fzz` | 0 |
+| ✅ PASS | 线色闸门 cstep-nanoch32-atecc608b.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py cstep-nanoch32-atecc608b.fzz` | 0 |
 | ✅ PASS | 标注扫描（量尺，不作闸门） | `C:\Python313\python.exe fzz_annot_scan.py --svg` | 0 |
 | ✅ PASS | Python 语法（tools/ + proto/ + firmware/） | `C:\Python313\python.exe -m compileall -q tools proto firmware` | 0 |
 | ✅ PASS | 固件编译-载板档（SE_I2C=1 → I2C2 @PB10/PB11，要求零 warning；✗ 未上机） | `make -C firmware rebuild SHELL=D:\Program Files\Git\bin\sh.exe SE_I2C=1` | 0 |
@@ -74,6 +85,246 @@ cstep-nanoch32-atecc608b.fzz -> f:\git\orpah-client-demo\hardware\wiring\cstep-n
   结论：全部对上 ✓
 ========================================================================================
 一共 9 张图，0 张有问题
+```
+
+### 线色闸门 carrier-board.fzz（rc=0，PASS）
+
+```
+== 文件自检: f:\git\orpah-client-demo\hardware\carrier\carrier-board.fzz
+   ① 非标准色的导线（面包板 ✓ 13 色表）: 0 个 ✓
+   ①b 本图没有原理图导线 ⇒ **判不了** ✓ 不判 ✓
+   ② 零长**真退化**线: 0 个 ✓
+   ②' 零长**占位**线 : 0 个 ✓（非本视图的真实走线 ✓ 三视图占位 ✓ 见 gen_routes.wire_block）
+   ②'' 零长**接头**线（任一视图带 `<connect>` ⇒ 有意画的连接点 ✓ 不算退化 ✓）: 0 个 ✓
+   ③ 实例 color 属性: ['TXT90000013=#333333']
+   ④ 面包板导线 1 段（0 根）| 颜色: ['#404040']
+
+== 图例区（x>500 ✓ 按 y 排 ✓）
+   y= 144.0  Wire90000012   color=#404040   长度 27.0
+
+== 图例文字（从零件 svg 里读 ✓ 按 y 排 ✓）
+   y=  12.0  TXT90000013    ''
+
+⇒ ✓ 全部合格
+   （退出码 0 ✓；口径 = `fz_colors` 两张表 ✓ —— 它自己已拿 Fritzing 的 XML 自校过 ✓）
+```
+
+### 线色闸门 carrier-schematic.fzz（rc=0，PASS）
+
+```
+== 文件自检: f:\git\orpah-client-demo\hardware\carrier\carrier-schematic.fzz
+   ① 非标准色的导线（面包板 ✓ 13 色表）: 0 个 ✓
+   ①b 原理图导线 110 段｜颜色 ⊆ 原理图那一节（13 色 ✓）: 0 根 ✓
+   ①c 原理图**不许用白/黄** ✗: 0 根 ✓
+   ② 零长**真退化**线: 0 个 ✓
+   ②' 零长**占位**线 : 0 个 ✓（非本视图的真实走线 ✓ 三视图占位 ✓ 见 gen_routes.wire_block）
+   ②'' 零长**接头**线（任一视图带 `<connect>` ⇒ 有意画的连接点 ✓ 不算退化 ✓）: 0 个 ✓
+   ③ 实例 color 属性: 0 个 ✓（Fritzing 自己也不写 ✓）
+   ④ 面包板导线 0 段（0 根）| 颜色: []
+
+== 图例区（x>500 ✓ 按 y 排 ✓）
+
+== 图例文字（从零件 svg 里读 ✓ 按 y 排 ✓）
+
+⇒ ✓ 全部合格
+   （退出码 0 ✓；口径 = `fz_colors` 两张表 ✓ —— 它自己已拿 Fritzing 的 XML 自校过 ✓）
+```
+
+### 线色闸门 bstep-ch347f-2txah-evb.fzz（rc=0，PASS）
+
+```
+== 文件自检: f:\git\orpah-client-demo\hardware\wiring\bstep-ch347f-2txah-evb.fzz
+   ① 非标准色的导线（面包板 ✓ 13 色表）: 0 个 ✓
+   ①b 原理图导线 19 段｜颜色 ⊆ 原理图那一节（13 色 ✓）: 0 根 ✓
+   ①c 原理图**不许用白/黄** ✗: 0 根 ✓
+   ② 零长**真退化**线: 0 个 ✓
+   ②' 零长**占位**线 : 0 个 ✓（非本视图的真实走线 ✓ 三视图占位 ✓ 见 gen_routes.wire_block）
+   ②'' 零长**接头**线（任一视图带 `<connect>` ⇒ 有意画的连接点 ✓ 不算退化 ✓）: 0 个 ✓
+   ③ 实例 color 属性: 0 个 ✓（Fritzing 自己也不写 ✓）
+   ④ 面包板导线 19 段（19 根）| 颜色: ['#25cc35', '#418dd9', '#8c3b00', '#ab58a2', '#ef6100']
+
+== 图例区（x>500 ✓ 按 y 排 ✓）
+
+== 图例文字（从零件 svg 里读 ✓ 按 y 排 ✓）
+
+⇒ ✓ 全部合格
+   （退出码 0 ✓；口径 = `fz_colors` 两张表 ✓ —— 它自己已拿 Fritzing 的 XML 自校过 ✓）
+```
+
+### 线色闸门 bstep-ch347f-txah-evb-thrj45.fzz（rc=0，PASS）
+
+```
+== 文件自检: f:\git\orpah-client-demo\hardware\wiring\bstep-ch347f-txah-evb-thrj45.fzz
+   ① 非标准色的导线（面包板 ✓ 13 色表）: 0 个 ✓
+   ①b 原理图导线 8 段｜颜色 ⊆ 原理图那一节（13 色 ✓）: 0 根 ✓
+   ①c 原理图**不许用白/黄** ✗: 0 根 ✓
+   ② 零长**真退化**线: 0 个 ✓
+   ②' 零长**占位**线 : 0 个 ✓（非本视图的真实走线 ✓ 三视图占位 ✓ 见 gen_routes.wire_block）
+   ②'' 零长**接头**线（任一视图带 `<connect>` ⇒ 有意画的连接点 ✓ 不算退化 ✓）: 0 个 ✓
+   ③ 实例 color 属性: 0 个 ✓（Fritzing 自己也不写 ✓）
+   ④ 面包板导线 8 段（8 根）| 颜色: ['#25cc35', '#418dd9', '#8c3b00']
+
+== 图例区（x>500 ✓ 按 y 排 ✓）
+
+== 图例文字（从零件 svg 里读 ✓ 按 y 排 ✓）
+
+⇒ ✓ 全部合格
+   （退出码 0 ✓；口径 = `fz_colors` 两张表 ✓ —— 它自己已拿 Fritzing 的 XML 自校过 ✓）
+```
+
+### 线色闸门 bstep-ch347f-txah-evb.fzz（rc=0，PASS）
+
+```
+== 文件自检: f:\git\orpah-client-demo\hardware\wiring\bstep-ch347f-txah-evb.fzz
+   ① 非标准色的导线（面包板 ✓ 13 色表）: 0 个 ✓
+   ①b 原理图导线 16 段｜颜色 ⊆ 原理图那一节（13 色 ✓）: 0 根 ✓
+   ①c 原理图**不许用白/黄** ✗: 0 根 ✓
+   ② 零长**真退化**线: 0 个 ✓
+   ②' 零长**占位**线 : 0 个 ✓（非本视图的真实走线 ✓ 三视图占位 ✓ 见 gen_routes.wire_block）
+   ②'' 零长**接头**线（任一视图带 `<connect>` ⇒ 有意画的连接点 ✓ 不算退化 ✓）: 0 个 ✓
+   ③ 实例 color 属性: 0 个 ✓（Fritzing 自己也不写 ✓）
+   ④ 面包板导线 16 段（16 根）| 颜色: ['#25cc35', '#418dd9', '#8c3b00', '#ab58a2', '#ef6100']
+
+== 图例区（x>500 ✓ 按 y 排 ✓）
+
+== 图例文字（从零件 svg 里读 ✓ 按 y 排 ✓）
+
+⇒ ✓ 全部合格
+   （退出码 0 ✓；口径 = `fz_colors` 两张表 ✓ —— 它自己已拿 Fritzing 的 XML 自校过 ✓）
+```
+
+### 线色闸门 cstep-ch347f-atecc608b.fzz（rc=0，PASS）
+
+```
+== 文件自检: f:\git\orpah-client-demo\hardware\wiring\cstep-ch347f-atecc608b.fzz
+   ① 非标准色的导线（面包板 ✓ 13 色表）: 0 个 ✓
+   ①b 原理图导线 14 段｜颜色 ⊆ 原理图那一节（13 色 ✓）: 0 根 ✓
+   ①c 原理图**不许用白/黄** ✗: 0 根 ✓
+   ② 零长**真退化**线: 0 个 ✓
+   ②' 零长**占位**线 : 0 个 ✓（非本视图的真实走线 ✓ 三视图占位 ✓ 见 gen_routes.wire_block）
+   ②'' 零长**接头**线（任一视图带 `<connect>` ⇒ 有意画的连接点 ✓ 不算退化 ✓）: 0 个 ✓
+   ③ 实例 color 属性: ['IMG1=#787878']
+   ④ 面包板导线 14 段（11 根）| 颜色: ['#25cc35', '#418dd9', '#8c3b00', '#cc1414', '#fff800']
+
+== 图例区（x>500 ✓ 按 y 排 ✓）
+
+== 图例文字（从零件 svg 里读 ✓ 按 y 排 ✓）
+
+⇒ ✓ 全部合格
+   （退出码 0 ✓；口径 = `fz_colors` 两张表 ✓ —— 它自己已拿 Fritzing 的 XML 自校过 ✓）
+```
+
+### 线色闸门 cstep-ch347f-nanoch32-atecc608b.fzz（rc=0，PASS）
+
+```
+== 文件自检: f:\git\orpah-client-demo\hardware\wiring\cstep-ch347f-nanoch32-atecc608b.fzz
+   ① 非标准色的导线（面包板 ✓ 13 色表）: 0 个 ✓
+   ①b 原理图导线 21 段｜颜色 ⊆ 原理图那一节（13 色 ✓）: 0 根 ✓
+   ①c 原理图**不许用白/黄** ✗: 0 根 ✓
+   ② 零长**真退化**线: 0 个 ✓
+   ②' 零长**占位**线 : 0 个 ✓（非本视图的真实走线 ✓ 三视图占位 ✓ 见 gen_routes.wire_block）
+   ②'' 零长**接头**线（任一视图带 `<connect>` ⇒ 有意画的连接点 ✓ 不算退化 ✓）: 0 个 ✓
+   ③ 实例 color 属性: ['IMG1=#787878']
+   ④ 面包板导线 21 段（13 根）| 颜色: ['#25cc35', '#404040', '#418dd9', '#ab58a2', '#cc1414', '#ef6100']
+
+== 图例区（x>500 ✓ 按 y 排 ✓）
+
+== 图例文字（从零件 svg 里读 ✓ 按 y 排 ✓）
+
+⇒ ✓ 全部合格
+   （退出码 0 ✓；口径 = `fz_colors` 两张表 ✓ —— 它自己已拿 Fritzing 的 XML 自校过 ✓）
+```
+
+### 线色闸门 cstep-ch347f-nanoch32-i2ctest.fzz（rc=0，PASS）
+
+```
+== 文件自检: f:\git\orpah-client-demo\hardware\wiring\cstep-ch347f-nanoch32-i2ctest.fzz
+   ① 非标准色的导线（面包板 ✓ 13 色表）: 0 个 ✓
+   ①b 原理图导线 10 段｜颜色 ⊆ 原理图那一节（13 色 ✓）: 0 根 ✓
+   ①c 原理图**不许用白/黄** ✗: 0 根 ✓
+   ② 零长**真退化**线: 0 个 ✓
+   ②' 零长**占位**线 : 0 个 ✓（非本视图的真实走线 ✓ 三视图占位 ✓ 见 gen_routes.wire_block）
+   ②'' 零长**接头**线（任一视图带 `<connect>` ⇒ 有意画的连接点 ✓ 不算退化 ✓）: 0 个 ✓
+   ③ 实例 color 属性: 0 个 ✓（Fritzing 自己也不写 ✓）
+   ④ 面包板导线 10 段（3 根）| 颜色: ['#25cc35', '#404040', '#418dd9', '#ab58a2', '#cc1414', '#ef6100']
+
+== 图例区（x>500 ✓ 按 y 排 ✓）
+
+== 图例文字（从零件 svg 里读 ✓ 按 y 排 ✓）
+
+⇒ ✓ 全部合格
+   （退出码 0 ✓；口径 = `fz_colors` 两张表 ✓ —— 它自己已拿 Fritzing 的 XML 自校过 ✓）
+```
+
+### 线色闸门 cstep-ch347f-txah-evb-nanoch32-atecc608b.fzz（rc=0，PASS）
+
+```
+== 文件自检: f:\git\orpah-client-demo\hardware\wiring\cstep-ch347f-txah-evb-nanoch32-atecc608b.fzz
+   ① 非标准色的导线（面包板 ✓ 13 色表）: 0 个 ✓
+   ①b 原理图导线 36 段｜颜色 ⊆ 原理图那一节（13 色 ✓）: 0 根 ✓
+   ①c 原理图**不许用白/黄** ✗: 0 根 ✓
+   ② 零长**真退化**线: 0 个 ✓
+   ②' 零长**占位**线 : 0 个 ✓（非本视图的真实走线 ✓ 三视图占位 ✓ 见 gen_routes.wire_block）
+   ②'' 零长**接头**线（任一视图带 `<connect>` ⇒ 有意画的连接点 ✓ 不算退化 ✓）: 0 个 ✓
+   ③ 实例 color 属性: ['IMG1=#787878']
+   ④ 面包板导线 36 段（34 根）| 颜色: ['#25cc35', '#418dd9', '#8c3b00', '#ab58a2', '#cc1414', '#ef6100']
+
+== 图例区（x>500 ✓ 按 y 排 ✓）
+   y=-144.1  Wire212        color=#8c3b00   长度 72.2
+   y=-135.0  Wire83         color=#8c3b00   长度 9.2
+   y= -63.0  Wire103        color=#cc1414   长度 108.0
+   y= -54.0  Wire117        color=#cc1414   长度 54.0
+   y= -45.0  Wire191        color=#cc1414   长度 54.0
+   y= -36.0  Wire86         color=#418dd9   长度 9.1
+   y= -36.0  Wire97         color=#25cc35   长度 81.0
+   y= -27.1  Wire94         color=#418dd9   长度 98.6
+
+== 图例文字（从零件 svg 里读 ✓ 按 y 排 ✓）
+
+⇒ ✓ 全部合格
+   （退出码 0 ✓；口径 = `fz_colors` 两张表 ✓ —— 它自己已拿 Fritzing 的 XML 自校过 ✓）
+```
+
+### 线色闸门 cstep-ch347f-txah-evb-nanoch32.fzz（rc=0，PASS）
+
+```
+== 文件自检: f:\git\orpah-client-demo\hardware\wiring\cstep-ch347f-txah-evb-nanoch32.fzz
+   ① 非标准色的导线（面包板 ✓ 13 色表）: 0 个 ✓
+   ①b 原理图导线 25 段｜颜色 ⊆ 原理图那一节（13 色 ✓）: 0 根 ✓
+   ①c 原理图**不许用白/黄** ✗: 0 根 ✓
+   ② 零长**真退化**线: 0 个 ✓
+   ②' 零长**占位**线 : 0 个 ✓（非本视图的真实走线 ✓ 三视图占位 ✓ 见 gen_routes.wire_block）
+   ②'' 零长**接头**线（任一视图带 `<connect>` ⇒ 有意画的连接点 ✓ 不算退化 ✓）: 0 个 ✓
+   ③ 实例 color 属性: 0 个 ✓（Fritzing 自己也不写 ✓）
+   ④ 面包板导线 25 段（25 根）| 颜色: ['#25cc35', '#418dd9', '#8c3b00', '#ab58a2', '#ef6100']
+
+== 图例区（x>500 ✓ 按 y 排 ✓）
+
+== 图例文字（从零件 svg 里读 ✓ 按 y 排 ✓）
+
+⇒ ✓ 全部合格
+   （退出码 0 ✓；口径 = `fz_colors` 两张表 ✓ —— 它自己已拿 Fritzing 的 XML 自校过 ✓）
+```
+
+### 线色闸门 cstep-nanoch32-atecc608b.fzz（rc=0，PASS）
+
+```
+== 文件自检: f:\git\orpah-client-demo\hardware\wiring\cstep-nanoch32-atecc608b.fzz
+   ① 非标准色的导线（面包板 ✓ 13 色表）: 0 个 ✓
+   ①b 原理图导线 16 段｜颜色 ⊆ 原理图那一节（13 色 ✓）: 0 根 ✓
+   ①c 原理图**不许用白/黄** ✗: 0 根 ✓
+   ② 零长**真退化**线: 0 个 ✓
+   ②' 零长**占位**线 : 0 个 ✓（非本视图的真实走线 ✓ 三视图占位 ✓ 见 gen_routes.wire_block）
+   ②'' 零长**接头**线（任一视图带 `<connect>` ⇒ 有意画的连接点 ✓ 不算退化 ✓）: 0 个 ✓
+   ③ 实例 color 属性: ['IMG1=#787878']
+   ④ 面包板导线 16 段（13 根）| 颜色: ['#25cc35', '#404040', '#418dd9', '#cc1414', '#fff800']
+
+== 图例区（x>500 ✓ 按 y 排 ✓）
+
+== 图例文字（从零件 svg 里读 ✓ 按 y 排 ✓）
+
+⇒ ✓ 全部合格
+   （退出码 0 ✓；口径 = `fz_colors` 两张表 ✓ —— 它自己已拿 Fritzing 的 XML 自校过 ✓）
 ```
 
 ### 标注扫描（量尺，不作闸门）（rc=0，PASS）
