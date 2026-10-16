@@ -8,7 +8,12 @@ r"""载板的**项目数据**（库仓那套通用工具要的表 ✓）
   · `CH32V203F8U6` = 21 只 ✓（全名，如 `PA2/USART2_TX` ✓；★ **没有 `PA15`** ✗ —— 载板心跳灯
     因此必须换脚 ✗，见下面 `LED_HB` ✓）
   · `ATECC608B` = 8 只 ✓（`GND`/`SDA`/`SCL`/`VCC` ＋ 4×`NC` ✓）
-  · 其余是**核心件**（core parts）⇒ 没有名字，用 `#N` = **第 N 个脚（1 基 ✓）** ✓
+  · `Supercap-1.5F` = 2 只 ✓ —— ★★ **它的名字就是极性** ✓：`connector0` = `-` ✓ / `connector1` = `+` ✓
+    ⇒ **必须用名字引用** ✗（2026-10-17 修 ✗）：原来写 `#1`/`#2`（序号 ✗）⇒ **极性被藏起来了** ✗✗
+      ⇒ 接反了也没人看得出来 ✗（用户 2026-10-17 一眼看出「BT1 正极为什么接地」✗）——
+      实物后果 = **超容反接** ✗。⇒ 规矩：**部件有名字就用名字** ✓；`#N` 只留给**真的没有
+      名字的件**（核心件 ✓）。
+  · 其余是**核心件**（core parts）⇒ 没有名字，才用 `#N` = **第 N 个脚（1 基 ✓）** ✓
     （与像素板同一约定 ✓，见 `pixel_nets.py` ✓）
 
 ★ 用法（与像素板**同一套工具** ✓）：
@@ -30,9 +35,11 @@ NETS = {
                 ("J1", "#1"), ("J2", "#1"), ("J3", "#1"),
                 ("J4", "#4"), ("J4", "#6"), ("J4", "#7")],
     # 地：★ 含 U1 的**裸露焊盘 `VSS`** ✓（部件里它只是一只普通脚 ✓，画板时必须特意连过来 ✓）
-    "GND":     [("U1", "VSS"), ("U2", "GND"), ("BT1", "#2"),
+    #   ★★ 2026-10-17 修 ✗：`BT1` 原来的 `#2` = 序号第 2 = `connector1` = **`+`** ✗ ⇒ **正极接地** ✗✗
+    #     （用户看出来的 ✓）；现在写**名字** `-` ✓ ⇒ 极性写在纸面上了 ✓，反不反一眼就看得见 ✓。
+    "GND":     [("U1", "VSS"), ("U2", "GND"), ("BT1", "-"),
                 ("J1", "#2"), ("J2", "#2"), ("J3", "#2"), ("J4", "#2")],
-    "VBAT":    [("BT1", "#1"), ("J4", "#3")],           # 储能：5.5 V 超容挂前端 BAT ✓
+    "VBAT":    [("BT1", "+"), ("J4", "#3")],           # 储能：5.5 V 超容**正极**挂前端 BAT ✓
     "VBUS_IN": [("J4", "#1")],                          # 取能输入（室内光/光伏 ✓）
     "SDA":     [("U1", "PB11/I2C2_SDA"), ("U2", "SDA"), ("R2", "#2"), ("J2", "#3")],
     "SCL":     [("U1", "PB10/I2C2_SCL"), ("U2", "SCL"), ("R1", "#2"), ("J2", "#4")],
@@ -137,8 +144,8 @@ COLOR_SCH = {
 #   ★ 生成脚本不进仓 ✗（一次性 ✓）；改网表后重跑生成一次 ✓。
 EXPECT = {
     "3V3": {"U1.connector18", "U2.connector7", "R1.connector0", "R2.connector0", "R3.connector0", "J1.connector0", "J2.connector0", "J3.connector0", "J4.connector3", "J4.connector5", "J4.connector6"},
-    "GND": {"U1.connector20", "U2.connector3", "BT1.connector1", "J1.connector1", "J2.connector1", "J3.connector1", "J4.connector1"},
-    "VBAT": {"BT1.connector0", "J4.connector2"},
+    "GND": {"U1.connector20", "U2.connector3", "BT1.connector0", "J1.connector1", "J2.connector1", "J3.connector1", "J4.connector1"},
+    "VBAT": {"BT1.connector1", "J4.connector2"},
     "SDA": {"U1.connector10", "U2.connector4", "R2.connector1", "J2.connector2"},
     "SCL": {"U1.connector9", "U2.connector5", "R1.connector1", "J2.connector3"},
     "MOD_RX": {"U1.connector2", "J1.connector2"},
