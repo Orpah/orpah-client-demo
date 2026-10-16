@@ -26,7 +26,9 @@ r"""造载板的「**含元件、零导线**」原理图源草图（= 画图管�
         --orig <本仓>\\hardware\\wiring\\cstep-ch347f-txah-evb-nanoch32-atecc608b.fzz `
         --rails=3V3,GND --text-gap --choffs 7.3,12,22,34 `
         --no-mst-merge --no-mst-shape
-    # ④ 出图 + 逐网核对（`check_netlist` **必须 rc=0** ✓）
+    # ④ 出图 + 逐网核对 ＋ **线色闸门**（`check_netlist` / `file_sanity` **都必须 rc=0** ✓）
+    #    ★ `file_sanity` 查**两个视图**的线色 ✓（①面包板 / ①b原理图 ✓ —— 2026-10-16 补 ✓，
+    #      用户定「原理图线色闸门必须补」✓；色表唯一出处 = 库仓 `tools/fz_colors.py` ✓）
     py -3.13 <库仓>\\tools\\render_sch.py carrier-schematic.fzz carrier-schematic.png
     py -3.13 <库仓>\\tools\\check_netlist.py carrier-schematic.fzz --nets=carrier_nets.py
 

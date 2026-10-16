@@ -133,6 +133,31 @@ def main():
     res.append(run("接线图网表 vs 规格表（9 张）",
                    [PY, os.path.join(HERE, "fzz_nets.py")]))
 
+    # ②b 线色闸门（**面包板 + 原理图两个视图** ✓ —— 2026-10-16 补 ✓，
+    #     用户定「原理图线色闸门必须补」✓）：
+    #     · 口径 = 库仓 `tools/fz_colors.py` 的两张**官方**表 ✓（它自己会拿 Fritzing 的
+    #       `ratsnestcolors.xml` 逐色自校 ✓）；工具 = 库仓 `tools/file_sanity.py` ✓
+    #       （① 面包板 / ①b 原理图 ⇒ **rc=1 才算红** ✓ —— 那个退出码也是 2026-10-16 才补的 ✗）；
+    #     · ★ 跨仓 ⇒ 找不到库仓 tools 就**明确跳过** ✗（别当通过 ✓，同 sh/固件的处理 ✓）；
+    #       设 `FZ_TOOLS=<库仓>\tools` 可指定 ✓；
+    #     · ★ 只查**入库的**草图 ✓（`_work/` 是草稿、gitignore ✓ ⇒ 不查 ✗ —— 里面那些
+    #       旧产物本来就带着已知错色 ✓，拿它当闸门会天天红 ✗）。
+    fz = os.environ.get("FZ_TOOLS") or r"F:\git\fritzing-parts-langhua\tools"
+    fs = os.path.join(fz, "file_sanity.py")
+    if not os.path.isfile(fs):
+        skipped.append("线色闸门（面包板+原理图）—— 库仓 tools 找不到 ⇒ **明确跳过** ✗ 别当通过 ✓；"
+                       "设 FZ_TOOLS=<库仓\\tools> 即可 ✓")
+    else:
+        n_sk = 0
+        for dp, dn, fn in os.walk(REPO):
+            dn[:] = sorted(d for d in dn if d not in ("_work", ".git", "build", "__pycache__"))
+            for f in sorted(fn):
+                if not f.endswith(".fzz"):
+                    continue
+                n_sk += 1
+                res.append(run("线色闸门 %s" % f, [PY, fs, os.path.join(dp, f)]))
+        print("   线色闸门：查了 **%d** 张入库草图 ✓（口径 = fz_colors 两张官方表 ✓）" % n_sk)
+
     # ③ 标注扫描（量尺：退出码恒 0；只把它当 info）
     inf = run("标注扫描（量尺，不作闸门）", [PY, os.path.join(HERE, "fzz_annot_scan.py"), "--svg"])
     inf["ok"] = True                                            # 量尺 ✓ 不判红
