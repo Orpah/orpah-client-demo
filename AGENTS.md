@@ -31,6 +31,11 @@
 
 ## 1. 硬件与工具链（2026-09-14 用户定）
 
+- ★★ **开发次序：网表 → 面包板 → 原理图 → PCB** ✓（2026-10-16 用户定 ✓）——
+  正文见库仓 `fritzing-parts-langhua/AGENTS.md` **§2b** ✓。
+  本仓现状 ✓：网表 = `hardware/carrier/carrier_nets.py` ✓、
+  面包板 = `hardware/wiring/cstep-*.fzz`（**面包板视图** ✓，9 张都画着 ✓）＋ **实物台架**（已上机 ✓）、
+  原理图 = `hardware/carrier/carrier-schematic.fzz`（已交付 ✓）、**PCB = 未做** ✗。
 - **MCU = CH32V203**（QingKe V2 内核）、**安全元件 = ATECC608B**（协议 §5.3 的 SE）、
   **射频模组 = 泰芯 TX-AH**（AH-SDK V2 系列，与 `halow-demo` 的真机档案 `txah` 同族）。
 - **工具链沿用 `halow-demo/simulator/firmware` 那套**：`riscv-none-elf-gcc`（MounRiver 自带），
