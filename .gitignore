@@ -45,3 +45,5 @@ capture_*.txt
 *~
 # 载板源草图生成器的临时件（不入库 ✓）
 hardware/carrier/_work/
+*_byHand.*
+*_图示.*
