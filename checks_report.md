@@ -1,6 +1,6 @@
 # checks_report.md —— `tools/run_checks.py` 的输出（**入库**，同隔壁仓惯例）
 
-跑的时间：2026-10-17 00:34:26
+跑的时间：2026-10-17 23:33:18
 
 判定口径：**退出码 0 且输出里没有 `FAIL` / `Traceback`**（只看退出码会漏 —— 有些脚本自己吞异常）。
 
@@ -9,6 +9,8 @@
 | ✅ PASS | 协议内核交叉测试（C ↔ Python） | `C:\Python313\python.exe run_cross_test.py` | 0 |
 | ✅ PASS | 接线图网表 vs 规格表（9 张） | `C:\Python313\python.exe fzz_nets.py` | 0 |
 | ✅ PASS | 线色闸门 carrier-board.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py carrier-board.fzz` | 0 |
+| ✅ PASS | 线色闸门 carrier-breadboard.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py carrier-breadboard.fzz` | 0 |
+| ✅ PASS | 线色闸门 carrier-breadboard_byHand.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py carrier-breadboard_byHand.fzz` | 0 |
 | ✅ PASS | 线色闸门 carrier-schematic.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py carrier-schematic.fzz` | 0 |
 | ✅ PASS | 线色闸门 bstep-ch347f-2txah-evb.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py bstep-ch347f-2txah-evb.fzz` | 0 |
 | ✅ PASS | 线色闸门 bstep-ch347f-txah-evb-thrj45.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py bstep-ch347f-txah-evb-thrj45.fzz` | 0 |
@@ -109,18 +111,78 @@ cstep-nanoch32-atecc608b.fzz -> f:\git\orpah-client-demo\hardware\wiring\cstep-n
    （退出码 0 ✓；口径 = `fz_colors` 两张表 ✓ —— 它自己已拿 Fritzing 的 XML 自校过 ✓）
 ```
 
+### 线色闸门 carrier-breadboard.fzz（rc=0，PASS）
+
+```
+   y= 166.0  Wire90000330   color=#999999   长度 9.0
+   y= 178.0  Wire90000332   color=#999999   长度 9.0
+   y= 190.0  Wire90000334   color=#ef6100   长度 9.0
+   y= 202.0  Wire90000336   color=#ef6100   长度 9.0
+
+== 图例文字（从零件 svg 里读 ✓ 按 y 排 ✓）
+   y=  12.0  TXT90000307    ''
+   y=  31.0  TXT90000309    ''
+   y=  43.0  TXT90000311    ''
+   y=  55.0  TXT90000313    ''
+   y=  67.0  TXT90000315    ''
+   y=  79.0  TXT90000317    ''
+   y=  91.0  TXT90000319    ''
+   y= 103.0  TXT90000321    ''
+   y= 115.0  TXT90000323    ''
+   y= 127.0  TXT90000325    ''
+   y= 139.0  TXT90000327    ''
+   y= 151.0  TXT90000329    ''
+   y= 163.0  TXT90000331    ''
+   y= 175.0  TXT90000333    ''
+   y= 187.0  TXT90000335    ''
+   y= 199.0  TXT90000337    ''
+
+⇒ ✓ 全部合格
+   （退出码 0 ✓；口径 = `fz_colors` 两张表 ✓ —— 它自己已拿 Fritzing 的 XML 自校过 ✓）
+```
+
+### 线色闸门 carrier-breadboard_byHand.fzz（rc=0，PASS）
+
+```
+   y= 166.0  Wire90000330   color=#999999   长度 9.0
+   y= 178.0  Wire90000332   color=#999999   长度 9.0
+   y= 190.0  Wire90000334   color=#ef6100   长度 9.0
+   y= 202.0  Wire90000336   color=#ef6100   长度 9.0
+
+== 图例文字（从零件 svg 里读 ✓ 按 y 排 ✓）
+   y=  12.0  TXT90000307    ''
+   y=  31.0  TXT90000309    ''
+   y=  43.0  TXT90000311    ''
+   y=  55.0  TXT90000313    ''
+   y=  67.0  TXT90000315    ''
+   y=  79.0  TXT90000317    ''
+   y=  91.0  TXT90000319    ''
+   y= 103.0  TXT90000321    ''
+   y= 115.0  TXT90000323    ''
+   y= 127.0  TXT90000325    ''
+   y= 139.0  TXT90000327    ''
+   y= 151.0  TXT90000329    ''
+   y= 163.0  TXT90000331    ''
+   y= 175.0  TXT90000333    ''
+   y= 187.0  TXT90000335    ''
+   y= 199.0  TXT90000337    ''
+
+⇒ ✓ 全部合格
+   （退出码 0 ✓；口径 = `fz_colors` 两张表 ✓ —— 它自己已拿 Fritzing 的 XML 自校过 ✓）
+```
+
 ### 线色闸门 carrier-schematic.fzz（rc=0，PASS）
 
 ```
 == 文件自检: f:\git\orpah-client-demo\hardware\carrier\carrier-schematic.fzz
    ① 非标准色的导线（面包板 ✓ 13 色表）: 0 个 ✓
-   ①b 原理图导线 110 段｜颜色 ⊆ 原理图那一节（13 色 ✓）: 0 根 ✓
+   ①b 原理图导线 80 段｜颜色 ⊆ 原理图那一节（13 色 ✓）: 0 根 ✓
    ①c 原理图**不许用白/黄** ✗: 0 根 ✓
    ② 零长**真退化**线: 0 个 ✓
    ②' 零长**占位**线 : 0 个 ✓（非本视图的真实走线 ✓ 三视图占位 ✓ 见 gen_routes.wire_block）
-   ②'' 零长**接头**线（任一视图带 `<connect>` ⇒ 有意画的连接点 ✓ 不算退化 ✓）: 0 个 ✓
+   ②'' 零长**接头**线（任一视图带 `<connect>` ⇒ 有意画的连接点 ✓ 不算退化 ✓）: 3 根：Wire90000053(3 conn), Wire90000149(3 conn), Wire90000150(3 conn)
    ③ 实例 color 属性: 0 个 ✓（Fritzing 自己也不写 ✓）
-   ④ 面包板导线 0 段（0 根）| 颜色: []
+   ④ 面包板导线 18 段（12 根）| 颜色: ['#418dd9']
 
 == 图例区（x>500 ✓ 按 y 排 ✓）
 
