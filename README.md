@@ -43,6 +43,20 @@ CH347F 的 `P2`(UART0) 看我们的控制台、`P3`(UART1) 看模组的 AT/打�
 逐网规格与复验方式（用 `tools\fzz_nets.py` 把 Fritzing 网表逐网核对）见
 [`hardware/wiring/README.md`](hardware/wiring/README.md)。
 
+## 载板（carrier）：原理图与面包板
+
+[![载板面包板视图](hardware/carrier/carrier-breadboard.png)](hardware/carrier/carrier-breadboard.fzz)
+
+上图 = `hardware/carrier/carrier-breadboard.fzz` 的**面包板视图**（示意图 ✓，不是实物照片 ✓）。
+
+- 网表**单一源** = `hardware/carrier/carrier_nets.py`（15 张网 ✓）；
+  闸门 = 库仓 `tools/bb_probe.py`（网表 ⇔ 图 ✓）/ `bb_precheck.py`（摆位 ✓）/ `file_sanity.py`（线色 ✓）
+  —— 当前：**14/14 网连通 ✓、短接 0 ✓、悬空 0 ✓**。
+- **BT1（1.5 F 超级电容）画在板外、板下方** ✓，绕两脚中点转 **180°**（腿朝上 ✓）：
+  `+` → `pin28A`（赭色，横段 + 竖段 ✓）、`−` → `pin30X`（黑色，**一段直线** ✓）；
+  两根线的端点都接在**腿尖**（= 引脚再往外 2.54 mm ✓）。
+- 原理图视图 = `hardware/carrier/carrier-schematic.fzz`（已在 Fritzing 里人工验收「布线完成」✓）。
+
 ## 五仓分工（改动该往哪个仓放）
 
 | 仓库 | 内容 | 与本仓的关系 |
