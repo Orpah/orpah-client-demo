@@ -168,7 +168,15 @@ cd firmware
 make rebuild    # ★ 从零：mkdirs.py clean + make all（约 3 s）—— **固件构建一律用它** ✓
 make            # 增量（自己迭代时用，不作为交付/闸门口径）
 make clean
+
+# 载板档（心跳灯 PB0 + SE 走 I2C2；✗ 未上机，只证编得过）
+make rebuild BOARD=carrier
 ```
+
+> ★ **板档 `BOARD`**（2026-10-18 加）：缺省 `bench` = 台架（`PA15` + `I2C1`，**已上机**）；
+> `carrier` = 载板（**`PB0`** + **`I2C2`**）。为什么必须选对 —— `CH32V203F8U6` **没有 `PA15`**、
+> 也**没引出 `I2C1`** ⇒ 拿台架固件上载板会「灯不闪 + SE 全 NACK」，看着像固件或片子坏了。
+> 详见 [`firmware/README.md`](firmware/README.md) 的「板档」一节。
 
 > ★ **构建需要 Python**（`py -3`，或 `make PY=python3`）：建/删 `build/` 目录由 `firmware/mkdirs.py` 干 ✓
 > —— 干净的树（或 `make clean` 之后）直接 `make` 就能从零编完，**不需要先手工建目录** ✓、

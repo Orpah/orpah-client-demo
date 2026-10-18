@@ -111,6 +111,28 @@ make rebuild
 | `ISA`（喂 `-march=`） | `rv32imac`（**隐含** zicsr ✓，且**不认** `_zicsr` ✗） | `make ISA=rv32imac_zicsr`（GCC 12+ **不再隐含** ✗ ⇒ 否则 `csrw` 报 `requires extension 'zicsr'`） |
 | `INTFAST` | `1` = `-DWCH_INTERRUPT_FAST`（快速中断语义 ✓，与启动文件硬件栈配套） | `make INTFAST=0` = 走 `Core/board.h` 的泛型 `interrupt` 回退 ✓ |
 
+★★ **板档 `BOARD`（2026-10-18 加）—— 上载板前必须先选对**：
+
+| `BOARD` | 心跳灯 | SE 的 I²C | 状态 |
+|---|---|---|---|
+| `bench`（**缺省**） | `PA15`（台架板载蓝灯） | `I2C1` @PB6/PB7 | **已上机** ✓，烧录就用它 |
+| `carrier` | **`PB0`** | **`I2C2`** @PB10/PB11 | ✗ **未上机**（只证"编得过 + 零 warning"） |
+
+```bash
+make rebuild BOARD=carrier SHELL='D:/Program Files/Git/bin/sh.exe'
+```
+
+- 为什么必须分档（**功能**问题，不是美观）：`CH32V203F8U6` 的 21 只脚里**没有 `PA15`**、也
+  **没引出 `I2C1`** ⇒ 拿 `bench` 档烧到载板上 = **心跳灯不闪 + SE 全 NACK**（看着像"固件坏了/片子坏了"）。
+- `BOARD=carrier` 会**自动**把 `SE_I2C` 缺省成 1；若显式写 `BOARD=carrier SE_I2C=0`，
+  `Core/board.h` 用 `#error` **当场拦下**（那一定是配错）。
+- 验证方式（不是"编过了"就算）：`BOARD=carrier` 的 elf 反汇编里 **I2C2 基址 12 处 / I2C1 0 处**、
+  `bench` 刚好相反 —— 见 `hardware/carrier/_work/fw_probe.py`（草稿，不入库）。
+- `tools/run_checks.py` 的固件闸门**两档都编** ✓，且**载板档排在前** ⇒ 跑完 `build/` 里留的是
+  台架档（不会让人误烧载板档 ✗）。
+- ⚠ 构建横幅一律**英文**：make 的输出不过 Python 那层 UTF-8 重设，中文在 GBK 控制台里会乱码
+  （2026-10-18 实测 `杞芥澘锛堝績璺崇伅…` ✓）。
+
 ⚠ **`INTFAST=0` 编出来的固件不能烧** ✗（WCH 的快速中断语义只在 MounRiver 那份上 ✓ ——
 通用工具链上 ISR 会退化成普通函数）；`all` 目标会在这种配置下打一行 `NOTE:` 提醒 ✓。
 ⇒ 口径：CI 证明的是「**可移植配置**换环境仍编得过（零 warning）」✓，**不是**「烧录固件编得过」✗。

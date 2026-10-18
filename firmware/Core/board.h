@@ -13,6 +13,24 @@
 #include "ch32v20x.h"
 
 /* ------------------------------------------------------------------ */
+/* ★★ 板档（2026-10-18）：**台架 / 载板** 二选一（编译期）                 */
+/*   台架  = `nanoCH32V203 + TX-AH EVB + CH347F`（已上机 ✓，**缺省**）     */
+/*   载板  = `fritzing-parts-langhua` 的定制载板（`CH32V203F8U6`；**未上机** ✗）*/
+/*   `make BOARD=carrier` 传入；默认 0 = 台架 ⇒ **已上机那条路一个字节不变** ✓。*/
+/*   ○ 为什么必须分档（不是“美观”，是**功能**）：                                                                 */
+/*     · `CH32V203F8U6` 的 21 只脚里**没有 PA15** ✗ ⇒ 台架档的心跳灯打在空脚上， */
+/*       上电“第一口呼吸”根本不出现 ⇒ 看着像“固件没烧进去”；                    */
+/*     · 它也**没引出 I2C1** ✗ ⇒ 台架档的 SE 会全 NACK ⇒ 看着像“SE 坏了”。        */
+/*   ⇒ 载板档：心跳灯 `PA15 → **PB0**`、SE `I2C1 → **I2C2**(@PB10/PB11)`。           */
+/*     引脚出处 = `docs/carrier-connections.md` / `carrier_nets.py`（网表 ✓）。      */
+#ifndef BOARD_CARRIER
+#define BOARD_CARRIER        0
+#endif
+#if (BOARD_CARRIER != 0) && (BOARD_CARRIER != 1)
+#error "BOARD_CARRIER 只能是 0（台架）或 1（载板）"
+#endif
+
+/* ------------------------------------------------------------------ */
 /* 主频：8 MHz HSI、无 PLL（与参考固件一致：最简最稳，115200 误差 ~0.6%）  */
 /* ------------------------------------------------------------------ */
 #define SYSTEM_CLOCK_HZ      8000000UL
@@ -55,13 +73,26 @@
  *     旁证：板上出厂 demo `demo/blink_1000.bin` 反汇编后驱动的正是
  *     `GPIOA` 掩码 `0x8000`（= PA15）⇒ 两条独立证据一致。
  *     （之前外接灯接在 `C13`/PC13 上，也不是不能用 —— 把下面两行改回
- *      `GPIOC` / `13` 即可；只是 PA15 少一根外接线。）*/
+ *      `GPIOC` / `13` 即可；只是 PA15 少一根外接线。）
+ *   ★★ **载板档（`BOARD_CARRIER=1`）用 `PB0`** ✓ —— `CH32V203F8U6` 封装上
+ *     **没有 PA15** ✗（21 只脚里没有，`svg/CH32V203F8U6` 的 `.fzp` 可查 ✓）；
+ *     载板上 D1 的阴极接 `PB0`（网表 `LED_HB` ✓，R3 = 10 k 限流 ✓）。
+ *     同样**低电平点亮** ✓。*/
+#if BOARD_CARRIER
+#define LED_HEART_PORT       GPIOB
+#define LED_HEART_PIN        0           /* PB0, ACTIVE LOW（3V3→R3(10K)→LED→PB0）*/
+#define LED_HEART_ACTIVE_LOW 1
+/* 心跳灯所在端口的时钟使能位 —— 跟着 `LED_HEART_PORT` 一起改
+ * （上电“第一口呼吸”要在任何其它外设之前先开它）*/
+#define LED_HEART_CLK        RCC_APB2Periph_GPIOB
+#else
 #define LED_HEART_PORT       GPIOA
 #define LED_HEART_PIN        15          /* PA15, ACTIVE LOW（3V3→10K→LED→PA15）*/
 #define LED_HEART_ACTIVE_LOW 1
 /* 心跳灯所在端口的时钟使能位 —— 跟着 `LED_HEART_PORT` 一起改
  * （上电“第一口呼吸”要在任何其它外设之前先开它）*/
 #define LED_HEART_CLK        RCC_APB2Periph_GPIOA
+#endif
 
 /* ------------------------------------------------------------------ */
 /* 安全元件 ATECC608B（**I2C1**，c4-γ-2 起）                             */
@@ -84,11 +115,17 @@
  *   ★ 自检：`make rebuild CFLAGS=-DSE_I2C_USE_2=1` 必须也能**零 warning** 编过 ✓
  *     （载板档我这边没有板子，只能做到“编得过 + 代码里真的引用 I2C2”✓，
  *      真机验收仍需上机 ✗ —— 别把“编得过”读成“已上机”✗）。*/
+/*   ★★ 2026-10-18：缺省值**跟板档走** ✓ —— `BOARD_CARRIER=1` ⇒ 缺省就是 I2C2，
+ *     免得“选了载板却忘了同时给 SE_I2C”（那就成了“两个开关各管一半”的隐形式错 ✗）。
+ *     显式给 `SE_I2C=0/1` 仍可覆盖（排查时用 ✓）。*/
 #ifndef SE_I2C_USE_2
-#define SE_I2C_USE_2         0
+#define SE_I2C_USE_2         BOARD_CARRIER
 #endif
 #if (SE_I2C_USE_2 != 0) && (SE_I2C_USE_2 != 1)
 #error "SE_I2C_USE_2 只能是 0（台架 I2C1）或 1（载板 I2C2）"
+#endif
+#if BOARD_CARRIER && !SE_I2C_USE_2
+#error "载板档必须用 I2C2（PB10/PB11）—— CH32V203F8U6 上 I2C1 没引出，设了 BOARD=carrier 却给 SE_I2C=0 是配错"
 #endif
 #if SE_I2C_USE_2
 #define SE_I2C               I2C2

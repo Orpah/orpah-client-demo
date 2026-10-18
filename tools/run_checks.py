@@ -200,15 +200,16 @@ def main():
                 if v:
                     fw.append("%s=%s" % (k, v))
                     extra.append("%s=%s" % (k, v))
-            # ★★ 2026-10-13：**两档都要编过** ✓ —— SE（ATECC608B）挂哪个 I²C 是**编译期开关**
-            #   （`Core/board.h` 的 `SE_I2C_USE_2` / `make SE_I2C=1`）⇒
-            #   载板档平时没人编 ✗，哪天只有它坏了也无人发现 ✗（与 `ISA`/`INTFAST` 同源：
+            # ★★ 2026-10-13 / 2026-10-18：**两档都要编过** ✓ —— 板档是**编译期开关**
+            #   （`Core/board.h` 的 `BOARD_CARRIER` / `make BOARD=carrier`；旧写法 `SE_I2C=1`
+            #   只管 SE 的 I²C，**漏了心跳灯 `PA15→PB0`** ✗ —— 那才是上电第一眼）
+            #   ⇒ 载板档平时没人编 ✗，哪天只有它坏了也无人发现 ✗（与 `ISA`/`INTFAST` 同源：
             #   **换配置就换口径，别拿一档当通例** ✓）。
             #   ⚠ 顺序**有意**：载板档在前、缺省档在后 ⇒ 跑完 `firmware/build/` 里留的是
-            #     **缺省档**（= 台架 I2C1 ✓ 已上机）—— 不会让人误烧载板档 ✗。
+            #     **缺省档**（= 台架 ✓ 已上机）—— 不会让人误烧载板档 ✗。
             #   ⚠ 两条都只证“**编得过**”✗：真机验收仍须上机 ✓（载板档至今未上机 ✗）。
-            res.append(run("固件编译-载板档（SE_I2C=1 → I2C2 @PB10/PB11，要求零 warning；✗ 未上机）",
-                           fw + ["SE_I2C=1"]))
+            res.append(run("固件编译-载板档（BOARD=carrier ⇒ 心跳灯 PB0 + SE I2C2，要求零 warning；✗ 未上机）",
+                           fw + ["BOARD=carrier"]))
             res.append(run("固件从零编译（%s%s，要求零 warning）"
                            % (os.path.basename(pre) if pre else "riscv-none-embed-gcc",
                               ("；" + " ".join(extra)) if extra else ""), fw))

@@ -60,6 +60,29 @@ ARCH = -march=$(ISA) -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore
 #   默认 **0 = 台架**：I2C1 @PB6/PB7，**已上机** ✓（烧录就用它）；
 #   载板档 = **1**：I2C2 @PB10/PB11（`make rebuild SE_I2C=1`）—— ✗ **未上机**，
 #   目前只能证明“编得过 + 代码里真的引用 I2C2” ✓（别读成已上机 ✗）。
+# ★★ BOARD（2026-10-18）：**板档** —— 台架 / 载板。透给 `board.h` 的 `BOARD_CARRIER`。
+#   · **bench（缺省）= 台架**：心跳灯 `PA15`、SE `I2C1`@PB6/PB7 —— **已上机** ✓，烧录就用它；
+#   · **carrier = 载板**：心跳灯 `PB0`、SE `I2C2`@PB10/PB11 —— ✗ **未上机**，
+#     目前只证“编得过 + 零 warning”（别读成已上机 ✗）。
+#   为什么必须分档 ✗：`CH32V203F8U6` 上 **没有 PA15**、也**没引出 I2C1** ⇒
+#     拿台架固件上载板 = 灯不亮 + SE 全 NACK（看着像“固件坏了 / 片子坏了”）。
+#   ★ 载板档会**自动**把 `SE_I2C` 缺省成 1（缺了就是配错，`board.h` 里有 `#error` 拦）。
+BOARD ?= bench
+ifneq ($(filter $(BOARD),bench carrier),$(BOARD))
+$(error BOARD 只能是 bench（台架）或 carrier（载板），收到：$(BOARD))
+endif
+ifeq ($(BOARD),carrier)
+CFLAGS_BOARD = -DBOARD_CARRIER=1
+SE_I2C ?= 1
+# ⚠ 横幅一律**英文** ✗ —— make 的输出不过 Python 那层 UTF-8 重设，
+#   中文在 GBK 控制台里会变成 `杞芥澘锛堝績璺崇伅…`（2026-10-18 实测 ✓）。
+BOARD_LABEL = carrier: LED PB0, SE I2C2 -- NOT bench-verified
+else
+CFLAGS_BOARD = -DBOARD_CARRIER=0
+SE_I2C ?= 0
+BOARD_LABEL = bench: LED PA15, SE I2C1 -- bench-verified
+endif
+
 SE_I2C ?= 0
 
 # ★★ INTFAST（2026-10-12 **首次 CI 实测**）：WCH 的快速中断属性
@@ -78,7 +101,7 @@ endif
 CFLAGS = $(ARCH) -Os -ffunction-sections -fdata-sections \
          -fmessage-length=0 -fsigned-char -ffreestanding -fno-builtin \
          -nostdlib -Wall -Wextra $(CFLAGS_INTFAST) \
-         -DSE_I2C_USE_2=$(SE_I2C) \
+         -DSE_I2C_USE_2=$(SE_I2C) $(CFLAGS_BOARD) \
          -ICore -IPeriph -I$(PROTO_DIR)
 
 ASFLAGS = $(ARCH) -ICore -IPeriph
@@ -161,6 +184,7 @@ HEADERS = $(wildcard Core/*.h Periph/*.h $(PROTO_DIR)/*.h)
 $(OBJS): $(HEADERS)
 
 all: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex
+	@echo "  BOARD=$(BOARD) => $(BOARD_LABEL)"
 ifeq ($(INTFAST),0)
 	@echo "  NOTE: INTFAST=0 => portable config (WCH fast-interrupt semantics OFF)."
 	@echo "        NOT a flashable image -- flash only the default (INTFAST=1) build."
