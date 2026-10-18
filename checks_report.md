@@ -1,6 +1,6 @@
 # checks_report.md —— `tools/run_checks.py` 的输出（**入库**，同隔壁仓惯例）
 
-跑的时间：2026-10-18 14:44:57
+跑的时间：2026-10-18 15:46:58
 
 判定口径：**退出码 0 且输出里没有 `FAIL` / `Traceback`**（只看退出码会漏 —— 有些脚本自己吞异常）。
 
@@ -22,6 +22,8 @@
 | ✅ PASS | 线色闸门 cstep-ch347f-txah-evb-nanoch32-atecc608b.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py cstep-ch347f-txah-evb-nanoch32-atecc608b.fzz` | 0 |
 | ✅ PASS | 线色闸门 cstep-ch347f-txah-evb-nanoch32.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py cstep-ch347f-txah-evb-nanoch32.fzz` | 0 |
 | ✅ PASS | 线色闸门 cstep-nanoch32-atecc608b.fzz | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\file_sanity.py cstep-nanoch32-atecc608b.fzz` | 0 |
+| ✅ PASS | 面包板网表（bb_probe：<connect>/<buses>） | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\bb_probe.py carrier-breadboard.fzz --nets=f:\git\orpah-client-demo\hardware\carrier\carrier_nets.py` | 0 |
+| ✅ PASS | 面包板摆位+接线（bb_precheck：几何；⑦ = 导线端点 vs 引脚接线点） | `C:\Python313\python.exe F:\git\fritzing-parts-langhua\tools\bb_precheck.py carrier-breadboard.fzz --nets=f:\git\orpah-client-demo\hardware\carrier\carrier_nets.py` | 0 |
 | ✅ PASS | 标注扫描（量尺，不作闸门） | `C:\Python313\python.exe fzz_annot_scan.py --svg` | 0 |
 | ✅ PASS | Python 语法（tools/ + proto/ + firmware/） | `C:\Python313\python.exe -m compileall -q tools proto firmware` | 0 |
 | ✅ PASS | 固件编译-载板档（BOARD=carrier ⇒ 心跳灯 PB0 + SE I2C2，要求零 warning；✗ 未上机） | `make -C firmware rebuild SHELL=D:\Program Files\Git\bin\sh.exe BOARD=carrier` | 0 |
@@ -79,7 +81,7 @@ cstep-nanoch32-atecc608b.fzz -> f:\git\orpah-client-demo\hardware\wiring\cstep-n
   --- 逐网核对（模块侧不限实例编号）---
     ✓ MCU.PB7/USB2DM  <->  电阻.connector1  <->  安全元件.SDA  （图上 = R1.connector1  U5.SDA  U6.PB7/USB2DM）
     ✓ MCU.PB6/USB2DP  <->  电阻.connector1  <->  安全元件.SCL  （图上 = R2.connector1  U5.SCL  U6.PB6/USB2DP）
-    ✓ MCU.VDDA  <->  电阻.connector0  <->  安全元件.VCC  （图上 = R2.connector0  U5.VCC  U6.VDDA）
+    ✓ MCU.VDDA  <->  电阻.connector0  <->  安全元件.VCC  （图上 = R1.connector0  U5.VCC  U6.VDDA）
     ✓ MCU.GND  <->  安全元件.GND                      （图上 = U5.GND  U6.GND）
     · 非连线（部件内部同网 / 空孔）：U5.NC  @E7
     · 非连线（部件内部同网 / 空孔）：U5.NC  @E6
@@ -411,6 +413,56 @@ cstep-nanoch32-atecc608b.fzz -> f:\git\orpah-client-demo\hardware\wiring\cstep-n
 
 ⇒ ✓ 全部合格
    （退出码 0 ✓；口径 = `fz_colors` 两张表 ✓ —— 它自己已拿 Fritzing 的 XML 自校过 ✓）
+```
+
+### 面包板网表（bb_probe：<connect>/<buses>）（rc=0，PASS）
+
+```
+== 面包板网表核对（`bb_probe` ✓ 只看 `<connect>` 与 `<buses>` ✓ 不看几何 ✗）==
+   f:\git\orpah-client-demo\hardware\carrier\carrier-breadboard.fzz
+   板孔 830 颗 ✓｜bus 130 条 ✓（126×5 + 4×50 = 830 ✓）
+   声明（`<connect>`）272 条 ✓｜指向不存在目标的 0 条 ✓
+   网 15 张 ✓｜图上出现的脚 62 只 ✓｜`EXPECT` 里点名的脚 **量到 48 / 48** 只 ✓
+   3V3       ✓  应有  9 只（图上 9 只 ✓）
+   3V3_IN    ✓  应有  4 只（图上 4 只 ✓）
+   CON_RX    ✓  应有  2 只（图上 2 只 ✓）
+   CON_TX    ✓  应有  2 只（图上 2 只 ✓）
+   GND       ✓  应有  7 只（图上 7 只 ✓）
+   LED_HB    ✓  应有  2 只（图上 2 只 ✓）
+   LED_R     ✓  应有  2 只（图上 2 只 ✓）
+   MOD_RX    ✓  应有  2 只（图上 2 只 ✓）
+   MOD_TX    ✓  应有  2 只（图上 2 只 ✓）
+   SCL       ✓  应有  4 只（图上 4 只 ✓）
+   SDA       ✓  应有  4 只（图上 4 只 ✓）
+   SWCLK     ✓  应有  2 只（图上 2 只 ✓）
+   SWDIO     ✓  应有  2 只（图上 2 只 ✓）
+   VBAT      ✓  应有  2 只（图上 2 只 ✓）
+   VBAT_OK   ✓  应有  2 只（图上 2 只 ✓）
+   · 图上还有 `EXPECT` 没写的脚 17 只（仅报告 ✓）：P:U1.connector5, P:U1.connector11, P:U1.connector4, P:U1.connector13, P:U1.connector1, P:U1.connector12, P:U1.connector6, P:U1.connector19
+判定: ✓ 与项目数据一致（15/15 张网连通成一片 ✓）
+F:\git\fritzing-parts-langhua\tools\bb_probe.py:121: DeprecationWarning: Testing an element's truth value will always return True in future versions.  Use specific 'len(elem)' or 'elem is not None' test instead.
+  host = child(root, "instances") or root
+```
+
+### 面包板摆位+接线（bb_precheck：几何；⑦ = 导线端点 vs 引脚接线点）（rc=0，PASS）
+
+```
+   [板位] 板子实际在 (4.33364, -9.00437) ✓ ⇒ 孔位整体偏移 (+8.982, -9.004) 单位 = (+2.535, -2.541) mm
+== 摆位闸门（§A.4 摆位先于入网 ＋ §A.5 物理在前）==  f:\git\orpah-client-demo\hardware\carrier\carrier-breadboard.fzz
+   件 12 个 ✓｜板孔 830 个 ✓｜容差 0.60 mm ✓｜用孔 57 个 ✓
+   ① ✓ 每个脚都声明了一颗真实的孔
+   ② ✓ 腿端（或盘心）落在声明的那颗孔上 ≤ 0.60 mm
+   ④ ✓ 一个孔只被一只脚占用
+   ⑤ ✓ 一 bus 一网（没把两张网并到一起）
+   ⑥ ✓ 同件内脚与脚的间距 = 元件自称的间距（容差 2.0 mm ✓）
+   ⑦ ✓ 接线的脚：导线端点落在它的接线点上 ≤ 0.10 mm
+      —— ⑦ 量到 **5 处**接线 ✓（最大 0.000 mm ✓）
+      —— ⑥ 量到 **8 只脚**参与比对 ✓（另有 57 只 `geometry=(0,0)`＝没改写 ⇒ 跳过 ✓）
+   ③ ✓ 盘心落孔（仅报告 ✓）：2/57 只脚 > 0.60 mm；最大 5.01 mm
+      —— 有 `legId` 的件（R1, R2）接点就是**腿端** ✓，盘心远是正常的 ✓
+   ✓ 豁免（接导线、不插孔）5 只：U1.connector20, BT1.connector0, BT1.connector1, SW1.connector0, SW1.connector1
+   · 悬空 3 只（**网表里没有它** ⇒ 设计如此 ✓ 不算错）：SW1.connector2, SW1.connector3, SW1.connector4
+⇒ ✓ **允许布线（摆位到位 ✓）**
 ```
 
 ### 标注扫描（量尺，不作闸门）（rc=0，PASS）

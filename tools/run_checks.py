@@ -158,6 +158,26 @@ def main():
                 res.append(run("线色闸门 %s" % f, [PY, fs, os.path.join(dp, f)]))
         print("   线色闸门：查了 **%d** 张入库草图 ✓（口径 = fz_colors 两张官方表 ✓）" % n_sk)
 
+    # ②c 面包板闸门（**物理优先** ✓ —— 2026-10-18 加 ✗：用户一句「你网表里接上就是接上了吗？！」
+    #     点出来的 ✓）：两张图都要过 ✓
+    #     · `bb_probe`    = 网表那一层（`<connect>` / `<buses>` ✓）—— 只说明"我声明它接了" ✓；
+    #     · `bb_precheck` = **几何那一层**（⑦ 导线端点 vs 引脚接线点 ≤ 0.10mm ✓、
+    #       ① 网表里的脚必须插孔或接线 ✓、②④⑤⑥ 摆位/短接 ✓）
+    #     ★ 起因 ✗：SW1 的线头悬在焊盘**左上 5.51mm** 时，`bb_probe` 15/15 全绿 ✗、
+    #       `file_sanity` 也绿 ✗ ⇒ **只有几何闸门看得见** ✓（用户截图才发现 ✓）。
+    bb = os.path.join(REPO, "hardware", "carrier", "carrier-breadboard.fzz")
+    nets = os.path.join(REPO, "hardware", "carrier", "carrier_nets.py")
+    p_probe = os.path.join(fz, "bb_probe.py")
+    p_pre = os.path.join(fz, "bb_precheck.py")
+    if not (os.path.isfile(p_probe) and os.path.isfile(p_pre)):
+        skipped.append("面包板闸门（bb_probe + bb_precheck）—— 库仓 tools 找不到 ⇒ **明确跳过** ✗；"
+                       "设 FZ_TOOLS=<库仓\\tools> 即可 ✓")
+    else:
+        res.append(run("面包板网表（bb_probe：<connect>/<buses>）",
+                       [PY, p_probe, bb, "--nets=%s" % nets]))
+        res.append(run("面包板摆位+接线（bb_precheck：几何；⑦ = 导线端点 vs 引脚接线点）",
+                       [PY, p_pre, bb, "--nets=%s" % nets]))
+
     # ③ 标注扫描（量尺：退出码恒 0；只把它当 info）
     inf = run("标注扫描（量尺，不作闸门）", [PY, os.path.join(HERE, "fzz_annot_scan.py"), "--svg"])
     inf["ok"] = True                                            # 量尺 ✓ 不判红
