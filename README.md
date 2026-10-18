@@ -29,6 +29,51 @@ ORPAH（用无线技术找人）五仓里的**客户端侧**：**CH32V203 + 安�
 > ⚠ `AT+TXDATA`/`FRAME:RX` 那条路（`docs/nano-ch32v203-uart-bridge.md`）在**真模组上不成立**
 > （fmac 固件的 AT 没有用户数据命令）—— 实际走通的是 **UART-MACBUS（HGIC 帧）**，即上面 ③。
 
+## 总图：这块载板在整个系统里站哪一格
+
+先说三句话 ✓：
+
+1. **ORPAH 要干的事** = 用 HaLow（802.11ah）**找走失的人**：佩戴端每 60 s 连一次路由器、
+   发一条**已签名**的「我还在」；服务端攒多台路由器的观测来定位、超时就告警。
+2. **本仓 = 佩戴端（客户端）**：**MCU + 安全元件 + 射频模组**。
+3. **载板（`carrier-pcb.fzz`）= 把台架上那堆杜邦线，固化到一块 44×32 mm 的板子上** ✓
+   —— 台架上已经验过的每一条，到了板上要**再验一遍**（判据见
+   [`docs/carrier-board-spec.md`](docs/carrier-board-spec.md) §8）。
+
+```mermaid
+graph LR
+  subgraph CLIENT["佩戴端（本仓 = 这块载板）"]
+    BT1["BT1 超容 1.5 F<br/>（储能）"]
+    J4["J4 取能模块座<br/>BQ25570 / CJMCU-2557"]
+    MCU["U1 CH32V203F8U6<br/>MCU（固件跑这里）"]
+    SE["U2 ATECC608B<br/>私钥不出芯片"]
+    J1["J1 模组口 1×4"]
+    J3["J3 SWD 1×4<br/>（烧录）"]
+    J2["J2 台架/产线 1×6<br/>（控制台 + I2C）"]
+    J4 -- 3V3 --> MCU
+    BT1 --- J4
+    MCU <-- "I2C2：SDA/SCL" --> SE
+    MCU -- "USART2（HGIC 帧）" --> J1
+  end
+  MOD["TX-AH 模组<br/>（插 J1 的现有 EVB）"]
+  AP["HaLow 路由器<br/>（orpah-openwrt-demo）"]
+  SRV["服务端 / Web UI<br/>（orpah-over-halow）"]
+  PC["PC 工具<br/>CH347F：控制台 / 产线配 SE"]
+  J1 --- MOD
+  MOD -- "空口 802.11ah" --> AP
+  AP -- "UDP 19447" --> SRV
+  PC -. "J2 / J3" .- MCU
+```
+
+**四个排针就是"这块板跟外面怎么连"的全部答案** ✓：
+
+| 座 | 接什么 | 载荷 |
+|---|---|---|
+| **J1**（1×4） | 现有 **TX-AH EVB**（将来插裸模块） | `3V3 / GND / MOD_RX / MOD_TX` —— 与模组之间的 **UART-MACBUS** |
+| **J2**（1×6） | 台架 / 产线夹具 | `3V3 / GND / SDA / SCL / CON_TX / CON_RX`（控制台 + I2C 配 SE） |
+| **J3**（1×4） | WCH-Link | `3V3 / GND / SWDIO / SWCLK` |
+| **J4**（1×7） | 取能前端模块（`BQ25570` 模块，库仓刚做的 `svg/BQ25570`） | `INPUT / GND / BAT / OUTPUT / V_OK / V_EN / EN` |
+
 ## 台面长什么样（看图）
 
 **c 步台架**（自家固件上机用的那套）：nanoCH32V203 + TX-AH EVB + CH347F 两个 PC 窗口 ——

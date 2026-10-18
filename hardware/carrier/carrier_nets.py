@@ -33,7 +33,12 @@ NETS = {
     # 主轨：MCU 电源 ＋ SE 电源 ＋ 三只电阻上端 ＋ 三只排针的 3V3 ＋ 前端输出/使能（★ 使能硬接高 ✗ 别交 MCU）
     "3V3":     [("U1", "VDD"), ("U2", "VCC"), ("R1", "#1"), ("R2", "#1"), ("R3", "#1"),
                 ("J1", "#1"), ("J2", "#1"), ("J3", "#1"),
-                ("J4", "#4"), ("J4", "#6"), ("J4", "#7")],
+                ("SW1", "1")],                        # ★ 开关**之后**才进板
+    # ★★ 2026-10-18 新增 ✓（用户要开关 ✓）：**开关之前**= 取能模块的输出侧
+    #   `J4.4` = 模块 OUTPUT ✓；`J4.6`/`J4.7` = `V_EN`/`EN`（**硬接高** ✓，且接在**开关前** ✓
+    #   ⇒ 开关断开时取能模块仍在工作 ✓，合上就上电 ✓ —— 不然开关一断模块也跟着挂 ✗）
+    #   `SW1` = `SK-12D02VG3` 拨动开关（SPDT 只用一个掷 ✓）：`2` = 公共端、`1` = 拨向板内那侧 ✓
+    "3V3_IN":  [("J4", "#4"), ("J4", "#6"), ("J4", "#7"), ("SW1", "2")],
     # 地：★ 含 U1 的**裸露焊盘 `VSS`** ✓（部件里它只是一只普通脚 ✓，画板时必须特意连过来 ✓）
     #   ★★ 2026-10-17 修 ✗：`BT1` 原来的 `#2` = 序号第 2 = `connector1` = **`+`** ✗ ⇒ **正极接地** ✗✗
     #     （用户看出来的 ✓）；现在写**名字** `-` ✓ ⇒ 极性写在纸面上了 ✓，反不反一眼就看得见 ✓。
@@ -75,7 +80,7 @@ NETS = {
 #          1 = `INPUT`、2 = `GND`、3 = `BAT`、4 = `OUTPUT`、5 = `V_OK`、6 = `V_EN`、7 = `EN`
 
 # ── 电源网（PCB 线宽按网分宽时用 ✓；本板第一版只做原理图 ⇒ 先记着 ✓）────────────
-POWER = ("3V3", "GND")
+POWER = ("3V3", "3V3_IN", "GND")
 
 # ── 颜色（★ **只能**取 Fritzing 官方配色表 ✓，来源 = `fritzing-app/resources/`
 #    `ratsnestcolors.xml` 的 `<view name="breadboardView">` ✓；★ 官方 black 是
@@ -84,6 +89,7 @@ POWER = ("3V3", "GND")
 COLOR = {
     "GND":     "#404040",   # black ✓
     "3V3":     "#cc1414",   # red ✓（★ 官方表里 `red` 那条本来就挂 `3v3`/`+5v` ✓）
+    "3V3_IN":  "#a37911",   # ochre ✓（开关**前**的取能侧 ✓；与 VBAT/VBUS_IN/VBAT_OK 同族＝“能量” ✓）
     "VBAT":    "#a37911",   # ochre ✓（★ 与 `VBUS_IN` / `VBAT_OK` 共用 —— 三张都是“能量”✓）
     "VBUS_IN": "#a37911",   # ochre ✓
     "VBAT_OK": "#a37911",   # ochre ✓（★★ 2026-10-15 从 `#ffffff` 改过来 ✗ —— 见下面 ★★）
@@ -151,7 +157,11 @@ COLOR_SCH = {
 #     （`#N` ⇒ `connector<N-1>` ✓，与工具 `pin_of` 同一口径 ✓）。
 #   ★ 生成脚本不进仓 ✗（一次性 ✓）；改网表后重跑生成一次 ✓。
 EXPECT = {
-    "3V3": {"U1.connector18", "U2.connector7", "R1.connector0", "R2.connector0", "R3.connector0", "J1.connector0", "J2.connector0", "J3.connector0", "J4.connector3", "J4.connector5", "J4.connector6"},
+    # ★★ 2026-10-18 改 ✓：3V3 被 `SW1` 断开成两段 ⇒ 这里也要跟着拆 ✗
+    #   （✗ 只改上面的 `NETS` 不改这里 ⇒ `pcb_check` ⑤ 会把**旧的** 11 只脚拿来核 ⇒
+    #    报"`3V3` 没连通：11 个脚散在 2 块铜里"✗ —— 板是好的、**表是旧的** ✓，实测踩过 ✓）
+    "3V3": {"U1.connector18", "U2.connector7", "R1.connector0", "R2.connector0", "R3.connector0", "J1.connector0", "J2.connector0", "J3.connector0", "SW1.connector0"},
+    "3V3_IN": {"J4.connector3", "J4.connector5", "J4.connector6", "SW1.connector1"},
     "GND": {"U1.connector20", "U2.connector3", "BT1.connector0", "J1.connector1", "J2.connector1", "J3.connector1", "J4.connector1"},
     "VBAT": {"BT1.connector1", "J4.connector2"},
     "SDA": {"U1.connector10", "U2.connector4", "R2.connector1", "J2.connector2"},
