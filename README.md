@@ -160,6 +160,7 @@ orpah-client-demo/
 | `docs/nano-ch32v203-uart-bridge.md` | nanoCH32V203 刷 `SimulateCDC` 当 USB-UART 桥（COM32）、AT 验证；含 `AT+TXDATA` 在真模组上不成立的结论 |
 | `docs/ch347f-txah-spi-probe.md` | SPI/电气探测（判据 = SD-SPI 的 CMD0/CMD5 有没有合法 R1） |
 | `docs/carrier-board-spec.md` | **d 步载板规格（草稿，未上机 ✗）**：器件表 / 引脚分配（**逐条标出处**）/ 电源树（电池 + 预留取能）/ 测试点与产线夹具接口 / **验收判据**（台架上验过的每一条都要在载板上再验一遍）/ 待定清单 |
+| `docs/carrier-breadboard-bringup.md` | **面包板验证（AGENTS §1 开发次序的第 ②步）**：`carrier-breadboard.fzz` 的器件表与三处要点（`BT1`/`SW1` 浮件、`3V3` 与 `3V3_IN` 由 `SW1` 隔开、线色=网）、**上电前 7 条万用表判据**、**5 步分级上电**、载板档烧录、可填的实测记录表、如实边界（✗ 未上机） |
 
 ## 构建与烧录（2026-09-21 实测；2026-10-12 补 Python 依赖）
 
